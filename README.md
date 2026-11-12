@@ -37,12 +37,18 @@ vengono riconosciuti. Tutto avviene sul computer: nessun file viene inviato.
 ### PDF del Registro Corrispettivi
 Nel tab Corrispettivi il pulsante **Carica PDF corrispettivi** (o il trascinamento) legge i PDF
 prodotti dall'app Registro Corrispettivi:
-- il **mensile** registra il mese, un corrispettivo per aliquota (4%, 10%, 22%) con lordo,
-  imponibile e IVA presi dal riquadro «Calcolo IVA»; ricaricare lo stesso mese aggiornato
-  sostituisce il precedente, e i corrispettivi del mese inseriti a mano si possono togliere per
-  non contarli due volte;
-- il **riepilogativo** non registra niente: resta nel tab come controllo e confronta i totali
-  dell'anno, aliquota per aliquota, con quelli registrati, indicando i mesi senza PDF.
+- il **riepilogativo** registra tutti i mesi con incassi, ognuno diviso per aliquota (4%, 10%,
+  22%) più le operazioni esenti, e resta nel tab come controllo: confronta i totali dell'anno,
+  aliquota per aliquota, con quelli registrati;
+- il **mensile** registra il suo mese dal riquadro «Calcolo IVA» e dalla riga del totale.
+
+Ricaricare un PDF aggiornato sostituisce i mesi già registrati invece di sommarli; i
+corrispettivi degli stessi mesi inseriti a mano si possono togliere per non contarli due volte.
+POS, bonifici e assegni sono conteggiati all'aliquota impostata nel Registro, ricavata dal PDF.
+
+Le cifre delle tabelle del Registro usano le cifre «tabulari» di Segoe UI, che il PDF scrive senza
+il carattere corrispondente: il lettore le riconosce dal numero del glifo e verifica ogni lettura
+(colonne = totale del mese, mesi = totale annuo, aliquote = «Calcolo IVA»).
 
 I PDF vengono copiati in `allegati/corrispettivi/<anno>` nella cartella dei dati e si riaprono
 dal pulsante 📎. La lettura avviene con pdf.js incluso nell'app (`App/renderer/lib`).

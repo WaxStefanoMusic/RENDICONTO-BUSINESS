@@ -27,8 +27,7 @@
 !macro customUnInstall
   ${ifNot} ${Silent}
     MessageBox MB_YESNO|MB_ICONQUESTION \
-      "Vuoi eliminare anche i dati di Rendicontazione Business?$\r$\n$\r$\nVerranno cancellati: entrate, acquisti, impostazioni della società e copie di sicurezza.$$
-(Esporta prima un backup dal menu File se vuoi conservarli.)$\r$\n$\r$\nSI = riparti da zero alla prossima installazione.$\r$\nNO = i dati restano per una reinstallazione." \
+      "Vuoi eliminare anche i dati di Rendicontazione Business?$\r$\n$\r$\nVerranno cancellati: entrate, acquisti, impostazioni della società e copie di sicurezza.$\r$\n(Esporta prima un backup dal menu File se vuoi conservarli.)$\r$\n$\r$\nSI = riparti da zero alla prossima installazione.$\r$\nNO = i dati restano per una reinstallazione." \
       /SD IDNO IDNO conservaDati
       RMDir /r "$APPDATA\Rendicontazione Business"
       RMDir /r "$LOCALAPPDATA\Rendicontazione Business"

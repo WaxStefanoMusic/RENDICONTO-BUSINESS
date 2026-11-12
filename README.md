@@ -8,26 +8,28 @@ S.N.C.:
 2. **Fatture Emesse**: scorporo IVA 22% e regimi non imponibili (art. 8 Svizzera/extra-UE,
    art. 41 UE).
 3. **Corrispettivi**: incassi del registratore telematico, con scorporo IVA.
-4. **Fatture Ricevute Fornitori**: merce e servizi per la rivendita, reverse charge TD17/TD18 e
-   bolle doganali.
-5. **Abbonamenti/Acquisti/Spese**: le altre spese, con le regole di detraibilità IVA e
+4. **Fatture Ricevute Fornitori**: merce e servizi comprati in Italia per la rivendita.
+5. **Autofatture/Fatture Estere**: acquisti da fornitori UE ed extra-UE: reverse charge TD18
+   (merce UE) e TD17 (servizi esteri) con il termine di invio dell'autofattura allo SDI, bolle
+   doganali dalla Svizzera.
+6. **Abbonamenti/Acquisti/Spese**: le altre spese, con le regole di detraibilità IVA e
    deducibilità del costo (caffè, telefonia, auto promiscua…).
-6. **Commercialista**: parcelle con cassa, IVA e ritenuta d'acconto 20%, scadenze F24 codice
+7. **Commercialista**: parcelle con cassa, IVA e ritenuta d'acconto 20%, scadenze F24 codice
    1040 da spuntare, riepilogo dell'anno in CSV per Excel.
-7. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
+8. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
    del credito, scadenze F24.
-8. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
+9. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
    INPS commercianti, IRAP.
-9. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
+10. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
 
 ### Importazione delle fatture elettroniche
-Nei tab Fatture Emesse, Fornitori, Abbonamenti/Acquisti/Spese e Commercialista il pulsante
-**Importa fatture XML** (o il trascinamento dei file sulla finestra) legge le fatture
+Nei tab Fatture Emesse, Fornitori, Autofatture/Fatture Estere, Abbonamenti/Acquisti/Spese e
+Commercialista il pulsante **Importa fatture XML** (o il trascinamento dei file sulla finestra) legge le fatture
 elettroniche in formato FatturaPA: `.xml`, `.p7m` firmati e gli `.zip` scaricati in blocco da
 «Fatture e Corrispettivi», anche annidati. Data, numero, controparte, imponibile e IVA per
 aliquota, ritenuta e cassa previdenziale si leggono dal file; l'app propone dove registrare
 ognuna (emessa o ricevuta in base alla Partita IVA della società, parcelle con ritenuta nel tab
-Commercialista, autofatture TD17/TD18/TD19 in reverse charge, bollette e telefonia tra le
+Commercialista, autofatture TD17/TD18/TD19 e fornitori esteri nel tab Autofatture/Fatture Estere, bollette e telefonia tra le
 spese) e chiede conferma. Note di credito in negativo, doppioni e file di metadati dello SDI
 vengono riconosciuti. Tutto avviene sul computer: nessun file viene inviato.
 

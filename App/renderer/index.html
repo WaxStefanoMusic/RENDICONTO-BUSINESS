@@ -161,11 +161,12 @@
         <button data-tab="fatture" class="tab-btn">2. Fatture Emesse</button>
         <button data-tab="corrispettivi" class="tab-btn">3. Corrispettivi</button>
         <button data-tab="fornitori" class="tab-btn">4. Fatture Ricevute Fornitori</button>
-        <button data-tab="acquisti" class="tab-btn">5. Abbonamenti/Acquisti/Spese</button>
-        <button data-tab="commercialista" class="tab-btn">6. Commercialista</button>
-        <button data-tab="iva" class="tab-btn">7. Liquidazione IVA (LIPE)</button>
-        <button data-tab="imposte" class="tab-btn">8. Imposte Soci &amp; INPS</button>
-        <button data-tab="guida" class="tab-btn">9. Guida &amp; Adempimenti</button>
+        <button data-tab="estero" class="tab-btn">5. Autofatture/Fatture Estere</button>
+        <button data-tab="acquisti" class="tab-btn">6. Abbonamenti/Acquisti/Spese</button>
+        <button data-tab="commercialista" class="tab-btn">7. Commercialista</button>
+        <button data-tab="iva" class="tab-btn">8. Liquidazione IVA (LIPE)</button>
+        <button data-tab="imposte" class="tab-btn">9. Imposte Soci &amp; INPS</button>
+        <button data-tab="guida" class="tab-btn">10. Guida &amp; Adempimenti</button>
       </nav>
     </div>
   </header>
@@ -350,29 +351,22 @@
     <!-- FATTURE RICEVUTE DAI FORNITORI -->
     <section id="tab-fornitori" class="tab-content hidden space-y-6">
       <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <p class="text-xs sm:text-sm text-amber-900"><strong>Hai i file delle fatture elettroniche?</strong> Scarica le fatture ricevute dal Cassetto fiscale o da «Fatture e Corrispettivi» (anche lo zip intero) e importale: l'app le smista tra fornitori, spese e commercialista. Puoi anche trascinarli qui sopra.</p>
+        <p class="text-xs sm:text-sm text-amber-900"><strong>Hai i file delle fatture elettroniche?</strong> Scarica le fatture ricevute dal Cassetto fiscale o da «Fatture e Corrispettivi» (anche lo zip intero) e importale: l'app le smista tra fornitori, autofatture estere, spese e commercialista. Puoi anche trascinarli qui sopra.</p>
         <button data-action="import-xml" data-contesto="fornitori" class="shrink-0 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-semibold transition">⇪ Importa XML / P7M / ZIP</button>
       </div>
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
         <div class="mb-5">
           <h2 class="text-lg font-bold text-slate-900">Registra fattura ricevuta da fornitore</h2>
-          <p class="text-xs text-slate-500">Fatture di chi ti vende la merce o i servizi principali: mobilifici, grossisti, fornitori esteri. L'app applica le regole fiscali (reverse charge UE TD18, bolle doganali Svizzera, IVA indetraibile portata a costo).</p>
+          <p class="text-xs text-slate-500">Fatture dei fornitori italiani che ti vendono la merce o i servizi principali: mobilifici, grossisti, artigiani. Gli acquisti dall'estero vanno nel tab <strong>Autofatture/Fatture Estere</strong>.</p>
         </div>
         <form id="form-fornitori" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <label class="block text-xs font-semibold text-slate-700">Data documento
             <input type="date" id="fo-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
           </label>
-          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Fornitore e numero fattura
+          <label class="block lg:col-span-3 text-xs font-semibold text-slate-700">Fornitore e numero fattura
             <input type="text" id="fo-desc" placeholder="Es. Mobilificio Alfa Srl - Fatt. n. 245" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
           </label>
-          <label class="block text-xs font-semibold text-slate-700">Provenienza fornitore
-            <select id="fo-provenienza" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
-              <option value="IT">Italia (fattura SDI con IVA)</option>
-              <option value="UE_MERCE">Fornitore UE (reverse charge TD18)</option>
-              <option value="CH_BOLLA">Svizzera / extra-UE (merce + bolla doganale)</option>
-              <option value="CH_SERVIZI">Svizzera / extra-UE servizi (reverse charge TD17)</option>
-            </select>
-          </label>
+          <input type="hidden" id="fo-provenienza" value="IT" />
           <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Categoria fiscale (regole TUIR / IVA)
             <select id="fo-categoria" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none"></select>
           </label>
@@ -410,6 +404,73 @@
               </tr>
             </thead>
             <tbody id="tbody-fornitori" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- AUTOFATTURE & FATTURE ESTERE -->
+    <section id="tab-estero" class="tab-content hidden space-y-6">
+      <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <p class="text-xs sm:text-sm text-amber-900"><strong>Hai i file delle autofatture?</strong> Le autofatture TD17, TD18 e TD19 che hai mandato allo SDI si trovano in «Fatture e Corrispettivi» tra le fatture emesse: importale da qui e finiscono in questo tab con l'IVA in reverse charge già calcolata. Puoi anche trascinarle qui sopra.</p>
+        <button data-action="import-xml" data-contesto="estero" class="shrink-0 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-semibold transition">⇪ Importa XML / P7M / ZIP</button>
+      </div>
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">Registra acquisto dall'estero o autofattura</h2>
+          <p class="text-xs text-slate-500">Merce comprata in un paese UE (reverse charge con autofattura TD18), servizi da fornitori UE o extra-UE (TD17), importazioni dalla Svizzera o extra-UE con bolla doganale. Registra <strong>una sola volta</strong> ogni acquisto: o la fattura del fornitore estero o la tua autofattura, non entrambe.</p>
+        </div>
+        <form id="form-estero" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <label class="block text-xs font-semibold text-slate-700">Data documento
+            <input type="date" id="es-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Fornitore e numero fattura
+            <input type="text" id="es-desc" placeholder="Es. Leuchten GmbH - Invoice 2026-118 / autofattura n. AF-3" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Provenienza fornitore
+            <select id="es-provenienza" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+              <option value="UE_MERCE">Fornitore UE (reverse charge TD18)</option>
+              <option value="CH_BOLLA">Svizzera / extra-UE (merce + bolla doganale)</option>
+              <option value="CH_SERVIZI">Servizi da fornitore UE o extra-UE (reverse charge TD17)</option>
+            </select>
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Categoria fiscale (regole TUIR / IVA)
+            <select id="es-categoria" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none"></select>
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Imponibile (€)
+            <input type="number" step="0.01" min="0" id="es-imponibile" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700"><span id="lbl-es-iva">IVA in fattura (€)</span>
+            <input type="number" step="0.01" min="0" id="es-iva" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <div class="sm:col-span-2 lg:col-span-4 p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div id="es-preview" class="text-xs text-slate-700 space-y-1"></div>
+            <button type="submit" class="shrink-0 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition">+ Registra acquisto estero</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Autofatture e fatture estere <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">Con il reverse charge l'IVA va sia a debito sia a credito nella LIPE: costa zero, ma l'autofattura va inviata allo SDI entro il 15 del mese dopo il ricevimento della fattura estera.</p>
+          </div>
+          <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+            IVA detraibile: <span id="tot-es-iva-det" class="text-emerald-700">0,00 €</span> | Costo deducibile: <span id="tot-es-costo-ded" class="text-slate-900">0,00 €</span>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Trim.</th><th class="py-3 px-4">Descrizione &amp; origine</th>
+                <th class="py-3 px-4">Regola fiscale</th><th class="py-3 px-4 text-right">Imponibile</th>
+                <th class="py-3 px-4 text-right">IVA tot.</th><th class="py-3 px-4 text-right">IVA detraibile</th>
+                <th class="py-3 px-4 text-right">Costo deducibile</th><th class="py-3 px-4 text-center">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-estero" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
           </table>
         </div>
       </div>

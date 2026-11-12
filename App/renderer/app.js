@@ -57,13 +57,17 @@ const STATO_VUOTO = () => ({
   collabInps: false,
   impostazioni: IMPOSTAZIONI_BASE(),
   entrate: [],                 // tipo 'Fattura' → Fatture emesse, 'Corrispettivi' → Corrispettivi
-  acquisti: [],                // sezione 'fornitori' → Fatture ricevute, 'spese' → Abbonamenti/Acquisti/Spese
+  acquisti: [],                // sezione 'fornitori' → Fatture ricevute, 'estero' → Autofatture/Fatture estere, 'spese' → Abbonamenti/Acquisti/Spese
   parcelle: [],                // fatture del commercialista, con la ritenuta d'acconto
 });
 
 /* Le spese registrate prima della divisione in due tab non sapevano dove
    stare: la merce va ai fornitori, il resto ad abbonamenti e spese. */
-const sezioneDi = (a) => a.sezione || (a.categoria === 'merce_100_100' && !/bollett|affitt|utenz|cancell|energia|luce|gas\b/i.test(a.desc || '') ? 'fornitori' : 'spese');
+const sezioneDi = (a) => {
+  const s = a.sezione || (a.categoria === 'merce_100_100' && !/bollett|affitt|utenz|cancell|energia|luce|gas\b/i.test(a.desc || '') ? 'fornitori' : 'spese');
+  // gli acquisti dall'estero hanno un tab tutto loro
+  return s === 'fornitori' && a.provenienza && a.provenienza !== 'IT' ? 'estero' : s;
+};
 
 // Esempio dimostrativo: nomi inventati, date nell'anno scelto
 function datiEsempio(anno) {
@@ -232,7 +236,7 @@ function askResetToDemo() {
 function askClearAll() {
   openConfirmModal(
     `Svuotare i movimenti del ${appState.anno}?`,
-    `Verranno cancellati fatture emesse, corrispettivi, fatture dei fornitori, spese e parcelle del ${appState.anno}. Impostazioni e altri anni restano. Se vuoi conservarli, esporta prima un backup.`,
+    `Verranno cancellati fatture emesse, corrispettivi, fatture dei fornitori, acquisti dall'estero, spese e parcelle del ${appState.anno}. Impostazioni e altri anni restano. Se vuoi conservarli, esporta prima un backup.`,
     () => {
       appState.entrate = appState.entrate.filter((x) => annoDi(x.data) !== appState.anno);
       appState.acquisti = appState.acquisti.filter((x) => annoDi(x.data) !== appState.anno);
@@ -396,7 +400,7 @@ function calcAcquistoBreakdown(item) {
     ivaDebitoRC = ivaRC;
     ivaDetraibile = ivaRC * rule.ivaDetPct;
     ivaIndetraibile = ivaRC - ivaDetraibile;
-    notaEstero = item.provenienza === 'UE_MERCE' ? 'Reverse charge UE (TD18 entro il 15 del mese successivo)' : 'Reverse charge servizi extra-UE (TD17)';
+    notaEstero = item.provenienza === 'UE_MERCE' ? 'Reverse charge UE (TD18 entro il 15 del mese successivo)' : 'Reverse charge servizi esteri (TD17)';
   } else {
     ivaDetraibile = ivaDoc * rule.ivaDetPct;
     ivaIndetraibile = ivaDoc - ivaDetraibile;
@@ -405,6 +409,17 @@ function calcAcquistoBreakdown(item) {
   // l'IVA indetraibile diventa parte del costo
   const costoDeducibile = (im + ivaIndetraibile) * rule.costoDedPct;
   return { imponibile: im, ivaDocumento: ivaDoc, ivaDebitoRC, ivaDetraibile, ivaIndetraibile, costoDeducibile, rule, notaEstero };
+}
+
+/* L'autofattura TD17/TD18 va mandata allo SDI entro il 15 del mese dopo
+   il ricevimento della fattura estera: qui si conta dalla data del documento. */
+function termineAutofattura(item) {
+  if (item.provenienza !== 'UE_MERCE' && item.provenienza !== 'CH_SERVIZI') return '';
+  const [a, m] = String(item.data).split('-').map(Number);
+  if (!a || !m) return '';
+  const t = new Date(a, m, 15);                       // m è 1-based: new Date(a, m) è già il mese dopo
+  const iso = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-15`;
+  return ` <span class="inline-block mt-1 px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-semibold" title="Se hai ricevuto la fattura estera più tardi, conta la data di ricevimento">Autofattura allo SDI entro il ${fmtData(iso)}</span>`;
 }
 
 function calcolaIrpefScaglioni(imponibile) {
@@ -442,6 +457,7 @@ const MODULI_ENTRATA = {
 };
 const MODULI_SPESA = {
   fo: { form: 'form-fornitori', sezione: 'fornitori', msg: 'Fattura del fornitore registrata.' },
+  es: { form: 'form-estero', sezione: 'estero', msg: 'Acquisto dall\'estero registrato.' },
   acq: { form: 'form-acquisti', sezione: 'spese', msg: 'Spesa registrata con le regole fiscali applicate.' },
 };
 const regimeEntrata = (p) => (p === 'co' ? 'IT_22' : $(`${p}-regime`).value);
@@ -477,7 +493,7 @@ function dataDefault() {
   const t = oggi();
   return annoDi(t) === appState.anno ? t : `${appState.anno}-01-01`;
 }
-const CAMPI_DATA = ['fe-data', 'co-data', 'fo-data', 'acq-data', 'pa-data'];
+const CAMPI_DATA = ['fe-data', 'co-data', 'fo-data', 'es-data', 'acq-data', 'pa-data'];
 
 function confermaRegistrazione(data, msg, focus) {
   if (annoDi(data) === appState.anno) showToast(msg);
@@ -631,7 +647,7 @@ function deleteEntrata(id) {
 function deleteAcquisto(id) {
   const x = appState.acquisti.find((v) => v.id === id);
   if (!x) return;
-  openConfirmModal(x.sezione === 'fornitori' ? 'Eliminare questa fattura del fornitore?' : 'Eliminare questa spesa?',
+  openConfirmModal(x.sezione === 'fornitori' ? 'Eliminare questa fattura del fornitore?' : x.sezione === 'estero' ? 'Eliminare questo acquisto dall\'estero?' : 'Eliminare questa spesa?',
     `${fmtData(x.data)} — ${x.desc} (${fmtEuro(x.imponibile)} + IVA)`, () => {
       appState.acquisti = appState.acquisti.filter((v) => v.id !== id);
       saveState(); renderAll(); showToast('Voce eliminata.');
@@ -650,12 +666,14 @@ function deleteParcella(id) {
 // ---------------------------------------------------------------------------
 // Riepilogo dell'anno per il commercialista (CSV che Excel apre da solo)
 // ---------------------------------------------------------------------------
+const NOMI_SEZIONE = { fornitori: 'Fatture fornitori', estero: 'Autofatture/fatture estere', spese: 'Abbonamenti/acquisti/spese' };
+
 async function exportCsvAnno() {
   const anno = appState.anno;
   const num = (n) => (Math.round((n || 0) * 100) / 100).toFixed(2).replace('.', ',');
   const cella = (v) => { const s = String(v ?? ''); return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const REG = { IT_22: 'Italia IVA 22%', CH_ART8: 'Non imponibile art. 8', UE_ART41: 'Non imponibile art. 41' };
-  const PROV = { IT: 'Italia', UE_MERCE: 'UE reverse charge TD18', CH_BOLLA: 'Extra-UE bolla doganale', CH_SERVIZI: 'Extra-UE servizi TD17' };
+  const PROV = { IT: 'Italia', UE_MERCE: 'UE reverse charge TD18', CH_BOLLA: 'Extra-UE bolla doganale', CH_SERVIZI: 'Servizi esteri reverse charge TD17' };
   const righe = [['Sezione', 'Data', 'Trimestre', 'Descrizione', 'Regime / provenienza', 'Categoria', 'Imponibile', 'IVA documento', 'IVA a debito', 'IVA detraibile', 'Costo deducibile', 'Totale', 'Ritenuta', 'Note']];
   const delAnno = (x) => annoDi(x.data) === anno;
 
@@ -665,7 +683,7 @@ async function exportCsvAnno() {
   }
   for (const x of appState.acquisti.filter(delAnno)) {
     const b = calcAcquistoBreakdown(x);
-    righe.push([x.sezione === 'fornitori' ? 'Fatture fornitori' : 'Abbonamenti/acquisti/spese', fmtData(x.data), 'Q' + getTrimestre(x.data), x.desc, PROV[x.provenienza] || x.provenienza, b.rule.label, num(b.imponibile), num(b.ivaDocumento), num(b.ivaDebitoRC), num(b.ivaDetraibile), num(b.costoDeducibile), num(b.imponibile + b.ivaDocumento), '', b.notaEstero]);
+    righe.push([NOMI_SEZIONE[x.sezione] || 'Abbonamenti/acquisti/spese', fmtData(x.data), 'Q' + getTrimestre(x.data), x.desc, PROV[x.provenienza] || x.provenienza, b.rule.label, num(b.imponibile), num(b.ivaDocumento), num(b.ivaDebitoRC), num(b.ivaDetraibile), num(b.costoDeducibile), num(b.imponibile + b.ivaDocumento), '', b.notaEstero]);
   }
   for (const x of appState.parcelle.filter(delAnno)) {
     const b = calcParcella(x);
@@ -708,6 +726,7 @@ let importazione = null;
 const DESTINAZIONI = {
   fatture: 'Fatture emesse',
   fornitori: 'Fatture fornitori',
+  estero: 'Autofatture/fatture estere',
   spese: 'Abbonamenti/acquisti/spese',
   commercialista: 'Commercialista',
   salta: 'Non importare',
@@ -764,9 +783,9 @@ function proponiDestinazione(f, contesto, presunta = '') {
   }
   if (emessa) return { dest: 'fatture' };
   if (f.ritenuta > 0 || (f.cassa && f.cassa.importo > 0)) return { dest: 'commercialista' };
-  if (['TD17', 'TD18', 'TD19'].includes(f.tipoDoc)) return { dest: 'fornitori' };
+  if (['TD17', 'TD18', 'TD19'].includes(f.tipoDoc) || (f.cedente.paese && f.cedente.paese !== 'IT')) return { dest: 'estero' };
   if (contesto === 'acquisti' || sembraSpesa(f)) return { dest: 'spese' };
-  return { dest: contesto === 'commercialista' ? 'commercialista' : 'fornitori' };
+  return { dest: contesto === 'commercialista' || contesto === 'estero' ? contesto : 'fornitori' };
 }
 
 function giaPresenti() {
@@ -820,7 +839,7 @@ function disegnaImport() {
     const f = r.f, s = segno(f);
     const emessa = r.dest === 'fatture';
     const controparte = emessa ? f.cessionario : f.cedente;
-    const conCategoria = r.dest === 'fornitori' || r.dest === 'spese';
+    const conCategoria = r.dest === 'fornitori' || r.dest === 'estero' || r.dest === 'spese';
     const note = [];
     if (r.motivo) note.push(`<span class="text-amber-700 font-semibold">${esc(r.motivo)}</span>`);
     if (NOTE_CREDITO.has(f.tipoDoc)) note.push('<span class="text-indigo-700">Nota di credito: importi in negativo</span>');
@@ -865,7 +884,7 @@ document.addEventListener('change', (e) => {
 
 function confermaImport() {
   if (!importazione) return;
-  const conta = { fatture: 0, fornitori: 0, spese: 0, commercialista: 0 };
+  const conta = { fatture: 0, fornitori: 0, estero: 0, spese: 0, commercialista: 0 };
   let id = Date.now();
   for (const r of importazione.righe) {
     if (r.dest === 'salta') continue;
@@ -897,7 +916,7 @@ function confermaImport() {
         id: id++, data: f.data, desc: `${f.cedente.nome} - ${nc}n. ${f.numero}`,
         provenienza: r.provenienza, categoria: r.categoria,
         imponibile: s * f.imponibile, iva: rc ? 0 : s * f.iva,
-        sezione: r.dest === 'fornitori' ? 'fornitori' : 'spese', xml: r.chiave,
+        sezione: r.dest, xml: r.chiave,
       });
     }
     conta[r.dest]++;
@@ -910,7 +929,7 @@ function confermaImport() {
   const dove = Object.entries(conta).filter(([, n]) => n).map(([k, n]) => `${n} in ${DESTINAZIONI[k]}`).join(', ');
   // si apre il tab dove è finita la maggior parte delle fatture
   const principale = Object.entries(conta).sort((a, b) => b[1] - a[1])[0][0];
-  const tabDi = { fatture: 'fatture', fornitori: 'fornitori', spese: 'acquisti', commercialista: 'commercialista' };
+  const tabDi = { fatture: 'fatture', fornitori: 'fornitori', estero: 'estero', spese: 'acquisti', commercialista: 'commercialista' };
   importazione = null;
   popolaAnni(); renderAll();
   if (tot) switchTab(tabDi[principale]);
@@ -1063,21 +1082,21 @@ function renderAll() {
     IT: '',
     UE_MERCE: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-[10px] font-bold">UE • Autofattura TD18</span>',
     CH_BOLLA: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold">Svizzera • Bolla doganale</span>',
-    CH_SERVIZI: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold">Extra-UE • Autofattura TD17</span>',
+    CH_SERVIZI: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold">Servizi esteri • Autofattura TD17</span>',
   };
-  const totSp = { fo: { det: 0, ded: 0 }, acq: { det: 0, ded: 0 } };
-  const htmlSp = { fo: '', acq: '' };
+  const totSp = { fo: { det: 0, ded: 0 }, es: { det: 0, ded: 0 }, acq: { det: 0, ded: 0 } };
+  const htmlSp = { fo: '', es: '', acq: '' };
   for (const item of acquisti) {
     const b = calcAcquistoBreakdown(item);
     const q = getTrimestre(item.data);
-    const p = item.sezione === 'fornitori' ? 'fo' : 'acq';
+    const p = item.sezione === 'fornitori' ? 'fo' : item.sezione === 'estero' ? 'es' : 'acq';
     totCostiDeducibili += b.costoDeducibile;
     ivaTrim[q].debito += b.ivaDebitoRC; ivaTrim[q].credito += b.ivaDetraibile;
     totSp[p].det += b.ivaDetraibile; totSp[p].ded += b.costoDeducibile;
     htmlSp[p] += `<tr class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
-      <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}${item.xml ? XML_BADGE : ''}</div>${PROV[item.provenienza] || ''}</td>
+      <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}${item.xml ? XML_BADGE : ''}</div>${PROV[item.provenienza] || ''}${termineAutofattura(item)}</td>
       <td class="py-3 px-4 text-xs text-slate-600 min-w-[140px]">${b.rule.badge}</td>
       <td class="py-3 px-4 text-right font-medium text-slate-800 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
       <td class="py-3 px-4 text-right text-slate-500 whitespace-nowrap">${fmtEuro(b.ivaDocumento)}</td>
@@ -1089,6 +1108,9 @@ function renderAll() {
   $('tbody-fornitori').innerHTML = htmlSp.fo || vuota(9, `Nessuna fattura di fornitori nel ${anno}. Registra qui merce e servizi acquistati per la rivendita.`);
   $('tot-fo-iva-det').textContent = fmtEuro(totSp.fo.det);
   $('tot-fo-costo-ded').textContent = fmtEuro(totSp.fo.ded);
+  $('tbody-estero').innerHTML = htmlSp.es || vuota(9, `Nessun acquisto dall'estero nel ${anno}. Registra qui merce UE, servizi esteri e importazioni con bolla doganale.`);
+  $('tot-es-iva-det').textContent = fmtEuro(totSp.es.det);
+  $('tot-es-costo-ded').textContent = fmtEuro(totSp.es.ded);
   $('tbody-acquisti').innerHTML = htmlSp.acq || vuota(9, `Nessuna spesa nel ${anno}. Registra abbonamenti, bollette, carburante e le altre spese del negozio.`);
   $('tot-acq-iva-det').textContent = fmtEuro(totSp.acq.det);
   $('tot-acq-costo-ded').textContent = fmtEuro(totSp.acq.ded);

@@ -101,20 +101,30 @@ ipcMain.handle('backup:importa', async () => {
   catch (err) { return { ok: false, errore: 'File non leggibile: ' + err.message }; }
 });
 
-/* Allegati (PDF dei corrispettivi): una copia nella cartella dei dati, così
-   restano apribili anche se l'originale viene spostato o cancellato.
-   Si accettano solo PDF e solo percorsi dentro la cartella degli allegati. */
+/* Allegati (PDF dei corrispettivi, XML delle fatture elettroniche): una copia
+   nella cartella dei dati, così restano consultabili anche se l'originale
+   viene spostato o cancellato. Si accettano solo PDF e XML, e solo percorsi
+   dentro la cartella degli allegati. */
 const ALLEGATI_DIR = path.join(USER, 'allegati');
 const dentroAllegati = (rel) => {
   const p = path.resolve(ALLEGATI_DIR, String(rel || ''));
   return p.startsWith(ALLEGATI_DIR + path.sep) ? p : null;
 };
+// un XML comincia con «<», dopo un eventuale BOM UTF-8 e qualche spazio; o è UTF-16
+const sembraXml = (b) => {
+  if ((b[0] === 0xff && b[1] === 0xfe) || (b[0] === 0xfe && b[1] === 0xff)) return true;
+  let i = b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf ? 3 : 0;
+  while (i < b.length && i < 64 && /\s/.test(String.fromCharCode(b[i]))) i++;
+  return b[i] === 0x3c;
+};
 ipcMain.handle('allegato:salva', async (_e, { cartella, nome, bytes }) => {
   const dati = Buffer.from(bytes || []);
-  if (dati.subarray(0, 5).toString('latin1') !== '%PDF-') return { ok: false, errore: 'non è un PDF' };
+  const estensione = dati.subarray(0, 5).toString('latin1') === '%PDF-' ? '.pdf' : sembraXml(dati) ? '.xml' : null;
+  if (!estensione) return { ok: false, errore: 'non è un PDF né un XML' };
   const pulito = (s) => String(s || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^\.+/, '').trim().slice(0, 120);
   const sotto = String(cartella || '').split(/[\\/]+/).map(pulito).filter(Boolean);
-  const rel = path.join(...(sotto.length ? sotto : ['varie']), (pulito(nome) || 'documento').replace(/(\.pdf)?$/i, '.pdf'));
+  const base = (pulito(nome) || 'documento').replace(/\.(pdf|xml)$/i, '');
+  const rel = path.join(...(sotto.length ? sotto : ['varie']), base + estensione);
   const dest = dentroAllegati(rel);
   if (!dest) return { ok: false, errore: 'nome non valido' };
   fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -126,6 +136,13 @@ ipcMain.handle('allegato:apri', async (_e, rel) => {
   if (!p || !/\.pdf$/i.test(p) || !fs.existsSync(p)) return { ok: false, errore: 'Il PDF allegato non si trova più nella cartella dei dati.' };
   const err = await shell.openPath(p);
   return err ? { ok: false, errore: err } : { ok: true };
+});
+// l'XML di una fattura, per mostrarla nell'app
+ipcMain.handle('allegato:leggi', async (_e, rel) => {
+  const p = dentroAllegati(rel);
+  if (!p || !/\.xml$/i.test(p) || !fs.existsSync(p)) return { ok: false, errore: 'Il file XML non si trova più nella cartella dei dati.' };
+  if (fs.statSync(p).size > 60 * 1024 * 1024) return { ok: false, errore: 'File troppo grande.' };
+  return { ok: true, bytes: fs.readFileSync(p) };
 });
 
 /* -------------------------------------------------------------------------

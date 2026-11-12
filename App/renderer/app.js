@@ -216,6 +216,7 @@ $('confirm-ok').addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (chiudiMenuVoce()) return;
+  if (!$('xml-modal').classList.contains('hidden')) { chiudi($('xml-modal')); xmlAperto = null; return; }
   if (!$('sposta-modal').classList.contains('hidden')) { chiudi($('sposta-modal')); spostamento = null; return; }
   if (!$('confirm-modal').classList.contains('hidden')) { chiudi($('confirm-modal')); confirmCallback = null; }
   else if (!$('import-modal').classList.contains('hidden')) { chiudi($('import-modal')); importazione = null; }
@@ -381,6 +382,10 @@ document.addEventListener('click', (e) => {
     case 'import-xml': scegliFileXml(a.dataset.contesto); break;
     case 'close-import': chiudi($('import-modal')); importazione = null; break;
     case 'conferma-import': confermaImport(); break;
+    case 'vedi-xml': chiudiMenuVoce(); vediFatturaXml(a.dataset.voce); break;
+    case 'xml-grezzo': mostraXmlGrezzo(); break;
+    case 'close-xml': chiudi($('xml-modal')); xmlAperto = null; break;
+    case 'apri-allegato-xml': apriAllegatoFattura(+a.dataset.i); break;
     case 'import-pdf-corr': $('pdf-input').click(); break;
     case 'close-pdfc': chiudi($('pdfc-modal')); caricamentoPdf = null; break;
     case 'conferma-pdfc': confermaPdfCorrispettivi(); break;
@@ -888,14 +893,16 @@ function disegnaImport() {
   else if (!pulisciPiva(imp().piva)) avvisi.push(`<div class="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">Non hai ancora inserito la <strong>Partita IVA della società</strong> nelle impostazioni: senza, emesse e ricevute si distinguono solo dal tab da cui sei partito. Controlla la colonna «Dove va».</div>`);
   if (righe.some((r) => ['TD17', 'TD18', 'TD19'].includes(r.f.tipoDoc) && r.dest !== 'salta')) avvisi.push('<div class="p-2.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-900">Ci sono <strong>autofatture TD17/TD18/TD19</strong>: registrano già l\'acquisto dall\'estero in reverse charge. Non inserire anche la fattura del fornitore estero, o il costo conterebbe due volte.</div>');
   if (errori.length) avvisi.push(`<div class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900"><strong>${errori.length} file non letti:</strong> ${errori.slice(0, 5).map((e) => `${esc(e.file)} (${esc(e.errore)})`).join('; ')}${errori.length > 5 ? '…' : ''}</div>`);
+  const daCollegare = righe.filter((r) => r.dest === 'salta' && r.motivo === 'Già importata' && r.f.grezzo && voceSenzaXml(r.chiave)).length;
+  if (daCollegare) avvisi.push(`<div class="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900"><strong>${daCollegare} ${daCollegare === 1 ? 'fattura già registrata non ha' : 'fatture già registrate non hanno'}</strong> ancora il file XML (importate prima della versione 2.6): confermando lo collego, così puoi aprirle dalla tabella. Non vengono registrate di nuovo.</div>`);
   $('import-avvisi').innerHTML = avvisi.join('');
 
   const daFare = righe.filter((r) => r.dest !== 'salta').length;
   $('import-sub').textContent = `${righe.length} fatture lette. Controlla dove finisce ognuna, poi conferma.`;
   $('import-riepilogo').textContent = `${daFare} da registrare, ${righe.length - daFare} saltate.`;
-  $('import-ok').textContent = daFare ? `Registra ${daFare} fatture` : 'Niente da registrare';
-  $('import-ok').disabled = !daFare;
-  $('import-ok').classList.toggle('opacity-50', !daFare);
+  $('import-ok').textContent = daFare ? `Registra ${daFare} fatture` + (daCollegare ? ` e collega ${daCollegare} XML` : '') : daCollegare ? `Collega ${daCollegare} XML` : 'Niente da registrare';
+  $('import-ok').disabled = !(daFare || daCollegare);
+  $('import-ok').classList.toggle('opacity-50', !(daFare || daCollegare));
 }
 
 document.addEventListener('change', (e) => {
@@ -907,13 +914,18 @@ document.addEventListener('change', (e) => {
   if (el.dataset.campo === 'dest') { r.motivo = el.value === 'salta' ? r.motivo : ''; disegnaImport(); }
 });
 
-function confermaImport() {
-  if (!importazione) return;
+async function confermaImport() {
+  const lotto = importazione;
+  if (!lotto || lotto.inCorso) return;
+  lotto.inCorso = true;
+  $('import-ok').disabled = true;
+  $('import-ok').textContent = 'Salvataggio…';
   const conta = { fatture: 0, fornitori: 0, estero: 0, spese: 0, commercialista: 0 };
   let id = Date.now();
-  for (const r of importazione.righe) {
+  for (const r of lotto.righe) {
     if (r.dest === 'salta') continue;
     const f = r.f;
+    const fileXml = (await conservaXml(r)) || {};
     const s = NOTE_CREDITO.has(f.tipoDoc) ? -1 : 1;
     const nc = s < 0 ? 'Nota di credito ' : 'Fatt. ';
     const cp = controparteFattura(f, r.dest);
@@ -922,7 +934,7 @@ function confermaImport() {
       const regime = nature.some((n) => n === 'N3.1') ? 'CH_ART8' : nature.some((n) => n === 'N3.2') ? 'UE_ART41' : 'IT_22';
       appState.entrate.push({
         id: id++, data: f.data, tipo: 'Fattura', desc: `${nc}n. ${f.numero} - ${f.cessionario.nome}`, regime,
-        totale: s * f.totale, imponibile: s * f.imponibile, iva: s * f.iva, xml: r.chiave, cp,
+        totale: s * f.totale, imponibile: s * f.imponibile, iva: s * f.iva, xml: r.chiave, cp, ...fileXml,
       });
     } else if (r.dest === 'commercialista') {
       /* nell'XML l'imponibile dei riepiloghi comprende già la cassa:
@@ -934,7 +946,7 @@ function confermaImport() {
         id: id++, data: f.data, desc: `${f.cedente.nome} - ${nc}n. ${f.numero}`,
         regime: f.cedente.regime === 'RF19' ? 'forfettario' : 'ordinario',
         onorario: s * Math.max(0, imponibileIva - cassa), cassaPct: f.cassa ? f.cassa.aliquota : 0, esenti: s * esenti,
-        pagamento: '', ritenutaVersata: false, xml: r.chiave, cp,
+        pagamento: '', ritenutaVersata: false, xml: r.chiave, cp, ...fileXml,
       });
     } else {
       const rc = r.provenienza !== 'IT';
@@ -942,7 +954,7 @@ function confermaImport() {
         id: id++, data: f.data, desc: `${f.cedente.nome} - ${nc}n. ${f.numero}`,
         provenienza: r.provenienza, categoria: r.categoria,
         imponibile: s * f.imponibile, iva: rc ? 0 : s * f.iva,
-        sezione: r.dest, xml: r.chiave, cp,
+        sezione: r.dest, xml: r.chiave, cp, ...fileXml,
         ...(r.dest === 'fornitori' && r.provenienza !== 'IT' ? { sezioneManuale: true } : {}),
         // se un giorno la si sposta tra le parcelle, servono cassa e spese esenti
         ...(f.ritenuta > 0 || f.cassa ? { prof: { regime: f.cedente.regime === 'RF19' ? 'forfettario' : 'ordinario', cassaPct: f.cassa ? f.cassa.aliquota : 0, esenti: s * f.riepiloghi.filter((x) => (x.natura || '').startsWith('N1')).reduce((t, x) => t + x.imponibile, 0) } } : {}),
@@ -950,8 +962,17 @@ function confermaImport() {
     }
     conta[r.dest]++;
   }
+  // fatture già registrate prima della 2.6: si collega il file, senza duplicarle
+  let collegati = 0;
+  for (const r of lotto.righe) {
+    if (r.dest !== 'salta' || r.motivo !== 'Già importata') continue;
+    const voce = voceSenzaXml(r.chiave);
+    if (!voce) continue;
+    const fileXml = await conservaXml(r);
+    if (fileXml) { Object.assign(voce, fileXml); collegati++; }
+  }
   for (const k of ['entrate', 'acquisti', 'parcelle']) appState[k].sort((a, b) => a.data.localeCompare(b.data));
-  appState.isDemo = false;
+  if (Object.values(conta).some(Boolean)) appState.isDemo = false;
   saveState();
   chiudi($('import-modal'));
   const tot = Object.values(conta).reduce((a, b) => a + b, 0);
@@ -962,7 +983,8 @@ function confermaImport() {
   importazione = null;
   popolaAnni(); renderAll();
   if (tot) switchTab(tabDi[principale]);
-  showToast(`Importate ${tot} fatture: ${dove}.`);
+  const collegatiTesto = collegati ? `${collegati === 1 ? 'Collegato 1 file XML' : `Collegati ${collegati} file XML`} a fatture già registrate.` : '';
+  showToast(tot ? `Importate ${tot} fatture: ${dove}.${collegati ? ' ' + collegatiTesto : ''}` : collegatiTesto || 'Nessuna fattura registrata.');
 }
 
 /* Trascinare i file sulla finestra. Senza questo, Electron aprirebbe il file
@@ -1329,7 +1351,6 @@ function renderAll() {
   const acquisti = appState.acquisti.filter((x) => annoDi(x.data) === anno);
   const parcelle = appState.parcelle.filter((x) => annoDi(x.data) === anno);
   const ivaTrim = { 1: { debito: 0, credito: 0 }, 2: { debito: 0, credito: 0 }, 3: { debito: 0, credito: 0 }, 4: { debito: 0, credito: 0 } };
-  const XML_BADGE = '<span class="ml-1.5 align-middle px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold" title="Importata dalla fattura elettronica">XML</span>';
   const vuota = (col, testo) => `<tr><td colspan="${col}" class="py-8 text-center text-slate-400 text-xs">${testo}</td></tr>`;
   const btnElimina = (azione, id) => `<td class="py-3 px-4 text-center"><button data-action="${azione}" data-id="${id}" class="text-rose-500 hover:text-rose-700 text-xs font-semibold px-2 py-1 rounded-lg hover:bg-rose-50">Elimina</button></td>`;
 
@@ -1351,7 +1372,7 @@ function renderAll() {
     htmlEnt[p] += `<tr data-voce="entrata:${item.id}" class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
-      <td class="py-3 px-4 font-medium text-slate-900 min-w-[200px]">${esc(item.desc)}${item.xml ? XML_BADGE : ''}${item.registro ? badgeRegistro(item) : ''}</td>
+      <td class="py-3 px-4 font-medium text-slate-900 min-w-[200px]">${esc(item.desc)}${item.xml ? badgeXml('entrata:' + item.id, item) : ''}${item.registro ? badgeRegistro(item) : ''}</td>
       ${p === 'fe' ? `<td class="py-3 px-4">${REGIME[item.regime] || esc(item.regime)}</td>` : ''}
       <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.totale)}</td>
       <td class="py-3 px-4 text-right font-semibold text-slate-700 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
@@ -1389,7 +1410,7 @@ function renderAll() {
     htmlSp[p] += `<tr data-voce="acquisto:${item.id}" class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
-      <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}${item.xml ? XML_BADGE : ''}</div>${PROV[item.provenienza] || ''}${termineAutofattura(item)}</td>
+      <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}${item.xml ? badgeXml('acquisto:' + item.id, item) : ''}</div>${PROV[item.provenienza] || ''}${termineAutofattura(item)}</td>
       <td class="py-3 px-4 text-xs text-slate-600 min-w-[140px]">${b.rule.badge}</td>
       <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.imponibile + b.ivaDocumento)}</td>
       <td class="py-3 px-4 text-right font-medium text-slate-800 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
@@ -1440,7 +1461,7 @@ function renderAll() {
     }
     html += `<tr data-voce="parcella:${item.id}" class="hover:bg-slate-50/80 transition align-top">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
-      <td class="py-3 px-4 font-medium text-slate-900 min-w-[220px]">${esc(item.desc)}${item.xml ? XML_BADGE : ''}${item.regime === 'forfettario' ? '<div class="text-[10px] font-bold text-slate-500 mt-1">FORFETTARIO</div>' : ''}</td>
+      <td class="py-3 px-4 font-medium text-slate-900 min-w-[220px]">${esc(item.desc)}${item.xml ? badgeXml('parcella:' + item.id, item) : ''}${item.regime === 'forfettario' ? '<div class="text-[10px] font-bold text-slate-500 mt-1">FORFETTARIO</div>' : ''}</td>
       <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.totale)}</td>
       <td class="py-3 px-4 text-right whitespace-nowrap">${fmtEuro(b.imponibileIva)}</td>
       <td class="py-3 px-4 text-right text-emerald-700 whitespace-nowrap">${fmtEuro(b.iva)}</td>
@@ -1842,7 +1863,7 @@ function importiDi(tipo, x) {
 function convertiVoce(tipo, x, dest, opz = {}) {
   const cp = controparteDi(tipo, x);
   const base = { id: x.id, data: x.data, desc: x.desc };
-  for (const k of ['xml', 'allegato', 'prof']) if (x[k] != null) base[k] = x[k];
+  for (const k of ['xml', 'xmlFile', 'xmlCorpo', 'xmlTesto', 'allegato', 'prof']) if (x[k] != null) base[k] = x[k];
   if (cp) base.cp = cp;
   // i dati del professionista restano da parte, per un eventuale ritorno
   if (tipo === 'parcella') {
@@ -1911,6 +1932,8 @@ document.addEventListener('contextmenu', (e) => {
       <div class="text-[11px] text-slate-500 truncate">${esc(fmtData(v.x.data))} · ora in ${esc(NOMI_TAB[qui])}</div>
       ${regola ? `<div class="text-[11px] text-amber-700 font-semibold mt-0.5 truncate">Regola: sempre in ${esc(NOMI_TAB[regola.dest])}</div>` : ''}
     </div>
+    ${v.x.xml ? `<button type="button" role="menuitem" data-action="vedi-xml" data-voce="${esc(tr.dataset.voce)}" class="w-full text-left px-3.5 py-2 hover:bg-amber-50 focus:bg-amber-50 outline-none text-slate-900 font-semibold">Vedi la fattura (XML)</button>
+    <div class="my-1 border-t border-slate-100"></div>` : ''}
     <div class="px-3.5 pt-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">Sposta in</div>
     ${SPOSTABILI.filter((d) => d !== qui).map((d) => `<button type="button" role="menuitem" data-action="menu-sposta" data-voce="${esc(tr.dataset.voce)}" data-dest="${d}"
       class="w-full text-left px-3.5 py-2 hover:bg-amber-50 focus:bg-amber-50 outline-none text-slate-800">${esc(NOMI_TAB[d])}</button>`).join('')}
@@ -2059,6 +2082,267 @@ function eliminaRegola(i) {
 }
 
 installaRicerche();
+
+// ---------------------------------------------------------------------------
+// Visualizzare la fattura elettronica (XML)
+// ---------------------------------------------------------------------------
+/* All'importazione il file XML (estratto dal P7M se firmato) viene copiato in
+   allegati/fatture/<anno>: dal pulsante XML della riga, dal menu del tasto
+   destro o col doppio clic la fattura si apre in forma leggibile, con righe,
+   riepilogo IVA, pagamento e allegati, e volendo il testo XML originale.
+   Le fatture importate prima della 2.6 non hanno il file: reimportandolo,
+   l'app lo collega senza registrarle di nuovo. */
+const haFileXml = (x) => !!(x.xmlFile || x.xmlTesto);
+
+async function conservaXml(r) {
+  const f = r.f;
+  if (!f.grezzo) return null;
+  const corpo = f.corpo || 0;
+  if (!DESKTOP) return { xmlTesto: window.FatturaPA.testoXml(f.grezzo), xmlCorpo: corpo };
+  const nome = `${r.chiave.split('|')[0] || 'fattura'}_${f.numero}_${f.data}`;
+  try {
+    const res = await window.gestionale.salvaAllegato(`fatture/${annoDi(f.data) || 'senza-data'}`, nome, f.grezzo);
+    return res && res.ok ? { xmlFile: res.rel, xmlCorpo: corpo } : null;
+  } catch (_) { return null; }
+}
+const voceSenzaXml = (chiave) => [...appState.entrate, ...appState.acquisti, ...appState.parcelle].find((x) => x.xml === chiave && !haFileXml(x)) || null;
+
+const badgeXml = (rif, x) => (haFileXml(x)
+  ? `<button type="button" data-action="vedi-xml" data-voce="${rif}" class="ml-1.5 align-middle px-1.5 py-0.5 rounded bg-amber-100 hover:bg-amber-200 text-amber-800 text-[10px] font-bold" title="Vedi la fattura elettronica">XML</button>`
+  : `<button type="button" data-action="vedi-xml" data-voce="${rif}" class="ml-1.5 align-middle px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-500 text-[10px] font-bold" title="Importata dalla fattura elettronica: il file non è ancora conservato nell'app">XML</button>`);
+
+const MODALITA_PAGAMENTO = {
+  MP01: 'Contanti', MP02: 'Assegno', MP03: 'Assegno circolare', MP04: 'Contanti presso Tesoreria', MP05: 'Bonifico',
+  MP06: 'Vaglia cambiario', MP07: 'Bollettino bancario', MP08: 'Carta di pagamento', MP09: 'RID', MP10: 'RID utenze',
+  MP11: 'RID veloce', MP12: 'RiBa', MP13: 'MAV', MP14: 'Quietanza erario', MP15: 'Giroconto su conti di contabilità speciale',
+  MP16: 'Domiciliazione bancaria', MP17: 'Domiciliazione postale', MP18: 'Bollettino postale', MP19: 'SEPA Direct Debit',
+  MP20: 'SEPA Direct Debit CORE', MP21: 'SEPA Direct Debit B2B', MP22: 'Trattenuta su somme già riscosse', MP23: 'PagoPA',
+};
+const CONDIZIONI_PAGAMENTO = { TP01: 'A rate', TP02: 'Pagamento completo', TP03: 'Anticipo' };
+const REGIMI_FISCALI = { RF01: 'Regime ordinario', RF02: 'Contribuenti minimi', RF04: 'Agricoltura', RF05: 'Vendita sali e tabacchi', RF10: 'Intrattenimenti', RF12: 'Agriturismo', RF14: 'Agenzie di viaggio', RF17: 'IVA per cassa', RF18: 'Altro', RF19: 'Regime forfettario' };
+const NATURE_IVA = {
+  N1: 'Escluse art. 15', N2: 'Non soggette', 'N2.1': 'Non soggette artt. 7-7septies', 'N2.2': 'Non soggette, altri casi',
+  N3: 'Non imponibili', 'N3.1': 'Non imponibili: esportazioni', 'N3.2': 'Non imponibili: cessioni intracomunitarie',
+  'N3.3': 'Non imponibili: San Marino', 'N3.4': 'Non imponibili: operazioni assimilate', 'N3.5': 'Non imponibili: dichiarazione d\'intento',
+  'N3.6': 'Non imponibili: altre', N4: 'Esenti', N5: 'Regime del margine', N6: 'Reverse charge', N7: 'IVA assolta in altro Stato UE',
+};
+const ESIGIBILITA = { I: 'immediata', D: 'differita', S: 'scissione dei pagamenti' };
+const TIPI_RITENUTA = { RT01: 'persone fisiche', RT02: 'persone giuridiche', RT03: 'INPS', RT04: 'ENASARCO', RT05: 'ENPAM', RT06: 'altro' };
+const nomeNatura = (n) => NATURE_IVA[n] || (n && n.startsWith('N6') ? 'Reverse charge' : NATURE_IVA[String(n).slice(0, 2)]) || n;
+
+/* L'XML dello SDI è spesso su una riga sola: lo si va a capo per leggerlo.
+   Gli allegati in base64 (anche di megabyte) si riassumono. */
+function xmlLeggibile(t) {
+  t = t.replace(/(<(?:[\w.-]+:)?Attachment\b[^>]*>)([\s\S]*?)(<\/(?:[\w.-]+:)?Attachment>)/g,
+    (_m, a, b, c) => `${a}[… allegato di ${Math.max(1, Math.round(b.replace(/\s/g, '').length * 0.75 / 1024))} KB in base64 …]${c}`);
+  if ((t.match(/\n/g) || []).length > 8) return t;
+  let livello = 0;
+  return t.replace(/>\s*</g, '>\n<').split('\n').map((riga) => {
+    if (/^<\//.test(riga)) livello = Math.max(0, livello - 1);
+    const out = '  '.repeat(livello) + riga;
+    if (/^<[^!?/][^>]*[^/]>$|^<[^!?/]>$/.test(riga) && !/<\/[^>]+>$/.test(riga)) livello++;
+    return out;
+  }).join('\n');
+}
+
+function htmlFattura(d) {
+  const soldi = (n) => (d.divisa === 'EUR' ? fmtEuro(n) : `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0)} ${esc(d.divisa)}`);
+  const numero = (n, max = 4) => new Intl.NumberFormat('it-IT', { maximumFractionDigits: max }).format(n || 0);
+  const data = (iso) => esc(fmtData(iso));
+  const etichetta = (t) => `<div class="text-[11px] font-bold uppercase tracking-wide text-slate-500">${t}</div>`;
+  const ivaDi = (aliquota, natura) => (natura ? `<span title="${esc(nomeNatura(natura))}">${esc(natura)}</span>` : `${numero(aliquota, 2)}%`);
+
+  const soggetto = (titolo, s) => `<div class="p-4 rounded-xl bg-slate-50 border border-slate-200 min-w-0">
+      ${etichetta(titolo)}
+      <div class="mt-1 font-bold text-slate-900 break-words">${esc(s.nome)}</div>
+      <div class="mt-1 text-xs text-slate-600 space-y-0.5">
+        ${s.piva ? `<div>P.IVA ${esc((s.paese || 'IT') + s.piva)}</div>` : ''}
+        ${s.cf && s.cf !== s.piva ? `<div>Codice fiscale ${esc(s.cf)}</div>` : ''}
+        ${s.indirizzo ? `<div>${esc(s.indirizzo)}</div>` : ''}
+        ${s.regime ? `<div>${esc(REGIMI_FISCALI[s.regime] || s.regime)}</div>` : ''}
+        ${s.rea ? `<div>REA ${esc(s.rea)}</div>` : ''}
+        ${s.email || s.telefono ? `<div>${esc([s.telefono, s.email].filter(Boolean).join(' · '))}</div>` : ''}
+      </div>
+    </div>`;
+
+  const riferimenti = [
+    ...d.ordini.map((x) => `Ordine ${esc(x.numero)}${x.data ? ' del ' + data(x.data) : ''}`),
+    ...d.contratti.map((x) => `Contratto ${esc(x.numero)}${x.data ? ' del ' + data(x.data) : ''}`),
+    ...d.ddt.map((x) => `DDT ${esc(x.numero)}${x.data ? ' del ' + data(x.data) : ''}`),
+    ...d.fattureCollegate.map((x) => `Fattura collegata ${esc(x.numero)}${x.data ? ' del ' + data(x.data) : ''}`),
+  ];
+
+  const righe = d.linee.map((l) => `<tr class="align-top">
+      <td class="py-2 px-2 text-slate-400">${esc(l.n)}</td>
+      <td class="py-2 px-2 text-slate-900 min-w-[220px]"><div class="whitespace-pre-line break-words">${esc(l.descrizione)}</div>
+        ${l.codice ? `<div class="text-[11px] text-slate-500">Cod. ${esc(l.codice)}</div>` : ''}
+        ${l.inizio || l.fine ? `<div class="text-[11px] text-slate-500">Periodo ${data(l.inizio)} – ${data(l.fine)}</div>` : ''}
+        ${l.sconti.length ? `<div class="text-[11px] text-slate-500">${l.sconti.map((s) => `${s.tipo === 'MG' ? 'Maggiorazione' : 'Sconto'} ${s.percentuale ? numero(s.percentuale, 2) + '%' : soldi(s.importo)}`).join(', ')}</div>` : ''}
+        ${l.ritenuta ? '<div class="text-[11px] text-rose-600">Soggetta a ritenuta</div>' : ''}</td>
+      <td class="py-2 px-2 text-right whitespace-nowrap">${l.quantita != null ? numero(l.quantita) + (l.um ? ' ' + esc(l.um) : '') : ''}</td>
+      <td class="py-2 px-2 text-right whitespace-nowrap">${soldi(l.prezzo)}</td>
+      <td class="py-2 px-2 text-right whitespace-nowrap font-semibold text-slate-900">${soldi(l.totale)}</td>
+      <td class="py-2 px-2 text-right whitespace-nowrap">${ivaDi(l.aliquota, l.natura)}</td>
+    </tr>`).join('');
+
+  const riepiloghi = d.riepiloghi.map((r) => `<tr>
+      <td class="py-2 px-2">${r.natura ? `${esc(r.natura)} · ${esc(nomeNatura(r.natura))}` : `IVA ${numero(r.aliquota, 2)}%`}${r.norma ? `<div class="text-[11px] text-slate-500">${esc(r.norma)}</div>` : ''}</td>
+      <td class="py-2 px-2 text-right whitespace-nowrap">${soldi(r.imponibile)}</td>
+      <td class="py-2 px-2 text-right whitespace-nowrap">${soldi(r.imposta)}</td>
+      <td class="py-2 px-2 text-slate-500">${esc(ESIGIBILITA[r.esigibilita] || r.esigibilita || '')}</td>
+    </tr>`).join('');
+
+  const imponibile = d.riepiloghi.reduce((t, r) => t + r.imponibile, 0);
+  const iva = d.riepiloghi.reduce((t, r) => t + r.imposta, 0);
+  const totale = d.totale != null ? d.totale : imponibile + iva + d.bollo;
+  const ritenuta = d.ritenute.reduce((t, r) => t + r.importo, 0);
+  const riga = (lbl, v, cls = 'text-slate-900') => `<div class="flex justify-between gap-4"><span class="text-slate-600">${lbl}</span><span class="font-semibold whitespace-nowrap ${cls}">${v}</span></div>`;
+  const totali = [
+    riga('Imponibile', soldi(imponibile)),
+    riga('IVA', soldi(iva)),
+    d.cassa ? riga(`Cassa previdenziale ${esc(d.cassa.tipo)} ${numero(d.cassa.aliquota, 2)}% (compresa nell'imponibile)`, soldi(d.cassa.importo), 'text-slate-600') : '',
+    d.bollo ? riga('Bollo', soldi(d.bollo)) : '',
+    d.arrotondamento ? riga('Arrotondamento', soldi(d.arrotondamento)) : '',
+    d.sconti.length ? riga('Sconti sul totale', d.sconti.map((s) => (s.percentuale ? numero(s.percentuale, 2) + '%' : soldi(s.importo))).join(', ')) : '',
+    `<div class="border-t border-slate-200 pt-2 mt-1">${riga('<strong class="text-slate-900">Totale documento</strong>', soldi(totale))}</div>`,
+    ...d.ritenute.map((r) => riga(`Ritenuta d'acconto ${numero(r.aliquota, 2)}% (${esc(TIPI_RITENUTA[r.tipo] || r.tipo)})`, '− ' + soldi(r.importo), 'text-rose-600')),
+    ritenuta ? riga('<strong class="text-slate-900">Netto a pagare</strong>', soldi(totale - ritenuta)) : '',
+  ].join('');
+
+  const pagamenti = d.pagamenti.map((p) => p.rate.map((r) => `<div class="p-3 rounded-xl border border-slate-200 text-xs text-slate-700 space-y-0.5">
+      <div class="font-semibold text-slate-900">${esc(MODALITA_PAGAMENTO[r.modalita] || r.modalita || 'Pagamento')}${p.condizioni ? ` · ${esc(CONDIZIONI_PAGAMENTO[p.condizioni] || p.condizioni)}` : ''}</div>
+      ${r.importo ? `<div>Importo <strong>${soldi(r.importo)}</strong>${r.scadenza ? ` entro il <strong>${data(r.scadenza)}</strong>` : ''}</div>` : r.scadenza ? `<div>Scadenza ${data(r.scadenza)}</div>` : ''}
+      ${r.iban ? `<div>IBAN <span class="font-mono">${esc(r.iban)}</span>${r.istituto ? ' · ' + esc(r.istituto) : ''}</div>` : r.istituto ? `<div>${esc(r.istituto)}</div>` : ''}
+      ${r.beneficiario ? `<div>Beneficiario ${esc(r.beneficiario)}</div>` : ''}
+    </div>`).join('')).join('');
+
+  const allegati = d.allegati.map((a) => `<li class="flex items-center justify-between gap-3 px-3 py-2">
+      <div class="min-w-0"><div class="text-sm font-medium text-slate-900 truncate">${esc(a.nome)}</div>
+        <div class="text-[11px] text-slate-500">${esc([a.formato, a.descrizione, a.dimensione ? Math.max(1, Math.round(a.dimensione / 1024)) + ' KB' : ''].filter(Boolean).join(' · '))}</div></div>
+      <button type="button" data-action="apri-allegato-xml" data-i="${a.i}" class="shrink-0 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-700">Apri</button>
+    </li>`).join('');
+
+  const tr = d.trasmissione;
+  return `<div class="space-y-5 text-sm">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        ${etichetta(`${esc(TIPI_DOC[d.tipoDoc] || 'Documento')} · ${esc(d.tipoDoc)}`)}
+        <div class="text-xl font-bold text-slate-900">n. ${esc(d.numero)} del ${data(d.data)}</div>
+        ${d.corpi > 1 ? `<div class="text-xs text-slate-500">Documento ${d.corpo + 1} di ${d.corpi} nello stesso file</div>` : ''}
+      </div>
+      <div class="text-right">
+        ${etichetta('Totale documento')}
+        <div class="text-2xl font-bold text-slate-900">${soldi(totale)}</div>
+        ${ritenuta ? `<div class="text-xs text-slate-500">Netto a pagare ${soldi(totale - ritenuta)}</div>` : ''}
+      </div>
+    </div>
+    <div class="grid sm:grid-cols-2 gap-3">
+      ${soggetto('Cedente / prestatore (chi emette)', d.cedente)}
+      ${soggetto('Cessionario / committente (chi riceve)', d.cessionario)}
+    </div>
+    ${d.causale ? `<div class="p-3 rounded-xl bg-amber-50 border border-amber-200">${etichetta('Causale')}<div class="mt-1 text-slate-800 whitespace-pre-line break-words">${esc(d.causale)}</div></div>` : ''}
+    ${riferimenti.length ? `<div class="text-xs text-slate-600">${riferimenti.join(' · ')}</div>` : ''}
+    <div>
+      ${etichetta(`Righe (${d.linee.length})`)}
+      <div class="mt-2 overflow-x-auto rounded-xl border border-slate-200">
+        <table class="w-full text-left text-xs sm:text-sm">
+          <thead><tr class="bg-slate-50 text-[11px] font-bold uppercase text-slate-500">
+            <th class="py-2 px-2">#</th><th class="py-2 px-2">Descrizione</th><th class="py-2 px-2 text-right">Quantità</th>
+            <th class="py-2 px-2 text-right">Prezzo</th><th class="py-2 px-2 text-right">Importo</th><th class="py-2 px-2 text-right">IVA</th>
+          </tr></thead>
+          <tbody class="divide-y divide-slate-100">${righe || '<tr><td colspan="6" class="py-4 text-center text-slate-400 text-xs">Nessuna riga</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 items-start">
+      <div>
+        ${etichetta('Riepilogo IVA')}
+        <div class="mt-2 overflow-x-auto rounded-xl border border-slate-200">
+          <table class="w-full text-left text-xs sm:text-sm">
+            <thead><tr class="bg-slate-50 text-[11px] font-bold uppercase text-slate-500">
+              <th class="py-2 px-2">Aliquota</th><th class="py-2 px-2 text-right">Imponibile</th><th class="py-2 px-2 text-right">Imposta</th><th class="py-2 px-2">Esigibilità</th>
+            </tr></thead>
+            <tbody class="divide-y divide-slate-100">${riepiloghi}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">${totali}</div>
+    </div>
+    ${pagamenti ? `<div>${etichetta('Pagamento')}<div class="mt-2 grid sm:grid-cols-2 gap-2">${pagamenti}</div></div>` : ''}
+    ${allegati ? `<div>${etichetta(`Allegati nella fattura (${d.allegati.length})`)}<ul class="mt-2 divide-y divide-slate-100 rounded-xl border border-slate-200">${allegati}</ul></div>` : ''}
+    <div class="text-[11px] text-slate-400">${[tr.codice ? 'Codice destinatario ' + esc(tr.codice) : '', tr.pec ? 'PEC ' + esc(tr.pec) : '', tr.progressivo ? 'Progressivo invio ' + esc(tr.progressivo) : '', d.versione ? 'Formato ' + esc(d.versione) : ''].filter(Boolean).join(' · ')}</div>
+  </div>`;
+}
+
+let xmlAperto = null;
+
+async function vediFatturaXml(rif) {
+  const v = trovaVoce(rif);
+  if (!v || !v.x.xml) return;
+  let testo = v.x.xmlTesto || null, errore = '';
+  if (!testo && v.x.xmlFile && DESKTOP) {
+    try {
+      const r = await window.gestionale.leggiAllegato(v.x.xmlFile);
+      if (r && r.ok) testo = window.FatturaPA.testoXml(new Uint8Array(r.bytes));
+      else errore = (r && r.errore) || 'File non leggibile.';
+    } catch (e) { errore = e.message || String(e); }
+  }
+  $('xml-titolo').textContent = v.x.desc;
+  $('xml-grezzo').classList.add('hidden');
+  $('xml-grezzo').textContent = '';
+  $('xml-mostra').textContent = 'Mostra l\'XML originale';
+  xmlAperto = null;
+  let d = null;
+  if (testo) {
+    try { d = window.FatturaPA.dettaglio(testo, v.x.xmlCorpo || 0); } catch (e) { errore = 'Il file XML non si legge: ' + (e.message || e); }
+  }
+  if (!d) {
+    $('xml-corpo').innerHTML = `<div class="p-4 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-900 space-y-2">
+        <p>${errore ? esc(errore) : 'Questa fattura è stata importata prima della versione 2.6, quando l\'app non conservava ancora il file XML.'}</p>
+        <p>Per vederla, <strong>importa di nuovo lo stesso file</strong> (XML, P7M o lo ZIP scaricato da «Fatture e Corrispettivi») con il pulsante <strong>Importa fatture XML</strong>: l'app la riconosce come già registrata, non la duplica e le collega il file.</p>
+      </div>`;
+    $('xml-mostra').classList.add('hidden');
+  } else {
+    xmlAperto = { testo, corpo: v.x.xmlCorpo || 0, nome: String(v.x.xml).replace(/[^\w.-]+/g, '_') };
+    $('xml-corpo').innerHTML = htmlFattura(d);
+    $('xml-mostra').classList.remove('hidden');
+  }
+  apri($('xml-modal'));
+  $('xml-modal').querySelector('.overflow-y-auto').scrollTop = 0;
+}
+
+function mostraXmlGrezzo() {
+  if (!xmlAperto) return;
+  const pre = $('xml-grezzo');
+  const visibile = !pre.classList.contains('hidden');
+  if (!visibile && !pre.textContent) pre.textContent = xmlLeggibile(xmlAperto.testo);
+  pre.classList.toggle('hidden', visibile);
+  $('xml-mostra').textContent = visibile ? 'Mostra l\'XML originale' : 'Nascondi l\'XML';
+  if (!visibile) pre.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+async function apriAllegatoFattura(i) {
+  if (!xmlAperto) return;
+  let a;
+  try { a = window.FatturaPA.allegatoIncorporato(xmlAperto.testo, xmlAperto.corpo, i); } catch (_) { a = null; }
+  if (!a || !a.bytes.length) { showToast('Allegato non leggibile.', true); return; }
+  const pdf = a.bytes[0] === 0x25 && a.bytes[1] === 0x50 && a.bytes[2] === 0x44 && a.bytes[3] === 0x46;
+  if (!pdf) { showToast('Si possono aprire solo gli allegati in PDF.', true); return; }
+  if (DESKTOP) {
+    const r = await window.gestionale.salvaAllegato('fatture/allegati', `${xmlAperto.nome}_${a.nome || 'allegato'}`, a.bytes);
+    if (r && r.ok) await apriAllegato(r.rel);
+    else showToast('Non riesco a salvare l\'allegato: ' + ((r && r.errore) || ''), true);
+  } else {
+    window.open(URL.createObjectURL(new Blob([a.bytes], { type: 'application/pdf' })), '_blank');
+  }
+}
+
+document.addEventListener('dblclick', (e) => {
+  const tr = e.target.closest('tr[data-voce]');
+  if (!tr || e.target.closest('input, select, textarea, button')) return;
+  const v = trovaVoce(tr.dataset.voce);
+  if (v && v.x.xml) vediFatturaXml(tr.dataset.voce);
+});
 
 // ---------------------------------------------------------------------------
 // Avvio

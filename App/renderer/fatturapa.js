@@ -139,7 +139,7 @@
     };
   };
 
-  function fattureDaXml(testo, nomeFile) {
+  function fattureDaXml(testo, nomeFile, grezzo = null) {
     const doc = new DOMParser().parseFromString(testo, 'application/xml');
     if (doc.getElementsByTagName('parsererror').length) throw new Error('XML non leggibile');
     const radice = uno(doc, 'FatturaElettronica') || doc.documentElement;
@@ -160,6 +160,7 @@
       const totDoc = val(gen, 'ImportoTotaleDocumento');
       return {
         file: nomeFile + (lista.length > 1 ? ` (${i + 1}/${lista.length})` : ''),
+        nomeFile, corpo: i, grezzo,          // il file originale, da conservare per poterlo rivedere
         tipoDoc: val(gen, 'TipoDocumento') || 'TD01',
         divisa: val(gen, 'Divisa') || 'EUR',
         data: val(gen, 'Data'),
@@ -192,10 +193,11 @@
           fatture.push(...r.fatture); errori.push(...r.errori);
         }
       } else if (basso.endsWith('.p7m')) {
-        fatture.push(...fattureDaXml(testoXml(estraiDaP7m(bytes)), nome));
+        const xml = estraiDaP7m(bytes);
+        fatture.push(...fattureDaXml(testoXml(xml), nome, xml));
       } else if (basso.endsWith('.xml')) {
         const t = testoXml(bytes);
-        if (!nonFattura(t)) fatture.push(...fattureDaXml(t, nome));
+        if (!nonFattura(t)) fatture.push(...fattureDaXml(t, nome, bytes));
       }
       // altri file (pdf, txt…) dentro uno zip: ignorati senza fare rumore
     } catch (e) {
@@ -213,5 +215,107 @@
     return { fatture, errori };
   }
 
-  window.FatturaPA = { leggiFile, leggiBytes, _interni: { fattureDaXml, estraiDaP7m, leggiZip } };
+  // ------------------------------------------------------------ dettaglio
+  /* Tutto quello che serve per mostrare la fattura come la si leggerebbe
+     su carta: soggetti con indirizzo, righe, riepilogo IVA, pagamento,
+     documenti collegati e allegati. */
+  const sede = (el) => {
+    const x = uno(el, 'Sede');
+    if (!x) return '';
+    const via = [val(x, 'Indirizzo'), val(x, 'NumeroCivico')].filter(Boolean).join(' ');
+    const prov = val(x, 'Provincia');
+    const citta = [val(x, 'CAP'), val(x, 'Comune'), prov ? `(${prov})` : ''].filter(Boolean).join(' ');
+    const nazione = val(x, 'Nazione');
+    return [via, citta, nazione && nazione !== 'IT' ? nazione : ''].filter(Boolean).join(' - ');
+  };
+  const soggettoCompleto = (el) => ({
+    ...soggetto(el),
+    indirizzo: sede(el),
+    rea: [val(uno(el, 'IscrizioneREA'), 'Ufficio'), val(uno(el, 'IscrizioneREA'), 'NumeroREA')].filter(Boolean).join(' '),
+    email: val(uno(el, 'Contatti'), 'Email'),
+    telefono: val(uno(el, 'Contatti'), 'Telefono'),
+  });
+  const sconti = (el) => tutti(el, 'ScontoMaggiorazione')
+    .map((x) => ({ tipo: val(x, 'Tipo'), percentuale: num(val(x, 'Percentuale')), importo: num(val(x, 'Importo')) }))
+    .filter((x) => x.percentuale || x.importo);
+
+  function apriCorpo(testo, indice) {
+    const doc = new DOMParser().parseFromString(testo, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('XML non leggibile');
+    const radice = uno(doc, 'FatturaElettronica') || doc.documentElement;
+    const corpi = tutti(radice, 'FatturaElettronicaBody');
+    const corpo = corpi[indice] || corpi[0];
+    if (!corpo) throw new Error('non è una fattura elettronica');
+    return { radice, corpi, corpo };
+  }
+
+  function dettaglio(testo, indice = 0) {
+    const { radice, corpi, corpo } = apriCorpo(testo, indice);
+    const testata = uno(radice, 'FatturaElettronicaHeader');
+    const gen = uno(corpo, 'DatiGeneraliDocumento');
+    const generali = uno(corpo, 'DatiGenerali');
+    const trasm = uno(testata, 'DatiTrasmissione');
+    const cassa = uno(gen, 'DatiCassaPrevidenziale');
+    const riferimenti = (tag, campoNum, campoData) => tutti(generali, tag)
+      .map((x) => ({ numero: val(x, campoNum), data: val(x, campoData) })).filter((x) => x.numero || x.data);
+    const totDoc = val(gen, 'ImportoTotaleDocumento');
+    return {
+      versione: radice.getAttribute('versione') || '',
+      corpo: corpi.indexOf(corpo), corpi: corpi.length,
+      trasmissione: { progressivo: val(trasm, 'ProgressivoInvio'), codice: val(trasm, 'CodiceDestinatario'), pec: val(trasm, 'PECDestinatario') },
+      cedente: soggettoCompleto(uno(testata, 'CedentePrestatore')),
+      cessionario: soggettoCompleto(uno(testata, 'CessionarioCommittente')),
+      tipoDoc: val(gen, 'TipoDocumento') || 'TD01', divisa: val(gen, 'Divisa') || 'EUR',
+      data: val(gen, 'Data'), numero: val(gen, 'Numero'),
+      causale: tutti(gen, 'Causale').map((x) => x.textContent.trim()).filter(Boolean).join(' '),
+      totale: totDoc ? num(totDoc) : null,
+      arrotondamento: num(val(gen, 'Arrotondamento')),
+      sconti: sconti(gen),
+      ritenute: tutti(gen, 'DatiRitenuta').map((r) => ({ tipo: val(r, 'TipoRitenuta'), importo: num(val(r, 'ImportoRitenuta')), aliquota: num(val(r, 'AliquotaRitenuta')), causale: val(r, 'CausalePagamento') })),
+      cassa: cassa ? { tipo: val(cassa, 'TipoCassa'), aliquota: num(val(cassa, 'AlCassa')), importo: num(val(cassa, 'ImportoContributoCassa')), aliquotaIva: num(val(cassa, 'AliquotaIVA')), natura: val(cassa, 'Natura') } : null,
+      bollo: num(val(uno(gen, 'DatiBollo'), 'ImportoBollo')),
+      ordini: riferimenti('DatiOrdineAcquisto', 'IdDocumento', 'Data'),
+      contratti: riferimenti('DatiContratto', 'IdDocumento', 'Data'),
+      fattureCollegate: riferimenti('DatiFattureCollegate', 'IdDocumento', 'Data'),
+      ddt: riferimenti('DatiDDT', 'NumeroDDT', 'DataDDT'),
+      linee: tutti(corpo, 'DettaglioLinee').map((l) => ({
+        n: val(l, 'NumeroLinea'), descrizione: val(l, 'Descrizione'),
+        codice: tutti(l, 'CodiceArticolo').map((c) => val(c, 'CodiceValore')).filter(Boolean).join(', '),
+        quantita: val(l, 'Quantita') ? num(val(l, 'Quantita')) : null, um: val(l, 'UnitaMisura'),
+        prezzo: num(val(l, 'PrezzoUnitario')), totale: num(val(l, 'PrezzoTotale')),
+        sconti: sconti(l),
+        aliquota: num(val(l, 'AliquotaIVA')), natura: val(l, 'Natura'), ritenuta: val(l, 'Ritenuta') === 'SI',
+        inizio: val(l, 'DataInizioPeriodo'), fine: val(l, 'DataFinePeriodo'),
+      })),
+      riepiloghi: tutti(corpo, 'DatiRiepilogo').map((r) => ({
+        aliquota: num(val(r, 'AliquotaIVA')), natura: val(r, 'Natura'),
+        imponibile: num(val(r, 'ImponibileImporto')), imposta: num(val(r, 'Imposta')),
+        esigibilita: val(r, 'EsigibilitaIVA'), norma: val(r, 'RiferimentoNormativo'),
+      })),
+      pagamenti: tutti(corpo, 'DatiPagamento').map((p) => ({
+        condizioni: val(p, 'CondizioniPagamento'),
+        rate: tutti(p, 'DettaglioPagamento').map((d) => ({
+          modalita: val(d, 'ModalitaPagamento'), scadenza: val(d, 'DataScadenzaPagamento'), importo: num(val(d, 'ImportoPagamento')),
+          iban: val(d, 'IBAN'), istituto: val(d, 'IstitutoFinanziario'), beneficiario: val(d, 'Beneficiario'),
+        })),
+      })),
+      allegati: tutti(corpo, 'Allegati').map((a, i) => ({
+        i, nome: val(a, 'NomeAttachment') || `allegato-${i + 1}`, formato: val(a, 'FormatoAttachment'), descrizione: val(a, 'DescrizioneAttachment'),
+        dimensione: Math.round(val(a, 'Attachment').replace(/\s/g, '').length * 3 / 4),
+      })),
+    };
+  }
+
+  /* Il contenuto di un allegato incorporato nella fattura (base64) */
+  function allegatoIncorporato(testo, indice, iAllegato) {
+    const { corpo } = apriCorpo(testo, indice);
+    const a = tutti(corpo, 'Allegati')[iAllegato];
+    if (!a) return null;
+    const bin = atob(val(a, 'Attachment').replace(/\s/g, ''));
+    const out = new Uint8Array(bin.length);
+    for (let k = 0; k < bin.length; k++) out[k] = bin.charCodeAt(k);
+    return { nome: val(a, 'NomeAttachment'), bytes: out };
+  }
+
+  window.FatturaPA = { leggiFile, leggiBytes, testoXml, dettaglio, allegatoIncorporato, _interni: { fattureDaXml, estraiDaP7m, leggiZip } };
 })();

@@ -28,6 +28,27 @@
     </div>
   </div>
 
+  <!-- Fattura elettronica in forma leggibile -->
+  <div id="xml-modal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200" role="dialog" aria-modal="true" aria-labelledby="xml-titolo">
+      <div class="px-6 py-4 border-b border-slate-200 flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <h3 id="xml-titolo" class="text-lg font-bold text-slate-900 truncate">Fattura elettronica</h3>
+          <p class="text-xs text-slate-500">Letta dal file XML conservato nella cartella dei dati</p>
+        </div>
+        <button type="button" data-action="close-xml" class="shrink-0 w-9 h-9 rounded-xl text-slate-500 hover:bg-slate-100" aria-label="Chiudi">✕</button>
+      </div>
+      <div class="overflow-y-auto px-6 py-5">
+        <div id="xml-corpo"></div>
+        <pre id="xml-grezzo" class="hidden mt-5 p-4 rounded-xl bg-slate-900 text-slate-100 text-[11px] leading-relaxed overflow-auto max-h-[60vh] whitespace-pre"></pre>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 flex flex-wrap justify-end gap-3">
+        <button type="button" id="xml-mostra" data-action="xml-grezzo" class="px-4 py-2 rounded-xl text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition">Mostra l'XML originale</button>
+        <button type="button" data-action="close-xml" class="px-5 py-2 rounded-xl text-sm font-semibold text-slate-950 bg-amber-500 hover:bg-amber-400 transition">Chiudi</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Spostare una fattura in un altro tab (menu del tasto destro) -->
   <div id="sposta-modal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs items-center justify-center p-4">
     <div class="bg-white rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-6 shadow-2xl border border-slate-200" role="dialog" aria-modal="true" aria-labelledby="sposta-titolo">

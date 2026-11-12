@@ -34,6 +34,13 @@ Commercialista, autofatture TD17/TD18/TD19 e fornitori esteri nel tab Autofattur
 spese) e chiede conferma. Note di credito in negativo, doppioni e file di metadati dello SDI
 vengono riconosciuti. Tutto avviene sul computer: nessun file viene inviato.
 
+Il file XML di ogni fattura importata (estratto dal `.p7m` se firmato) viene conservato in
+`allegati/fatture/<anno>` nella cartella dei dati. Dal pulsante **XML** della riga, dal menu
+del tasto destro o col doppio clic la fattura si apre in forma leggibile: soggetti, righe,
+riepilogo IVA, ritenuta e cassa, pagamento con IBAN, documenti collegati e allegati incorporati
+(i PDF si aprono), più il testo XML originale. Per le fatture importate prima della 2.6 basta
+reimportare lo stesso file: l'app lo collega senza registrarle di nuovo.
+
 ### Ricerca e spostamento delle fatture
 Ogni tab con un elenco ha una **barra di ricerca** (Ctrl+F): filtra per descrizione, cliente o
 fornitore, Partita IVA, data o importo e segnala i risultati negli altri anni. Sopra ogni

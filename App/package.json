@@ -1,0 +1,65 @@
+{
+  "name": "rendiconto-business-desktop",
+  "version": "1.0.0",
+  "description": "Rendicontazione Business — fatture emesse e ricevute, corrispettivi, commercialista, scadenze",
+  "main": "main.js",
+  "author": "Mattew",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "installer": "electron-builder --win nsis portable",
+    "dist": "electron-builder --win nsis portable",
+    "pack": "electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "it.mattew.rendiconto.business",
+    "productName": "Rendicontazione Business",
+    "directories": {
+      "output": "Installer"
+    },
+    "files": [
+      "**/*",
+      "!Installer/**",
+      "!Documenti/**",
+      "!build/**",
+      "!sync-core.js",
+      "!avvia.cmd",
+      "!*.md",
+      "!**/_body.html",
+      "!business-patch.js"
+    ],
+    "win": {
+      "requestedExecutionLevel": "requireAdministrator",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Rendicontazione Business"
+    },
+    "portable": {
+      "artifactName": "RendicontazioneBusiness-portable-${version}.exe"
+    }
+  }
+}

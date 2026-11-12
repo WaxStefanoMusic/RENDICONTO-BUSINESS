@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob: data:">
+<title>Rendicontazione Business — fatture, corrispettivi e scadenze</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="desktop.css">
+</head>
+<body>
+
+<header class="app">
+  <div class="brand">
+    <span class="logo">€</span>
+    <span>Rendicontazione Business<small>Fatture, corrispettivi &amp; scadenze</small></span>
+  </div>
+  <div class="spacer"></div>
+  <button id="btnTheme" class="ghost" title="Tema chiaro/scuro">◐</button>
+  <button id="btnSettings" class="ghost" title="Impostazioni">⚙</button>
+  <button id="btnExport" class="ghost" title="Backup / ripristino">⇩ Backup</button>
+</header>
+
+<nav class="tabbar" id="tabbar"></nav>
+
+<main><div class="wrap" id="view"></div></main>
+
+<div class="ov" id="overlay" hidden><div class="modal" id="modal"></div></div>
+<div id="toasts"></div>
+
+<input type="file" id="fileInput" multiple hidden>
+<input type="file" id="dirInput" webkitdirectory directory multiple hidden>
+<input type="file" id="restoreInput" accept="application/json" hidden>
+
+<script src="boot.js"></script>
+<script src="core.js"></script>
+<script src="desktop.js"></script>
+</body>
+</html>

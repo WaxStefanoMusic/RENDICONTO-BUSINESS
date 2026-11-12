@@ -1,0 +1,3290 @@
+"use strict";
+/* ==============================================================================
+   0. UTIL
+   ============================================================================== */
+const $  = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>[...r.querySelectorAll(s)];
+const uid = ()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+const fmtEur = n => (n==null||isNaN(n)) ? '—'
+  : new Intl.NumberFormat('it-IT',{style:'currency',currency:S.settings.currency||'EUR'}).format(n);
+const fmtNum = n => new Intl.NumberFormat('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n||0);
+/* quantità (kWh, m³…): i decimali si mostrano solo se ci sono davvero */
+const fmtQty = n => new Intl.NumberFormat('it-IT',{minimumFractionDigits:0,maximumFractionDigits:2}).format(n||0);
+const fmtDate = d => !d ? '—' : new Date(d+'T00:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'});
+const todayISO = ()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
+const daysBetween=(a,b)=>Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000);
+const fmtSize = b => b<1024?b+' B' : b<1048576?(b/1024).toFixed(0)+' KB' : (b/1048576).toFixed(1)+' MB';
+
+function toast(msg,kind=''){
+  const t=document.createElement('div');
+  t.className='toast '+kind; t.textContent=msg;
+  $('#toasts').appendChild(t);
+  setTimeout(()=>{t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(()=>t.remove(),300);},kind==='err'?5200:3000);
+}
+
+/* ==============================================================================
+   1. INDEXEDDB  (state | blobs | handles)
+   ============================================================================== */
+const DB=(()=>{
+  let p=null;
+  function open(){
+    if(p) return p;
+    p=new Promise((res,rej)=>{
+      const r=indexedDB.open('rendiconto-business',1);
+      r.onupgradeneeded=()=>{['kv','blobs','handles'].forEach(s=>{
+        if(!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s);
+      });};
+      r.onsuccess=()=>res(r.result);
+      r.onerror=()=>rej(r.error);
+    });
+    return p;
+  }
+  function tx(store,mode,fn){
+    return open().then(db=>new Promise((res,rej)=>{
+      const t=db.transaction(store,mode), rq=fn(t.objectStore(store));
+      t.oncomplete=()=>res(rq?rq.result:undefined);
+      t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error);
+    }));
+  }
+  return {
+    get:(s,k)=>tx(s,'readonly',o=>o.get(k)),
+    set:(s,k,v)=>tx(s,'readwrite',o=>o.put(v,k)),
+    del:(s,k)=>tx(s,'readwrite',o=>o.delete(k)),
+    clear:(s)=>tx(s,'readwrite',o=>o.clear()),
+  };
+})();
+
+/* ==============================================================================
+   2. STATO
+   ============================================================================== */
+/* BUSINESS-PATCH */
+/* I tab dell'attività. «flusso» dice da che parte sta il denaro: le entrate
+   (fatture emesse, corrispettivi) sono ricavi da incassare, tutto il resto
+   sono costi da pagare. «cat» è la categoria imposta a ogni voce del tab:
+   dove manca, la categoria si deduce dal testo del documento. */
+const TAB_BUSINESS=()=>{
+  const ora=new Date().toISOString();
+  return [
+    {id:'b_emesse',        name:'Fatture Emesse',                      icon:'📤', flusso:'entrata', cat:'vendite'},
+    {id:'b_fornitori',     name:'Fatture Ricevute dai Fornitori',      icon:'📥', flusso:'uscita'},
+    {id:'b_estere',        name:'Fatture Ricevute Estere/Autofatture', icon:'🌍', flusso:'uscita', cat:'estero'},
+    {id:'b_abbonamenti',   name:'Fatture Abbonamenti Business',        icon:'🔁', flusso:'uscita', cat:'software'},
+    {id:'b_commercialista',name:'Commercialista',                      icon:'🧑‍💼', flusso:'uscita', cat:'commercialista'},
+    {id:'b_deducibili',    name:'Fatture Deducibili/Detraibili',       icon:'🧾', flusso:'uscita'},
+    {id:'b_luce',          name:'Bollette Luce Business',              icon:'⚡', flusso:'uscita', cat:'energia'},
+    {id:'b_corrispettivi', name:'Corrispettivi',                       icon:'🧮', flusso:'entrata', cat:'corrispettivi'},
+  ].map(t=>({type:'files',vista:'tabella',createdAt:ora,...t}));
+};
+const DEFAULT_STATE = ()=>({
+  v:1,
+  tabs:[{id:'summary',type:'summary',name:'Rendicontazione',icon:'📊'}, ...TAB_BUSINESS()],
+  docs:[],
+  bozze:{},                      // righe in compilazione, per non perderle cambiando vista
+  active:'summary',
+  settings:{currency:'EUR',theme:'light',alertDays:7,autoScanSec:60,
+    anno:'',                       // '' = tutti gli anni
+    mesi:[],                       // [] = tutti i mesi; '01'…'12' quelli scelti
+    filter:{tab:'',cat:'',status:'',from:'',to:'',q:''},sort:{by:'date',dir:'desc'},
+    quick:{cat:'altro',status:'da_pagare',tab:''}}
+});
+let S = DEFAULT_STATE();
+let saveTimer=null;
+function save(){ clearTimeout(saveTimer); saveTimer=setTimeout(()=>{ DB.set('kv','state',JSON.parse(JSON.stringify(S))).catch(e=>toast('Salvataggio fallito: '+e,'err')); },250); }
+async function load(){
+  try{
+    const s=await DB.get('kv','state');
+    if(s&&s.tabs){ S=Object.assign(DEFAULT_STATE(),s);
+      S.settings=Object.assign(DEFAULT_STATE().settings,s.settings||{});
+      S.settings.filter=Object.assign(DEFAULT_STATE().settings.filter,s.settings?.filter||{});
+      S.settings.quick=Object.assign(DEFAULT_STATE().settings.quick,s.settings?.quick||{});
+      S.bozze=s.bozze||{};
+      if(!S.tabs.some(t=>t.type==='summary')) S.tabs.unshift(DEFAULT_STATE().tabs[0]);
+      /* Riparazione: le voci a rate salvate prima potevano avere una «dueDate»
+         rimasta indietro rispetto alle proprie rate. Non è un dato che si
+         vede — la colonna Scadenza mostra le rate — quindi si riallinea e
+         basta, senza toccare niente di quello che l'utente ha scritto. */
+      let riparate=0;
+      for(const d of (S.docs||[])) if(allineaScadenzaAlleRate(d)) riparate++;
+      if(riparate) save();
+    }
+  }catch(e){ console.warn(e); }
+  document.documentElement.dataset.theme = S.settings.theme||'light';
+}
+
+const tabById = id => S.tabs.find(t=>t.id===id);
+const docsOf  = id => S.docs.filter(d=>d.tabId===id);
+
+/* Entrate e uscite. Lo stato salvato resta lo stesso (da_pagare / pagato),
+   cambia solo come si legge: una fattura emessa non si «paga», si incassa. */
+const isEntrataTab = t => !!t && t.flusso==='entrata';
+const isEntrata = d => isEntrataTab(tabById(d.tabId));
+const LBL={
+  uscita:{pagato:'Pagato',da_pagare:'Da pagare',scaduto:'Scaduto',ignorato:'Ignorato',pagata:'Pagata',da_pagare_r:'Da pagare',scaduta:'Scaduta',
+          segna:'Segna pagato',segnaRata:'Segna rata pagata',daTot:'Da pagare',giaTot:'Già pagato'},
+  entrata:{pagato:'Incassato',da_pagare:'Da incassare',scaduto:'Non incassato',ignorato:'Ignorato',pagata:'Incassata',da_pagare_r:'Da incassare',scaduta:'In ritardo',
+          segna:'Segna incassato',segnaRata:'Segna rata incassata',daTot:'Da incassare',giaTot:'Già incassato'}
+};
+const L=(entrata,k)=>LBL[entrata?'entrata':'uscita'][k];
+/* categoria di una voce: quella imposta dal tab, se c'è, altrimenti dedotta dal testo */
+function categoriaPer(tabId,testo){
+  const t=tabById(tabId);
+  return (t&&t.cat&&CATMAP[t.cat]) ? t.cat : guessCategory(testo);
+}
+/* selettore Entrate/Uscite, usato nei dialoghi dei tab */
+function selFlusso(t){
+  const e=isEntrataTab(t);
+  return `<label class="fld" style="margin-top:12px">Tipo di voci
+    <select id="tFlusso">
+      <option value="uscita" ${e?'':'selected'}>Uscite — costi da pagare (fatture ricevute, bollette…)</option>
+      <option value="entrata" ${e?'selected':''}>Entrate — ricavi da incassare (fatture emesse, corrispettivi)</option>
+    </select></label>`;
+}
+
+/* ------------------------------------------------------------------
+   Bozze: quello che si sta scrivendo in una riga nuova non vive solo
+   nel DOM, altrimenti cambiando sezione o tab la vista si ricostruisce
+   e il testo va perso. Si conserva nello stato, quindi resiste anche
+   alla chiusura del programma.
+   ------------------------------------------------------------------ */
+const bozza = chiave => (S.bozze||(S.bozze={}))[chiave] || {};
+function setBozza(chiave,campo,valore){
+  const tutte=(S.bozze||(S.bozze={}));
+  const b=tutte[chiave]||(tutte[chiave]={});
+  if(valore===''||valore==null) delete b[campo]; else b[campo]=valore;
+  if(!Object.keys(b).length) delete tutte[chiave];
+  save();
+}
+function pulisciBozza(chiave){ if(S.bozze) delete S.bozze[chiave]; }
+/** collega i campi di una riga in compilazione alla sua bozza */
+function bindBozza(chiave,mappa,radice){
+  for(const [sel,campo] of Object.entries(mappa)){
+    const e=(radice||document).querySelector(sel);
+    if(!e) continue;
+    e.addEventListener('input',()=>setBozza(chiave,campo,e.value));
+    e.addEventListener('change',()=>setBozza(chiave,campo,e.value));
+  }
+}
+/** Conferma il campo in cui si sta scrivendo prima di cambiare vista.
+ *  Non ci si può affidare a blur(): se la finestra non ha il fuoco del sistema
+ *  l'evento non viene emesso e la modifica andrebbe persa. Ogni campo porta
+ *  quindi con sé la propria funzione di conferma. */
+function confermaCampoAttivo(conBlur){
+  const a=document.activeElement;
+  if(a&&typeof a.__conferma==='function'){ try{ a.__conferma(); }catch(_){} }
+  if(conBlur&&a&&a.blur&&a!==document.body) a.blur();
+}
+
+/* ==============================================================================
+   3. CATEGORIE  +  RILEVAMENTO IMPORTI / DATE
+   ============================================================================== */
+const CATS=[
+  {id:'vendite',       label:'Vendite / Prestazioni', kw:['prestazione professionale','compenso professionale','parcella','fattura di vendita','cessione di beni','ns. fattura']},
+  {id:'corrispettivi', label:'Corrispettivi',       kw:['corrispettiv','scontrino','registratore telematico','documento commerciale','chiusura giornaliera','incasso giornaliero']},
+  {id:'merci',         label:'Merci / Materie prime', kw:['merce','materie prime','ddt','documento di trasporto','articolo','q.tà','quantità','listino']},
+  {id:'servizi',       label:'Servizi da fornitori', kw:['servizio','manutenzione','assistenza tecnica','consulenza tecnica','noleggio','pulizia','trasporto']},
+  {id:'estero',        label:'Estero / Reverse charge', kw:['reverse charge','inversione contabile','autofattura','td17','td18','td19','integrazione fattura','art. 17','art.17','extra ue','intra','vat','invoice']},
+  {id:'software',      label:'Abbonamenti / Software', kw:['abbonamento','subscription','saas','licenz','microsoft','adobe','google workspace','aruba','register.it','canva','dropbox','zoom','slack','hosting','dominio']},
+  {id:'commercialista',label:'Commercialista / Consulenza', kw:['commercialista','studio associato','dottore commercialista','tenuta contabilit','paghe','cedolin','dichiarazione dei redditi','bilancio','consulenza fiscale']},
+  {id:'energia',       label:'Luce / Energia',      kw:['enel','luce','energia','elettric','servizio elettrico','a2a','iren','sorgenia','eni plenitude','edison','hera comm','octopus','kwh','punto di prelievo','dispacciamento','pod']},
+  {id:'gas',           label:'Gas',                 kw:['gas','metano','italgas','2i rete gas','pdr']},
+  {id:'acqua',         label:'Acqua',               kw:['acqua','idric','acquedotto','gori','acea']},
+  {id:'tlc',           label:'Telefono / Internet', kw:['tim','vodafone','windtre','wind tre','iliad','fastweb','telecom','internet','fibra','adsl','mobile','linkem','eolo']},
+  {id:'affitto',       label:'Affitto locali',      kw:['affitto','locazione','canone locazione','fitto','immobile strumentale']},
+  {id:'personale',     label:'Personale / Collaboratori', kw:['stipendi','retribuzion','collaborator','ritenuta d\'acconto','tfr','busta paga']},
+  {id:'tasse',         label:'Imposte / F24 / INPS', kw:['f24','iva','irpef','ires','irap','inps','inail','diritto camerale','camera di commercio','agenzia entrate','tributo','cartella','pagopa','avviso di pagamento']},
+  {id:'banca',         label:'Banca / Leasing / POS', kw:['banca','estratto conto','mutuo','prestito','finanziamento','leasing','commission','pos','sumup','nexi','satispay','intesa','unicredit','bper','poste']},
+  {id:'assicuraz',     label:'Assicurazioni',       kw:['assicuraz','polizza','rc professionale','unipol','generali','allianz','axa','zurich']},
+  {id:'auto',          label:'Auto / Carburante / Trasferte', kw:['carburante','benzina','gasolio','telepass','autostrad','pedagg','parchegg','trasferta','hotel','treno','trenitalia','italo']},
+  {id:'attrezzature',  label:'Attrezzature / Beni strumentali', kw:['computer','notebook','stampante','monitor','attrezzatur','arredo','bene strumentale','ammortament']},
+  {id:'altro',         label:'Altro',               kw:[]},
+];
+const CATMAP=Object.fromEntries(CATS.map(c=>[c.id,c.label]));
+const catLabel = id => CATMAP[id]||'Altro';
+
+/* Punteggio per occorrenze, non per parola più lunga: una bolletta della luce
+   contiene il canone RAI una volta sola e "kWh" venti volte, e con il vecchio
+   criterio finiva in «Abbonamenti». */
+function guessCategory(text){
+  const t=(text||'').toLowerCase();
+  let best=null,bestScore=0;
+  for(const c of CATS){
+    let score=0;
+    for(const k of c.kw){
+      if(k.length<3) continue;
+      let i=0,n=0;
+      while((i=t.indexOf(k,i))>=0 && n<50){ n++; i+=k.length; }
+      if(n) score+=n*Math.min(k.length,14);
+    }
+    if(score>bestScore){ bestScore=score; best=c.id; }
+  }
+  return best||'altro';
+}
+
+function parseAmountString(raw){
+  let s=String(raw).replace(/[\s ']/g,'');
+  if(!s) return null;
+  let m;
+  if(/^\d{1,3}(\.\d{3})+,\d{1,2}$/.test(s))      return parseFloat(s.replace(/\./g,'').replace(',','.'));
+  if(/^\d{1,3}(,\d{3})+\.\d{1,2}$/.test(s))      return parseFloat(s.replace(/,/g,''));
+  if(/^\d+,\d{1,2}$/.test(s))                    return parseFloat(s.replace(',','.'));
+  if(/^\d+\.\d{1,2}$/.test(s))                   return parseFloat(s);
+  if(/^\d{1,3}(\.\d{3})+$/.test(s))              return parseFloat(s.replace(/\./g,''));
+  if(/^\d{1,3}(,\d{3})+$/.test(s))               return parseFloat(s.replace(/,/g,''));
+  if(/^\d{1,9}$/.test(s))                        return parseFloat(s);
+  return null;
+}
+
+const STRONG_KW=/(totale\s*(da\s*)?(pagare|documento|fattura|dovuto|complessivo)?|importo\s*(totale|da\s*pagare|dovuto)?|saldo|da\s*pagare|totale\s*€|netto\s*a\s*pagare|totale\s*bolletta)/i;
+const WEAK_KW=/(imponibile|iva|acconto|canone|spesa)/i;
+/* Una bolletta riporta più «totali»: l'imponibile, il totale della fornitura e
+   infine quello che si paga davvero. Octopus mette «TOTALE BOLLETTA 122,10 €»
+   e sotto «TOTALE DA PAGARE 131,10 €» (col canone RAI): va preso il secondo. */
+const TOTALE_FINALE=/(totale\s*da\s*pagare|importo\s*da\s*pagare|netto\s*a\s*pagare|totale\s*fattura|totale\s*documento|totale\s*dovuto|dovrai\s*pagare|devi\s*pagare|questo\s*mese\s*(dovrai\s*)?pag)/i;
+
+/** Trova l'importo più probabile in un testo. Ritorna {amount,confidence,snippet} */
+function detectAmount(text){
+  if(!text) return null;
+  const t=text.replace(/[\u00A0\u2007\u202F]/g,' ');
+  const cands=[];
+  const push=(tok,idx,bonus)=>{
+    const val=parseAmountString(tok);
+    if(val==null||!isFinite(val)||val<=0||val>10_000_000) return;
+    /* Il contesto si ferma all'importo precedente. Senza questo taglio, in
+       «TOTALE FATTURA 265,55 € TAR.ACQ. 1SC … 48 mc € 40,94» la parola
+       «TOTALE FATTURA» qualificava anche il 40,94 di tre voci più in là. */
+    const grezzo=t.slice(Math.max(0,idx-90),idx);
+    const tagli=[...grezzo.matchAll(/\d[\d.,]*\s*(?:€|\bEUR\b)/gi)];
+    const ultimo=tagli[tagli.length-1];
+    const ctx=(ultimo?grezzo.slice(ultimo.index+ultimo[0].length):grezzo).toLowerCase();
+    let sc=bonus;
+    if(STRONG_KW.test(ctx)) sc+=60;
+    if(TOTALE_FINALE.test(ctx)) sc+=35;   // «da pagare» batte «totale bolletta»
+    if(WEAK_KW.test(ctx))   sc-=12;
+    if(/(iban|conto|codice|partita|cod\.|p\.iva|c\.f\.|matricola|cliente|fattura n|numero)/.test(ctx.slice(-40))) sc-=45;
+    const s=String(tok).trim();
+    // un importo ha quasi sempre i centesimi; "2026" accanto a un € è l'anno di una data
+    if(/[,.]\d{2}$/.test(s)) sc+=14;
+    else if(/^\d{4}$/.test(s) && val>=1900 && val<=2100) sc-=45;
+    if(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\s*$/.test(ctx)) sc-=70;
+    const dopo=t.slice(idx,idx+40);
+    if(/^\S*\d{2}[\/\-]\d{2}/.test(dopo)) sc-=40;
+    cands.push({amount:Math.round(val*100)/100,score:sc,snippet:t.slice(Math.max(0,idx-70),idx+40).replace(/\s+/g,' ').trim()});
+  };
+  let m;
+  // 1) simbolo prima:  € 1.234,56
+  const r1=/(?:€|\bEUR\b|\beuro\b)\s{0,3}(\d[\d.,\s']{0,16}\d|\d)/gi;
+  while((m=r1.exec(t))) push(m[1], m.index, 45);
+  // 2) simbolo dopo:  1.234,56 €
+  const r2=/(\d[\d.,\s']{0,16}\d|\d)\s{0,3}(?:€|\bEUR\b|\beuro\b)/gi;
+  while((m=r2.exec(t))) push(m[1], m.index, 45);
+  // 3) keyword forte seguita da numero senza simbolo
+  const r3=/(totale\s*(?:da\s*pagare|documento|fattura|complessivo|dovuto)?|importo\s*(?:da\s*pagare|totale)?|saldo|netto\s*a\s*pagare)\s*[:\-]?\s*(\d[\d.,\s']{0,16}\d|\d)/gi;
+  while((m=r3.exec(t))) push(m[2], m.index+m[1].length, 40);
+  // 4) numeri con centesimi (fallback debole)
+  const r4=/(?:^|[\s:])(\d{1,3}(?:[.\s]\d{3})*,\d{2})(?![\d])/g;
+  while((m=r4.exec(t))) push(m[1], m.index, 8);
+  if(!cands.length) return null;
+  cands.sort((a,b)=> b.score-a.score || b.amount-a.amount);
+  const best=cands[0];
+  return {amount:best.amount, confidence:clamp(Math.round(best.score),1,100), snippet:best.snippet};
+}
+
+const MONTHS={gennaio:1,febbraio:2,marzo:3,aprile:4,maggio:5,giugno:6,luglio:7,agosto:8,settembre:9,ottobre:10,novembre:11,dicembre:12,gen:1,feb:2,mar:3,apr:4,mag:5,giu:6,lug:7,ago:8,set:9,ott:10,nov:11,dic:12};
+function normDate(d,mo,y){
+  d=+d;mo=+mo;y=+y;
+  if(y<100) y+= y>70?1900:2000;
+  if(mo<1||mo>12||d<1||d>31||y<1990||y>2100) return null;
+  return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+function allDates(text){
+  const out=[];
+  let m;
+  const r1=/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/g;
+  while((m=r1.exec(text))){ const v=normDate(m[1],m[2],m[3]); if(v) out.push({v,i:m.index}); }
+  const r2=/\b(\d{4})-(\d{2})-(\d{2})\b/g;
+  while((m=r2.exec(text))){ const v=normDate(m[3],m[2],m[1]); if(v) out.push({v,i:m.index}); }
+  const r3=new RegExp('\\b(\\d{1,2})\\s+('+Object.keys(MONTHS).join('|')+')\\.?\\s+(\\d{4})\\b','gi');
+  while((m=r3.exec(text))){ const v=normDate(m[1],MONTHS[m[2].toLowerCase()],m[3]); if(v) out.push({v,i:m.index}); }
+  return out;
+}
+function detectDates(text){
+  if(!text) return {};
+  /* I PDF contengono anche date sepolte nei font e nei metadati (1996, 2005…):
+     si tengono solo gli anni plausibili per un documento di spesa. */
+  const anno=new Date().getFullYear();
+  const ds=allDates(text).filter(d=>{ const y=+d.v.slice(0,4); return y>=anno-15 && y<=anno+3; });
+  if(!ds.length) return {};
+  let due=null,dueIdx=-1;
+  for(const d of ds){
+    const ctx=text.slice(Math.max(0,d.i-70),d.i).toLowerCase();
+    if(/(scadenz|entro\s+il|entro\s+la|da\s*pagare\s*entro|termine\s*di\s*pagamento|pagare\s*entro|valuta)/.test(ctx)){ due=d.v; dueIdx=d.i; break; }
+  }
+  // la data del documento: prima si cerca dichiarata, poi si deduce
+  let doc=null;
+  for(const d of ds){
+    const ctx=text.slice(Math.max(0,d.i-60),d.i).toLowerCase();
+    if(/(data\s*(di\s*)?(emissione|fattura|documento|bolletta)|emessa\s*il|emesso\s*il|fattura\s*del|documento\s*del)/.test(ctx)){ doc=d.v; break; }
+  }
+  if(!doc){
+    // fra le restanti si prende la più recente che non superi la scadenza:
+    // le bollette citano delibere di anni prima, che non sono la loro data
+    const altre=ds.filter(d=>d.i!==dueIdx).map(x=>x.v).sort();
+    const valide=due?altre.filter(v=>v<=due):altre;
+    doc=(valide.length?valide:altre).pop()||null;
+  }
+  return Object.assign({docDate:doc, dueDate:due}, periodoDi(text));
+}
+
+/* «PERIODO DI RIFERIMENTO: dal 01/06/2026 al 30/06/2026», «Periodo di
+   fatturazione dal 19/01/2026 al 30/06/2026». Non si mostra più in tabella, ma
+   serve per capire se una riga scritta a mano parla della stessa bolletta. */
+function periodoDi(text){
+  if(!text) return {};
+  const re=/periodo\s*(?:di\s*)?(?:riferimento|fatturazione)?[^\n]{0,40}?\bdal\b\s*([^\s]{6,12})\s*\bal\b\s*([^\s]{6,12})/i;
+  const m=re.exec(text);
+  if(!m) return {};
+  const da=parseDataLibera(m[1]), a=parseDataLibera(m[2]);
+  return (da&&a&&da<=a) ? {periodoDa:da, periodoA:a} : {};
+}
+/* ------------------------------------------------------------------
+   Date scritte o incollate a mano.
+   I campi <input type="date"> di Windows non accettano l'incolla e
+   obbligano a spostarsi fra tre riquadri: nelle tabelle si usano campi
+   di testo che capiscono i formati d'uso comune.
+   ------------------------------------------------------------------ */
+function parseDataLibera(s){
+  s=String(s||'').trim();
+  if(!s) return null;
+  let m;
+  if((m=/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})$/.exec(s)))       return normDate(m[3],m[2],m[1]);
+  if((m=/^(\d{1,2})[\/\-. ](\d{1,2})[\/\-. ](\d{2,4})$/.exec(s))) return normDate(m[1],m[2],m[3]);
+  if((m=/^(\d{1,2})[\/\-.](\d{1,2})$/.exec(s)))                   return normDate(m[1],m[2],new Date().getFullYear());
+  if(/^\d{8}$/.test(s))                                           return normDate(s.slice(0,2),s.slice(2,4),s.slice(4));
+  if(/^\d{6}$/.test(s))                                           return normDate(s.slice(0,2),s.slice(2,4),s.slice(4));
+  if((m=/^(\d{1,2})\s+([a-zàèéìòù]+)\.?(?:\s+(\d{2,4}))?$/i.exec(s))){
+    const mo=MONTHS[m[2].toLowerCase()];
+    if(mo) return normDate(m[1],mo,m[3]||new Date().getFullYear());
+  }
+  const tutte=allDates(s);            // testo incollato: si prende la prima data
+  return tutte.length?tutte[0].v:null;
+}
+const fmtDataIT = iso => /^\d{4}-\d{2}-\d{2}$/.test(iso||'')
+  ? iso.slice(8,10)+'/'+iso.slice(5,7)+'/'+iso.slice(0,4) : '';
+/* nei campi può esserci sia una data già valida sia il testo di una bozza
+   ancora incompleta: si mostra formattata la prima, tale e quale la seconda */
+const mostraData = v => /^\d{4}-\d{2}-\d{2}$/.test(v||'') ? fmtDataIT(v) : (v||'');
+const TITOLO_DATA='Scrivi o incolla: 1/6/26 · 01/06/2026 · 2026-06-01 · 01062026 · 1 giugno 2026';
+
+/** campo data testuale in tabella, con il valore mostrato in formato italiano */
+function inputData(campo,valore,larghezza,id){
+  return `<input class="cell-in data" ${id?`id="${id}" `:''}data-f="${campo}" data-date="1"
+    value="${mostraData(valore)}" placeholder="gg/mm/aaaa" inputmode="numeric" autocomplete="off"
+    title="${TITOLO_DATA}" style="width:${larghezza}px">`;
+}
+/** lo stesso campo, ma nei riquadri e nei moduli */
+function inputDataForm(id,valore,extra=''){
+  return `<input id="${id}" class="data" data-date="1" value="${mostraData(valore)}"
+    placeholder="gg/mm/aaaa" inputmode="numeric" autocomplete="off" title="${TITOLO_DATA}" ${extra}>`;
+}
+/** legge un campo data: '' se vuoto, null se non interpretabile */
+function leggiData(sel,radice){
+  const e=(radice||document).querySelector(sel);
+  if(!e) return '';
+  const v=e.value.trim();
+  if(!v) return '';
+  return parseDataLibera(v);
+}
+/** normalizza al volo i campi data fuori dalle righe di tabella */
+function bindCampiData(radice){
+  $$('input[data-date]',radice||document).forEach(inp=>{
+    if(inp.closest('tr[data-id]')) return;      // le righe hanno già la loro logica
+    if(inp.dataset.pronto) return;
+    inp.dataset.pronto='1';
+    inp.addEventListener('blur',()=>{
+      const v=inp.value.trim();
+      if(!v) return;
+      const iso=parseDataLibera(v);
+      // niente riporto del fuoco: bloccherebbe il passaggio a un'altra sezione
+      if(!iso){ toast('Data non riconosciuta. '+TITOLO_DATA,'err'); return; }
+      inp.value=fmtDataIT(iso);
+    });
+  });
+}
+
+/** dal solo nome file: es. "Enel 2025-03 bolletta 87,40.pdf" */
+function detectFromName(name){
+  const base=name.replace(/\.[a-z0-9]{1,5}$/i,'').replace(/[_]+/g,' ');
+  const r={};
+  // nei nomi file anche un match "debole" (es. «bolletta 87,40.pdf») è quasi sempre l'importo
+  const a=detectAmount(base); if(a&&a.confidence>=8) r.amount=a.amount;
+  const ds=allDates(base); if(ds.length) r.docDate=ds[0].v;
+  let m=base.match(/\b(20\d{2})[-_ ]?(0[1-9]|1[0-2])\b/);
+  if(!r.docDate&&m) r.docDate=`${m[1]}-${m[2]}-01`;
+  return r;
+}
+
+/* ==============================================================================
+   4. ZIP (nessuna libreria: DecompressionStream)
+   ============================================================================== */
+async function inflateRaw(u8){
+  const ds=new DecompressionStream('deflate-raw');
+  return new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(ds)).arrayBuffer());
+}
+/* DecompressionStream fallisce se ci sono byte di troppo in coda (tipico degli
+   stream PDF, che terminano con un EOL prima di «endstream»): proviamo le varianti. */
+async function tryInflate(u8){
+  const variants=[u8];
+  let end=u8.length;
+  while(end>0 && (u8[end-1]===0x0a||u8[end-1]===0x0d||u8[end-1]===0x20)) end--;
+  if(end!==u8.length && end>0) variants.push(u8.subarray(0,end));
+  let lastErr=null;
+  for(const v of variants){
+    for(const fmt of ['deflate','deflate-raw']){
+      try{
+        const ds=new DecompressionStream(fmt);
+        return new Uint8Array(await new Response(new Blob([v]).stream().pipeThrough(ds)).arrayBuffer());
+      }catch(e){ lastErr=e; }
+    }
+  }
+  throw lastErr||new Error('inflate fallito');
+}
+async function readZip(arrayBuffer){
+  const dv=new DataView(arrayBuffer), len=arrayBuffer.byteLength;
+  let eocd=-1;
+  for(let i=len-22;i>=Math.max(0,len-22-65535);i--){ if(dv.getUint32(i,true)===0x06054b50){eocd=i;break;} }
+  if(eocd<0) throw new Error('Archivio ZIP non valido o non supportato');
+  let count=dv.getUint16(eocd+10,true), cdOff=dv.getUint32(eocd+16,true);
+  // ZIP64
+  if(cdOff===0xffffffff||count===0xffff){
+    const loc=eocd-20;
+    if(loc>=0&&dv.getUint32(loc,true)===0x07064b50){
+      const z=Number(dv.getBigUint64(loc+8,true));
+      if(dv.getUint32(z,true)===0x06064b50){ count=Number(dv.getBigUint64(z+32,true)); cdOff=Number(dv.getBigUint64(z+48,true)); }
+    }
+  }
+  const dec=new TextDecoder('utf-8'), decL=new TextDecoder('windows-1252');
+  const entries=[]; let p=cdOff;
+  for(let i=0;i<count && p+46<=len;i++){
+    if(dv.getUint32(p,true)!==0x02014b50) break;
+    const flags=dv.getUint16(p+8,true), method=dv.getUint16(p+10,true);
+    let compSize=dv.getUint32(p+20,true), uncompSize=dv.getUint32(p+24,true);
+    const nameLen=dv.getUint16(p+28,true), extraLen=dv.getUint16(p+30,true), cmtLen=dv.getUint16(p+32,true);
+    let localOff=dv.getUint32(p+42,true);
+    const nb=new Uint8Array(arrayBuffer,p+46,nameLen);
+    const name=(flags&0x800)?dec.decode(nb):decL.decode(nb);
+    // extra ZIP64
+    if(compSize===0xffffffff||uncompSize===0xffffffff||localOff===0xffffffff){
+      let e=p+46+nameLen, end=e+extraLen;
+      while(e+4<=end){
+        const hid=dv.getUint16(e,true), hsz=dv.getUint16(e+2,true); let q=e+4;
+        if(hid===0x0001){
+          if(uncompSize===0xffffffff){uncompSize=Number(dv.getBigUint64(q,true));q+=8;}
+          if(compSize===0xffffffff){compSize=Number(dv.getBigUint64(q,true));q+=8;}
+          if(localOff===0xffffffff){localOff=Number(dv.getBigUint64(q,true));q+=8;}
+        }
+        e+=4+hsz;
+      }
+    }
+    const dosT=dv.getUint32(p+12,true);
+    entries.push({name,method,compSize,uncompSize,localOff,dosT});
+    p+=46+nameLen+extraLen+cmtLen;
+  }
+  const files=[];
+  for(const e of entries){
+    if(e.name.endsWith('/')||/(^|\/)__MACOSX\//.test(e.name)||/(^|\/)\.DS_Store$/.test(e.name)) continue;
+    if(e.localOff+30>len||dv.getUint32(e.localOff,true)!==0x04034b50) continue;
+    const nl=dv.getUint16(e.localOff+26,true), el=dv.getUint16(e.localOff+28,true);
+    const start=e.localOff+30+nl+el;
+    const raw=new Uint8Array(arrayBuffer,start,Math.min(e.compSize,len-start));
+    let data;
+    try{
+      if(e.method===0) data=raw.slice();
+      else if(e.method===8) data=await inflateRaw(raw);
+      else continue;
+    }catch(err){ continue; }
+    const t=(e.dosT>>>0);
+    const mt=new Date(((t>>>25)&127)+1980,(((t>>>21)&15)||1)-1,((t>>>16)&31)||1,(t>>>11)&31,(t>>>5)&63,((t&31)*2));
+    files.push({name:e.name, data, lastModified:isNaN(mt)?Date.now():mt.getTime()});
+  }
+  return files;
+}
+
+/* ==============================================================================
+   5. ESTRAZIONE TESTO  (txt/csv/html/pdf best-effort)
+   ============================================================================== */
+function decodePdfLiteral(s){
+  let o='';
+  for(let i=0;i<s.length;i++){
+    let c=s[i];
+    if(c==='\\'){
+      const n=s[++i];
+      if(n==='n')o+='\n'; else if(n==='r')o+='\n'; else if(n==='t')o+='\t';
+      else if(n==='b'||n==='f')o+=' ';
+      else if(n>='0'&&n<='7'){ let oct=n; while(oct.length<3&&s[i+1]>='0'&&s[i+1]<='7') oct+=s[++i]; o+=String.fromCharCode(parseInt(oct,8)); }
+      else if(n==='\n'||n==='\r'){}
+      else o+=n;
+    } else o+=c;
+  }
+  return o;
+}
+function decodePdfHex(h){
+  const hx=h.replace(/[^0-9A-Fa-f]/g,'');
+  let o='';
+  if(hx.length>=4 && /^(FEFF|feff)/.test(hx)){
+    for(let i=4;i+3<hx.length+1;i+=4) o+=String.fromCharCode(parseInt(hx.substr(i,4),16));
+    return o;
+  }
+  for(let i=0;i+1<hx.length+1;i+=2) o+=String.fromCharCode(parseInt(hx.substr(i,2),16));
+  return o;
+}
+function pdfContentToText(cs){
+  let out='';
+  const re=/(\[(?:\\.|[^\[\]\\])*\]|\((?:\\.|[^()\\])*\)|<[0-9A-Fa-f\s]*>)\s*(TJ|Tj|'|")/g;
+  let m;
+  while((m=re.exec(cs))){
+    const tok=m[1];
+    if(tok[0]==='['){
+      const inner=/\((?:\\.|[^()\\])*\)|<[0-9A-Fa-f\s]*>|-?\d+(?:\.\d+)?/g;
+      let x,buf='';
+      while((x=inner.exec(tok))){
+        const v=x[0];
+        if(v[0]==='(') buf+=decodePdfLiteral(v.slice(1,-1));
+        else if(v[0]==='<') buf+=decodePdfHex(v.slice(1,-1));
+        else if(parseFloat(v)<-120) buf+=' ';
+      }
+      out+=buf;
+    } else if(tok[0]==='(') out+=decodePdfLiteral(tok.slice(1,-1));
+    else out+=decodePdfHex(tok.slice(1,-1));
+    out += (m[2]==='TJ'||m[2]==='Tj') ? ' ' : '\n';
+  }
+  return out;
+}
+/* I filtri di un PDF si applicano in catena: /Filter [ /ASCII85Decode
+   /FlateDecode ] vuol dire prima ASCII85, poi Flate. Diversi portali usano
+   generatori (ReportLab su tutti) che fanno esattamente così: cercare solo
+   "/FlateDecode" e decomprimere i byte grezzi fallisce sempre. */
+function pdfFilters(dict){
+  let m,last=null;
+  const r=/\/Filter\s*(\[[^\]]*\]|\/\w+)/g;
+  while((m=r.exec(dict))) last=m;      // vale l'ultimo: è quello dell'oggetto corrente
+  if(!last) return [];
+  return [...last[1].matchAll(/\/(\w+)/g)].map(x=>x[1]);
+}
+function ascii85Decode(u8){
+  const out=[]; let tuple=0,count=0;
+  for(let i=0;i<u8.length;i++){
+    const c=u8[i];
+    if(c===0x7E) break;                                        // "~>" chiude i dati
+    if(c<=32) continue;                                        // spazi e a capo si ignorano
+    if(c===0x7A && count===0){ out.push(0,0,0,0); continue; }  // "z" vale quattro zeri
+    if(c<33||c>117) continue;
+    tuple=tuple*85+(c-33);
+    if(++count===5){ const t=tuple>>>0; out.push((t>>>24)&255,(t>>>16)&255,(t>>>8)&255,t&255); tuple=0; count=0; }
+  }
+  if(count>0){                                                 // gruppo finale incompleto
+    for(let i=count;i<5;i++) tuple=tuple*85+84;
+    const t=tuple>>>0, b=[(t>>>24)&255,(t>>>16)&255,(t>>>8)&255,t&255];
+    for(let i=0;i<count-1;i++) out.push(b[i]);
+  }
+  return new Uint8Array(out);
+}
+function asciiHexDecode(u8){
+  const out=[]; let hi=-1;
+  for(let i=0;i<u8.length;i++){
+    const c=u8[i];
+    if(c===0x3E) break;
+    let v=-1;
+    if(c>=48&&c<=57) v=c-48; else if(c>=97&&c<=102) v=c-87; else if(c>=65&&c<=70) v=c-55; else continue;
+    if(hi<0) hi=v; else { out.push(hi*16+v); hi=-1; }
+  }
+  if(hi>=0) out.push(hi*16);
+  return new Uint8Array(out);
+}
+async function applyFilters(data,filtri){
+  for(const f of filtri){
+    if(f==='ASCII85Decode')       data=ascii85Decode(data);
+    else if(f==='ASCIIHexDecode') data=asciiHexDecode(data);
+    else if(f==='FlateDecode')    data=await tryInflate(data);
+    else if(f==='Crypt')          continue;
+    else return null;                                          // filtro non gestito
+  }
+  return data;
+}
+async function extractPdfText(u8){
+  const lat=new TextDecoder('latin1').decode(u8);
+  let out='',idx=0,guard=0;
+  while(guard++<4000){
+    const s=lat.indexOf('stream',idx); if(s<0) break;
+    if(lat.slice(s-3,s)==='end'){ idx=s+6; continue; }          // è "endstream"
+    // il dizionario da leggere è quello dell'oggetto corrente, non del precedente
+    const objStart=lat.lastIndexOf(' obj',s);
+    const inizio=(objStart>0 && s-objStart<8000) ? objStart : Math.max(0,s-1200);
+    const dict=lat.slice(inizio,s);
+    let p=s+6; if(lat[p]==='\r')p++; if(lat[p]==='\n')p++;
+    const e=lat.indexOf('endstream',p); if(e<0) break;
+    idx=e+9;
+    if(/\/Subtype\s*\/Image/.test(dict)) continue;
+    if(/\/(DCTDecode|JPXDecode|CCITTFaxDecode|JBIG2Decode)/.test(dict)) continue;
+    // se il dizionario dichiara /Length numerico usiamolo: taglia l'EOL finale
+    let end=e;
+    const dm=/\/Length\s+(\d+)(?!\s+\d+\s+R)/.exec(dict);
+    if(dm){ const n=+dm[1]; if(n>0 && p+n<=e) end=p+n; }
+    let data=u8.subarray(p,end);
+    const filtri=pdfFilters(dict);
+    if(filtri.length){
+      try{ data=await applyFilters(data,filtri); }catch(_){ continue; }
+      if(!data) continue;
+    }
+    let txt='';
+    try{ txt=pdfContentToText(new TextDecoder('latin1').decode(data)); }catch(_){ continue; }
+    if(txt.trim()) out+=txt+'\n';
+    if(out.length>500000) break;
+  }
+  return out.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,' ');
+}
+/** decodifica come testo, provando prima UTF-8 e poi la codifica di Windows */
+function decodeTesto(u8,ext){
+  let t=new TextDecoder('utf-8').decode(u8);
+  if(/�/.test(t.slice(0,4000))) t=new TextDecoder('windows-1252').decode(u8);
+  if(ext==='html'||ext==='htm') t=t.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ');
+  return t;
+}
+const sembraPdf = u8 => u8&&u8.length>4&&u8[0]===0x25&&u8[1]===0x50&&u8[2]===0x44&&u8[3]===0x46; // "%PDF"
+
+async function extractText(name,u8,mime){
+  const ext=(name.split('.').pop()||'').toLowerCase();
+  try{
+    if(ext==='pdf'||mime==='application/pdf'){
+      const t=await extractPdfText(u8);
+      if(t.trim()) return t;
+      // estensione .pdf ma contenuto che PDF non è: si prova a leggerlo come testo
+      if(!sembraPdf(u8)) return decodeTesto(u8,ext);
+      return t;
+    }
+    if(['txt','csv','md','log','json','xml','html','htm','eml','vcf','ics','ofx','qif'].includes(ext)||/^text\//.test(mime||'')){
+      return decodeTesto(u8,ext);
+    }
+    if(ext==='xlsx'||ext==='docx'||ext==='odt'||ext==='ods'){
+      const files=await readZip(u8.buffer.slice(u8.byteOffset,u8.byteOffset+u8.byteLength));
+      let t='';
+      for(const f of files){
+        if(!/\.(xml|rels)$/i.test(f.name)) continue;
+        if(!/(sharedStrings|sheet\d*|document|content)\.xml$/i.test(f.name)) continue;
+        t+=new TextDecoder('utf-8').decode(f.data).replace(/<[^>]+>/g,' ')+' ';
+        if(t.length>400000) break;
+      }
+      return t;
+    }
+  }catch(e){ console.warn('extractText',name,e); }
+  return '';
+}
+
+/* ==============================================================================
+   6. IMPORT DOCUMENTI
+   ============================================================================== */
+const SKIP_RE=/(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini|__MACOSX)/i;
+
+/* I file letti dal disco arrivano come byte grezzi, senza tipo. Senza questo
+   il PDF finisce in archivio come blob «senza tipo» e riaprendolo il browser
+   lo mostra come testo illeggibile invece che nel visualizzatore. */
+const MIME_ESTENSIONE={
+  pdf:'application/pdf',
+  png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif',
+  webp:'image/webp', bmp:'image/bmp', tif:'image/tiff', tiff:'image/tiff',
+  txt:'text/plain', csv:'text/csv', htm:'text/html', html:'text/html',
+  xml:'application/xml', json:'application/json', zip:'application/zip',
+  doc:'application/msword', xls:'application/vnd.ms-excel',
+  docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  p7m:'application/pkcs7-mime', eml:'message/rfc822',
+};
+function mimeDaNome(nome){
+  const m=/\.([a-z0-9]+)\s*$/i.exec(String(nome||''));
+  return m ? (MIME_ESTENSIONE[m[1].toLowerCase()]||'') : '';
+}
+/** tipo migliore disponibile per un documento già in archivio */
+function mimeDoc(d){
+  return (d&&d.mime) || mimeDaNome(d&&d.file&&d.file.nome) || mimeDaNome(d&&d.name)
+      || mimeDaNome(d&&d.path) || mimeDaNome(d&&d.fullPath) || '';
+}
+
+async function addDocuments(tabId, items, opts={}){
+  // items: [{name, path, blob|data, lastModified, size}]
+  const prog=opts.onProgress||(()=>{});
+  const added=[], abbinati=[], sovrascritti=[];
+  const scelteScontro={tutti:null};   // risposta valida per l'intero gruppo
+  let i=0;
+  for(const it of items){
+    i++;
+    prog(i,items.length,it.name);
+    if(SKIP_RE.test(it.path||it.name)) continue;
+    let u8=null, blob=null, size=0;
+    if(it.data){ u8=it.data; blob=new Blob([it.data],{type:mimeDaNome(it.name)}); size=it.data.length; }
+    else { blob=it.blob; size=blob.size; }
+
+    // ZIP -> espandi
+    const isZip=/\.zip$/i.test(it.name);
+    if(isZip && !opts.noExpand){
+      try{
+        const ab = u8 ? u8.buffer.slice(u8.byteOffset,u8.byteOffset+u8.byteLength) : await blob.arrayBuffer();
+        const inner=await readZip(ab);
+        if(inner.length){
+          const sub=inner.map(f=>{
+            const rel=f.name.replace(/\\/g,'/');            // gli ZIP creati su Windows usano "\"
+            return {name:rel.split('/').pop(),path:(it.path||it.name).replace(/\.zip$/i,'')+'/'+rel,data:f.data,lastModified:f.lastModified};
+          });
+          const r=await addDocuments(tabId,sub,Object.assign({},opts,{onProgress:()=>{}}));
+          added.push(...r);
+          continue;
+        }
+      }catch(e){ console.warn('zip',e); toast('ZIP «'+it.name+'» non leggibile: '+e.message,'err'); }
+    }
+
+    const key=(it.path||it.name)+'|'+size;
+    if(S.docs.some(d=>d.tabId===tabId&&d.key===key)) continue;   // dedup
+
+    if(!u8 && size<=20*1024*1024){ try{ u8=new Uint8Array(await blob.arrayBuffer()); }catch(_){} }
+
+    // analisi del contenuto prima di decidere se è una riga nuova o un allegato
+    let testoPre='';
+    if(!u8 && size<=20*1024*1024){ try{ u8=new Uint8Array(await blob.arrayBuffer()); }catch(_){} }
+    if(u8 && size<=25*1024*1024) testoPre=await extractText(it.name,u8,blob.type);
+    const nomeInfo=detectFromName(it.name+' '+(it.path||''));
+    const rilevato=testoPre?detectAmount(testoPre):null;
+    const dateRil=testoPre?detectDates(testoPre):{};
+    const impPre=(rilevato&&rilevato.confidence>=25)?rilevato.amount
+               :(nomeInfo.amount!=null?nomeInfo.amount:(rilevato?rilevato.amount:null));
+    const dataPre=dateRil.docDate||nomeInfo.docDate||(it.lastModified?new Date(it.lastModified).toISOString().slice(0,10):null);
+
+    /* già scaricato in passato con un altro nome? si sovrascrive quello,
+       invece di lasciare due righe gemelle in rendicontazione */
+    const gemello=opts.noAbbina?null:duplicatoDi(tabId,{amount:impPre,docDate:dataPre,nome:it.name,size});
+    if(gemello){
+      try{
+        await DB.set('blobs',gemello.id,blob);
+        if(testoPre) await DB.set('blobs','txt:'+gemello.id,testoPre.slice(0,200000));
+      }catch(_){}
+      gemello.file={nome:it.name,size,mime:blob.type||''};
+      gemello.path=it.path||it.name;
+      gemello.fullPath=it.fullPath||gemello.fullPath;
+      gemello.textLen=testoPre.length;
+      gemello.key=key;
+      if(impPre!=null&&gemello.auto?.amount!==false) gemello.amount=impPre;
+      if(dateRil.dueDate&&!gemello.dueDate) gemello.dueDate=dateRil.dueDate;
+      sovrascritti.push(gemello);
+      continue;
+    }
+
+    /* la riga esiste già? allora il file le si attacca, invece di duplicarla.
+       Se è una riga scritta a mano, la decisione la prende l'utente. */
+    let esistente=opts.noAbbina?null:rigaDaAbbinare(tabId,{amount:impPre,docDate:dataPre});
+    if(esistente&&!opts.senzaDomande){
+      if(scelteScontro.tutti==null){
+        const r=await chiediCollisione(esistente,{titoloNuovo:it.name,manuale:false,gruppo:items.length>1});
+        if(!r.scelta) continue;                       // annullato: il file resta solo su disco
+        if(r.tutti) scelteScontro.tutti=r.scelta;
+        if(r.scelta==='aggiungi') esistente=null;
+      }
+      else if(scelteScontro.tutti==='aggiungi') esistente=null;
+    }
+    if(esistente){
+      try{
+        await DB.set('blobs',esistente.id,blob);
+        if(testoPre) await DB.set('blobs','txt:'+esistente.id,testoPre.slice(0,200000));
+      }catch(_){}
+      esistente.file={nome:it.name,size,mime:blob.type||''};
+      esistente.fullPath=it.fullPath||esistente.fullPath;
+      esistente.textLen=testoPre.length;
+      esistente.key=key;
+      if(esistente.amount==null&&impPre!=null){ esistente.amount=impPre; esistente.auto={amount:true,conf:rilevato?rilevato.confidence:30}; }
+      if(!esistente.dueDate&&dateRil.dueDate) esistente.dueDate=dateRil.dueDate;
+      if(!esistente.periodoDa&&dateRil.periodoDa){ esistente.periodoDa=dateRil.periodoDa; esistente.periodoA=dateRil.periodoA; }
+      // anche il consumo arriva dal documento, se la riga non l'aveva
+      const uEs=unitaCategoria(esistente.category);
+      if(uEs&&esistente.kwh==null&&testoPre){ const qEs=detectConsumo(testoPre,uEs); if(qEs!=null) esistente.kwh=qEs; }
+      abbinati.push(esistente);
+      continue;
+    }
+
+    const id=uid();
+    const doc={
+      id, tabId, key,
+      name:it.name, path:it.path||it.name, size,
+      file:{nome:it.name,size,mime:blob.type||''},
+      mime:blob.type||'',
+      addedAt:new Date().toISOString(),
+      docDate:null, dueDate:null, amount:null,
+      periodoDa:null, periodoA:null, kwh:null,
+      category:'altro', status:'da_pagare', note:'',
+      auto:{}, textLen:0
+    };
+    // l'analisi è già stata fatta sopra: non si rilegge il file una seconda volta
+    const text=testoPre, fromName=nomeInfo, det=rilevato, dts=dateRil;
+    doc.textLen=text.length;
+
+    if(det && det.confidence>=25){ doc.amount=det.amount; doc.auto.amount=true; doc.auto.conf=det.confidence; doc.auto.snippet=det.snippet; }
+    else if(fromName.amount!=null){ doc.amount=fromName.amount; doc.auto.amount=true; doc.auto.conf=30; doc.auto.snippet='dal nome file'; }
+    else if(det){ doc.amount=det.amount; doc.auto.amount=true; doc.auto.conf=det.confidence; doc.auto.snippet=det.snippet; }
+
+    doc.docDate = dataPre || todayISO();
+    doc.dueDate = dts.dueDate || null;
+    doc.periodoDa = dts.periodoDa || null;
+    doc.periodoA  = dts.periodoA  || null;
+    doc.category = categoriaPer(tabId,(it.path||'')+' '+it.name+' '+text.slice(0,3000));
+    /* il consumo si legge subito: aspettare «Aggiorna» lasciava la colonna vuota
+       proprio sulle bollette appena scaricate */
+    const uDoc=unitaCategoria(doc.category);
+    if(uDoc&&text) doc.kwh=detectConsumo(text,uDoc);
+    if(/(pagat|quietanz|ricevut|saldat|contabile|estratto|scontrin|bonifico esegu)/i.test(it.name+' '+text.slice(0,1500))) doc.status='pagato';
+
+    try{ await DB.set('blobs',id,blob); }catch(e){ console.warn('blob',e); }
+    if(text) { try{ await DB.set('blobs','txt:'+id, text.slice(0,200000)); }catch(_){} }
+    S.docs.push(doc); added.push(doc);
+  }
+  save();
+  added.abbinati=abbinati;         // documenti agganciati a righe già scritte
+  added.sovrascritti=sovrascritti; // riscaricati e aggiornati al posto del vecchio
+  return added;
+}
+
+/* ==============================================================================
+   6-bis. INSERIMENTO MANUALE
+   Una spesa scritta a mano è un documento come gli altri, solo senza file:
+   entra nella rendicontazione e nei totali esattamente allo stesso modo.
+   ============================================================================== */
+const TAB_MANUALI='manuali';
+
+/** restituisce (creandolo se serve) il tab dove finiscono le spese manuali */
+function tabPerManuali(){
+  let t=tabById(TAB_MANUALI);
+  if(!t){
+    t={id:TAB_MANUALI,type:'files',name:'Voci manuali',icon:'✍',createdAt:new Date().toISOString()};
+    S.tabs.push(t);
+  }
+  return t;
+}
+
+/** crea una spesa manuale. Ritorna il documento, o null se l'importo non è valido */
+/* UNICO punto in cui nasce una riga scritta a mano, per QUALSIASI tab.
+   Tutti i campi compilabili passano da qui: aggiungerne uno alla tabella e
+   dimenticarsi di elencarlo significa vederlo sparire in silenzio dopo
+   l'inserimento — è già successo con il frazionamento. */
+function addManual({name,amount,docDate,dueDate,category,status,note,tabId,
+                    kwh,rate,frazionamento,periodoDa,periodoA}={}){
+  const importo = (amount===''||amount==null) ? null : (typeof amount==='number'?amount:parseAmountString(amount));
+  if(amount!=='' && amount!=null && importo==null) return null;
+  const dest = tabId && tabById(tabId) && tabId!=='summary' ? tabId : tabPerManuali().id;
+  const id=uid();
+  const doc={
+    id, tabId:dest, key:'man:'+id,
+    name:(name||'').trim()||'Voce senza descrizione',
+    path:'Inserita a mano', size:0, mime:'',
+    addedAt:new Date().toISOString(),
+    docDate:docDate||todayISO(), dueDate:dueDate||null,
+    amount:importo,
+    category:category||'altro',
+    status:status||'da_pagare',
+    note:note||'', auto:{}, textLen:0,
+    manuale:true
+  };
+
+  // consumo: solo dove la categoria prevede un'unità di misura
+  if(unitaCategoria(doc.category) && kwh!=null && kwh!==''){
+    const q = typeof kwh==='number' ? kwh : parseAmountString(kwh);
+    if(q!=null) doc.kwh=q;
+  }
+  /* Il frazionamento vale anche con una rata sola: un'assicurazione annuale
+     pagata in un'unica soluzione è comunque annuale. */
+  if(frazionamento && FRAZIONAMENTI[frazionamento]) doc.frazionamento=frazionamento;
+  const nr = rate==null||rate==='' ? 1 : (typeof rate==='number'?rate:parseInt(rate,10));
+  if(Number.isFinite(nr) && nr>1 && nr<=240){
+    doc.rate=nr;
+    if(!doc.frazionamento) doc.frazionamento='mensile';   // più rate: serve una cadenza
+  }
+  if(periodoDa && periodoA){ doc.periodoDa=periodoDa; doc.periodoA=periodoA; }
+
+  S.docs.push(doc);
+  save();
+  return doc;
+}
+
+/* ------------------------------------------------------------------
+   Copia di una voce
+   Le spese tornano quasi sempre uguali: la stessa assicurazione, lo stesso
+   bollo, solo un anno più in là. Tre modi di rifarla:
+
+     Duplica          copia identica, da correggere a mano
+     Aggiorna         copia con la SCADENZA all'anno dopo (rate comprese):
+                      la data del documento resta quella del documento vecchio
+     Duplica e trasla copia con data del documento E scadenza all'anno dopo
+
+   Il frazionamento non cambia mai: cambia l'anno e basta, quindi le rate
+   restano distanziate come prima. In tutti e tre i casi la copia nasce da
+   pagare, e senza il documento del vecchio anno attaccato.
+   ------------------------------------------------------------------ */
+function duplicaVoce(d,anni,ancheData){
+  const sposta   = iso => anni ? aggiungiMesi(iso,12*anni) : iso;
+  const spostaDoc= iso => (anni&&ancheData) ? aggiungiMesi(iso,12*anni) : iso;
+  const c=JSON.parse(JSON.stringify(d));
+  c.id=uid(); c.key='man:'+c.id;
+  c.addedAt=new Date().toISOString();
+  c.docDate=spostaDoc(d.docDate)||d.docDate;
+  c.dueDate=sposta(d.dueDate)||null;
+  // il periodo fatturato appartiene al documento, non alla scadenza
+  if(c.periodoDa) c.periodoDa=spostaDoc(c.periodoDa);
+  if(c.periodoA)  c.periodoA =spostaDoc(c.periodoA);
+  // la copia è tutta da pagare, comprese le sue rate
+  c.status='da_pagare';
+  delete c.ratePagate;
+  if(Array.isArray(c.rateLista)){
+    c.rateLista=c.rateLista.map(r=>({data:sposta(r.data),importo:r.importo,pagata:false}));
+    allineaScadenzaAlleRate(c);    // la scadenza della copia esce dalle sue rate
+  }
+  c.file=null; c.path='Inserita a mano'; c.size=0; c.mime=''; c.textLen=0; c.auto={};
+  c.manuale=true;
+  S.docs.push(c);
+
+  /* con un anno selezionato la copia dell'anno dopo finirebbe fuori dal filtro:
+     invece di sparire, si sposta il filtro sull'anno della copia */
+  const annoCopia=annoDi(c);
+  const cambiaAnno = annoAttivo() && annoCopia && annoAttivo()!==annoCopia;
+  if(cambiaAnno) S.settings.anno=annoCopia;
+
+  save(); render();
+  setTimeout(()=>{
+    const tr=document.querySelector(`tr[data-id="${c.id}"]`);
+    if(tr){ tr.classList.add('appena-copiata'); tr.scrollIntoView({block:'center',behavior:'smooth'}); }
+  },0);
+  const quante=rateDi(c).length;
+  // se mesi o periodo la tengono fuori, meglio dirlo che farla sparire
+  const nascosta=!nelPeriodoScelto(c);
+  toast(anni
+    ? `Copiata al ${annoCopia}${c.dueDate?' · scadenza '+fmtDate(c.dueDate):''}`
+      +`${quante>1?' · '+quante+' rate traslate':''}${ancheData?' · anche la data del documento':''}`
+      +`${cambiaAnno?' · mostro il '+annoCopia:''}${nascosta?' · nascosta dai filtri di mese/periodo':''}`
+    : `Voce duplicata: ora correggi data e scadenza${nascosta?' — al momento i filtri la nascondono':''}`,
+    nascosta?'err':'ok');
+  return c;
+}
+
+/* Menu del tasto destro sulle righe. Vale in tutte le tabelle, perché sta
+   attaccato alla riga e non alla vista. */
+let menuAperto=null;
+function chiudiMenuRiga(){ if(menuAperto){ menuAperto.remove(); menuAperto=null; } }
+document.addEventListener('click',chiudiMenuRiga);
+document.addEventListener('contextmenu',e=>{ if(!e.target.closest||!e.target.closest('tr[data-id]')) chiudiMenuRiga(); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') chiudiMenuRiga(); });
+window.addEventListener('resize',chiudiMenuRiga);
+window.addEventListener('scroll',chiudiMenuRiga,true);
+
+function menuRiga(e,d){
+  e.preventDefault();
+  chiudiMenuRiga();
+  const rate=rateDi(d).length;
+  const m=document.createElement('div');
+  m.className='menuctx noprint';
+  m.innerHTML=`
+    <div class="mtit">${esc(d.name||'Voce')}</div>
+    <button data-m="dup">⧉ Duplica<span class="mk">copia identica, da correggere</span></button>
+    <button data-m="anno">↻ Aggiorna<span class="mk">copia con la scadenza all'anno dopo${rate>1?', tutte e '+rate+' le rate':''}</span></button>
+    <button data-m="trasla">⇥ Duplica e trasla<span class="mk">come sopra, e sposta anche la data del documento</span></button>`;
+  document.body.appendChild(m);
+  m.style.left=Math.max(6,Math.min(e.clientX,innerWidth -m.offsetWidth -8))+'px';
+  m.style.top =Math.max(6,Math.min(e.clientY,innerHeight-m.offsetHeight-8))+'px';
+  m.addEventListener('contextmenu',ev=>ev.preventDefault());
+  $('[data-m="dup"]',m).onclick   =ev=>{ ev.stopPropagation(); chiudiMenuRiga(); duplicaVoce(d,0,false); };
+  $('[data-m="anno"]',m).onclick  =ev=>{ ev.stopPropagation(); chiudiMenuRiga(); duplicaVoce(d,1,false); };
+  $('[data-m="trasla"]',m).onclick=ev=>{ ev.stopPropagation(); chiudiMenuRiga(); duplicaVoce(d,1,true); };
+  menuAperto=m;
+}
+
+/* ==============================================================================
+   6-quater. ALLEGATI
+   Una voce può avere un documento collegato: scelto a mano dal computer,
+   oppure abbinato da solo quando arriva da una cartella collegata.
+   ============================================================================== */
+/* ------------------------------------------------------------------
+   Celle e dettaglio delle rate
+   ------------------------------------------------------------------ */
+const righeAperte=new Set();       // quali dettagli sono espansi
+
+function cellaRate(d){
+  const n=numeroRate(d);
+  const r=rateDi(d);
+  const pagate=r.filter(x=>x.pagata).length;
+  return `<span class="ratebox">
+    <input class="cell-in num rate" data-f="rate" value="${n>1?n:''}" placeholder="1" inputmode="numeric" title="Numero di rate (1 = pagamento unico)">
+    ${n>1?`<span class="ratecnt">${pagate}/${n}</span>`:''}
+  </span>`;
+}
+
+/** prima cella della riga: la freccia che segnala il dettaglio nascosto */
+function cellaEspandi(d){
+  if(numeroRate(d)<2) return '<td class="espandi"></td>';
+  const aperta=righeAperte.has(d.id);
+  return `<td class="espandi" title="${aperta?'Nascondi':'Mostra'} le rate">
+    <button class="sm ghost frecc" data-act="rate">${aperta?'▾':'▸'}</button></td>`;
+}
+/* Sempre modificabile, anche con una rata sola: la cadenza di una spesa è
+   un'informazione a sé (un'assicurazione annuale resta annuale). Se non è
+   stata scelta si mostra «—», non un «Mensile» che nessuno ha chiesto. */
+function cellaFrazionamento(d){
+  const scelto=FRAZIONAMENTI[d.frazionamento]?d.frazionamento:'';
+  return `<select class="cell-in" data-f="frazionamento" title="Ogni quanto torna questa spesa">
+    <option value="" ${scelto?'':'selected'}>—</option>
+    ${Object.entries(FRAZIONAMENTI).map(([k,v])=>`<option value="${k}" ${scelto===k?'selected':''}>${esc(v.label)}</option>`).join('')}
+  </select>`;
+}
+
+/** riga aggiuntiva con l'elenco delle rate */
+function rigaRate(d,colonne){
+  if(!righeAperte.has(d.id)) return '';
+  const r=rateDi(d);
+  if(!r.length) return '';
+  const oggi=todayISO();
+  const man=rateManuali(d);
+  const pagate=r.filter(x=>x.pagata).length;
+  const versato=r.filter(x=>x.pagata).reduce((a,x)=>a+(x.importo||0),0);
+  const residuo=r.filter(x=>!x.pagata).reduce((a,x)=>a+(x.importo||0),0);
+  return `<tr class="dettaglio-rate" data-rate-di="${d.id}"><td colspan="${colonne}">
+    <div class="ratetitolo">
+      ${r.length} rate ${esc(FRAZIONAMENTI[frazDi(d)].label.toLowerCase())} · totale ${fmtEur(d.amount)}
+      ${pagate?` · <b>${pagate} pagate ${fmtEur(versato)}</b> · restano <b>${fmtEur(residuo)}</b>`:` · nessuna pagata`}
+      ${man?'<span class="tag">rate personalizzate</span>':''}
+    </div>
+    <table class="ratetab meta"><thead><tr>
+      <th>Rata</th><th>Scadenza</th><th class="num">Importo</th><th>Stato</th><th class="noprint"></th>
+    </tr></thead><tbody>
+    ${r.map(x=>{
+      const scaduta=!x.pagata&&x.data&&daysBetween(oggi,x.data)<0;
+      return `<tr class="${x.pagata?'pagata':scaduta?'scaduta':''}">
+        <td>${x.n}<span class="su">/${r.length}</span></td>
+        <td><input class="cell-in data" data-rata-campo="data" data-rata="${x.n-1}" data-date="1"
+               value="${mostraData(x.data)}" placeholder="gg/mm/aaaa" title="${TITOLO_DATA}" style="width:118px"></td>
+        <td class="num"><input class="cell-in num" data-rata-campo="importo" data-rata="${x.n-1}"
+               value="${x.importo!=null?fmtNum(x.importo):''}" placeholder="0,00" style="width:96px"
+               title="Ogni rata può avere un importo diverso"></td>
+        <td><label class="ratechk"><input type="checkbox" data-rata="${x.n-1}" ${x.pagata?'checked':''}>
+          <span class="pill ${x.pagata?'pagato':scaduta?'scaduto':'da_pagare'}"><span class="dot"></span>${L(isEntrata(d),x.pagata?'pagata':scaduta?'scaduta':'da_pagare_r')}</span></label></td>
+        <td class="noprint"><button class="sm ghost" data-rata-rimuovi="${x.n-1}" title="Elimina questa rata">🗑</button></td>
+      </tr>`;
+    }).join('')}
+    </tbody></table>
+    <div class="rateazioni noprint">
+      <button class="sm primary" data-rata-aggiungi="1" title="Aggiungi una rata non prevista">＋ Aggiungi rata</button>
+      ${man?`<button class="sm" data-rata-ridividi="1" title="Torna alla divisione automatica in parti uguali">↺ Dividi in parti uguali</button>`:''}
+      <span class="hint" style="margin:0">Scadenze e importi si scrivono direttamente qui: le rate non devono essere per forza uguali,
+        e il totale della voce segue sempre la loro somma.</span>
+    </div>
+  </td></tr>`;
+}
+
+/** apre o chiude il dettaglio delle rate di una voce */
+function apriChiudiRate(d){
+  if(numeroRate(d)<2) return;
+  if(righeAperte.has(d.id)) righeAperte.delete(d.id); else righeAperte.add(d.id);
+  render();
+}
+
+/** segna o toglie il pagamento di una rata */
+function segnaRata(d,indice,pagata){
+  if(rateManuali(d)){
+    if(d.rateLista[indice]) d.rateLista[indice].pagata=!!pagata;
+    aggiornaTotaleDaRate(d);
+    save(); render();
+    return;
+  }
+  const set=new Set(d.ratePagate||[]);
+  if(pagata) set.add(indice); else set.delete(indice);
+  d.ratePagate=[...set].sort((a,b)=>a-b);
+  const n=numeroRate(d);
+  d.status=(d.ratePagate.length>=n)?'pagato':'da_pagare';   // lo stato segue le rate
+  save(); render();
+}
+
+/** cella della colonna «Documento» */
+function cellaDocumento(d){
+  const f=d.file;
+  if(f) return `<span class="allegato" title="${esc(f.nome)}">
+    <button class="sm ghost" data-act="open" title="Apri il documento">📄</button>
+    <span class="an">${esc(f.nome)}</span>
+    <button class="sm ghost" data-act="stacca" title="Scollega il documento">✕</button></span>`;
+  return `<button class="sm ghost allega" data-act="allega" title="Scegli un documento dal computer">📎 Scegli…</button>`;
+}
+
+/** collega un file a una voce e ne completa i campi ancora vuoti */
+async function allegaFile(d,file){
+  if(!d||!file) return;
+  let testo='';
+  try{
+    await DB.set('blobs',d.id,file);
+    if(file.size<=25*1024*1024){
+      const u8=new Uint8Array(await file.arrayBuffer());
+      testo=await extractText(file.name,u8,file.type);
+      if(testo) await DB.set('blobs','txt:'+d.id,testo.slice(0,200000));
+    }
+  }catch(e){ toast('Non sono riuscito ad archiviare il file: '+e.message,'err'); return; }
+
+  d.file={nome:file.name,size:file.size,mime:file.type||''};
+  d.textLen=testo.length;
+  if(testo){
+    if(d.amount==null){
+      const a=detectAmount(testo);
+      if(a){ d.amount=a.amount; d.auto={amount:true,conf:a.confidence,snippet:a.snippet}; }
+    }
+    const dts=detectDates(testo);
+    if(!d.dueDate&&dts.dueDate) d.dueDate=dts.dueDate;
+    if(!d.docDate&&dts.docDate) d.docDate=dts.docDate;
+  }
+  save(); render();
+  toast('Documento collegato: '+file.name+(d.amount!=null?' — '+fmtEur(d.amount):''),'ok');
+}
+
+/** apre la finestra di scelta file e collega quello scelto alla voce */
+function scegliDocumentoPer(d){
+  const inp=$('#fileInput');
+  inp.value='';
+  inp.onchange=()=>{ const f=inp.files&&inp.files[0]; if(f) allegaFile(d,f); };
+  inp.click();
+}
+
+function staccaDocumento(d){
+  modal('Scollegare il documento?',
+    `<p style="margin:0">La voce <b>${esc(d.name)}</b> resta in rendicontazione, ma senza il file <b>${esc(d.file?.nome||'')}</b>.</p>`,
+    [{label:'Annulla'},{label:'Scollega',danger:true,fn:()=>{
+      DB.del('blobs',d.id).catch(()=>{}); DB.del('blobs','txt:'+d.id).catch(()=>{});
+      delete d.file; d.textLen=0; save(); render();
+    }}]);
+}
+
+/** Cerca una voce già presente a cui un file appena arrivato appartiene.
+ *  Serve per le cartelle collegate: invece di creare una riga in più, il
+ *  documento si attacca alla riga che l'utente ha già scritto a mano. */
+function rigaDaAbbinare(tabId,{amount,docDate}){
+  const candidate=docsOf(tabId).filter(d=>d.manuale&&!d.file);
+  if(!candidate.length) return null;
+  if(amount!=null){
+    const perImporto=candidate.filter(d=>d.amount!=null&&Math.abs(d.amount-amount)<0.005);
+    if(perImporto.length===1) return perImporto[0];
+    if(perImporto.length>1&&docDate){
+      const stretta=perImporto.filter(d=>coincideCol(d,docDate));
+      if(stretta.length===1) return stretta[0];
+    }
+  }
+  if(docDate){
+    const perPeriodo=candidate.filter(d=>d.amount==null&&coincideCol(d,docDate));
+    if(perPeriodo.length===1) return perPeriodo[0];
+  }
+  return null;
+}
+/** «Bolletta (2).pdf», «Bolletta (3).pdf» sono lo stesso documento riscaricato */
+const nomeBase = n => String(n||'').replace(/\s*\(\d+\)(?=\.[^.]+$|$)/,'').trim().toLowerCase();
+
+/** Un documento già presente, che quello in arrivo deve sostituire.
+ *  Serve quando lo stesso file viene riscaricato dal portale con un nome
+ *  leggermente diverso: invece di aggiungere una riga gemella, si aggiorna. */
+function duplicatoDi(tabId,{amount,docDate,nome,size}){
+  const esistenti=docsOf(tabId).filter(d=>d.file);
+  // stesso nome (a meno del «(2)») e stessa dimensione: è proprio lo stesso file
+  const perNome=esistenti.filter(d=>nomeBase(d.file.nome)===nomeBase(nome));
+  const identico=perNome.find(d=>d.file.size===size);
+  if(identico) return identico;
+  if(perNome.length===1) return perNome[0];
+  // stesso importo e stessa data: è la stessa bolletta arrivata di nuovo
+  if(amount!=null&&docDate){
+    const pari=esistenti.filter(d=>d.amount!=null&&Math.abs(d.amount-amount)<0.005&&d.docDate===docDate);
+    if(pari.length===1) return pari[0];
+  }
+  return null;
+}
+
+function coincideCol(d,data){
+  if(d.periodoDa&&d.periodoA) return data>=d.periodoDa&&data<=d.periodoA;
+  if(d.docDate) return d.docDate.slice(0,7)===data.slice(0,7);   // stesso mese
+  return false;
+}
+
+/* ------------------------------------------------------------------
+   Scontro fra una riga scritta a mano e una arrivata da sola.
+   Decidere al posto dell'utente è sbagliato in entrambi i versi: si chiede.
+   ------------------------------------------------------------------ */
+/** finestra a scelta multipla che risponde anche se viene chiusa con Escape.
+ *  `raccogli` legge eventuali campi della finestra prima che venga smontata. */
+function chiediScelta(titolo,html,scelte,{cls='',raccogli}={}){
+  return new Promise(res=>{
+    let risposto=false;
+    const rispondi=v=>{ if(risposto) return; risposto=true;
+      res(Object.assign({scelta:v}, v!=null&&raccogli?raccogli():{})); };
+    modal(titolo,html,
+      scelte.map(s=>({label:s.label,primary:s.primary,danger:s.danger,fn:()=>rispondi(s.valore)})),
+      null,cls,()=>rispondi(null));
+  });
+}
+
+const descriviRiga = d =>
+  `${esc(d.name||'(senza nome)')}${d.amount!=null?' — <b>'+fmtEur(d.amount)+'</b>':''}`+
+  `${d.docDate?' · '+fmtDataIT(d.docDate):''}`;
+
+/** la riga dell'altra provenienza che cade sulla stessa data, se c'è */
+/* Per l'avviso di doppione conta il GIORNO, non il mese: due bollette nello
+   stesso mese sono normalissime (luce il 5, acqua il 20) e avvisare lì è solo
+   fastidio. `coincideCol`, che ammette il mese, resta com'è: serve ad abbinare
+   un documento in arrivo a una riga scritta senza una data precisa.
+   Un periodo dichiarato invece vale: quella è davvero la stessa fatturazione. */
+function collisioneCon(tabId,data,{manuale}){
+  if(!data) return null;
+  const altre=docsOf(tabId).filter(d=> manuale ? !!d.file : (d.manuale&&!d.file));
+  return altre.find(d =>
+    d.docDate===data ||
+    (d.periodoDa && d.periodoA && data>=d.periodoDa && data<=d.periodoA)
+  )||null;
+}
+
+/** chiede cosa fare; ritorna 'sovrascrivi' | 'aggiungi' | null (annullato) */
+function chiediCollisione(esistente,{titoloNuovo,manuale,gruppo}){
+  const che=manuale
+    ? 'In questo tab c\'è già un documento arrivato da solo con la stessa data:'
+    : 'In questo tab c\'è già una riga scritta a mano con la stessa data:';
+  const corpo=`<p style="margin:0 0 10px">${che}</p>
+    <p class="riga-scontro">${descriviRiga(esistente)}</p>
+    <p style="margin:12px 0 0">Stai inserendo: <b>${esc(titoloNuovo||'nuova voce')}</b></p>
+    <p class="hint" style="margin:10px 0 0"><b>Sovrascrivi</b> aggiorna la voce esistente.
+      <b>Aggiungi comunque</b> le tiene tutte e due.</p>
+    ${gruppo?`<label class="ricorda"><input type="checkbox" id="scontroTutti"> Fai lo stesso per gli altri documenti di questo gruppo</label>`:''}`;
+  return chiediScelta('Stessa data: cosa faccio?',corpo,[
+    {label:'Annulla',valore:null},
+    {label:'Aggiungi comunque',valore:'aggiungi'},
+    {label:'Sovrascrivi',valore:'sovrascrivi',primary:true},
+  ],{raccogli:()=>({tutti:!!$('#scontroTutti')?.checked})});
+}
+
+/** se la voce appena inserita cade fuori dall'anno mostrato, sparirebbe dalla
+    vista senza spiegazioni: meglio dirlo */
+function avvisaAnnoDiverso(d){
+  if(!d||nelPeriodoScelto(d)) return;
+  const anno=annoAttivo(), suo=annoDi(d);
+  if(anno&&suo&&suo!==anno) toast(`Scade nel ${suo}: per vederla scegli quell'anno`,'err');
+  else toast('Inserita, ma i filtri di mese o periodo la tengono nascosta','err');
+}
+
+/** barra di inserimento rapido; se tabId è dato, la destinazione è fissa */
+const chiaveQuick = tabId => 'quick:'+(tabId||'summary');
+function quickAddHTML(tabId){
+  const q=S.settings.quick||{};
+  const dest=tabId||q.tab||'';
+  const scelte=S.tabs.filter(t=>t.type!=='summary');
+  const bz=bozza(chiaveQuick(tabId));
+  return `<div class="quickadd noprint">
+    <label class="fld">Data${inputDataForm('qDate',bz.date!=null?bz.date:todayISO())}</label>
+    <label class="fld grow">Descrizione<input id="qName" placeholder="es. Fattura n. 12 — Cliente Rossi" autocomplete="off" value="${esc(bz.name||'')}"></label>
+    <label class="fld">Categoria<select id="qCat">
+      ${CATS.map(c=>`<option value="${c.id}" ${(bz.cat||q.cat)===c.id?'selected':''}>${esc(c.label)}</option>`).join('')}
+    </select></label>
+    <label class="fld">Importo €<input id="qAmt" class="num" placeholder="0,00" inputmode="decimal" value="${esc(bz.amt||'')}"></label>
+    <label class="fld">Scadenza${inputDataForm('qDue',bz.due||'')}</label>
+    <label class="fld">Stato<select id="qSt">
+      <option value="da_pagare" ${(bz.st||q.status)!=='pagato'?'selected':''}>${tabId?L(isEntrataTab(tabById(tabId)),'da_pagare'):'Da pagare / incassare'}</option>
+      <option value="pagato" ${(bz.st||q.status)==='pagato'?'selected':''}>${tabId?L(isEntrataTab(tabById(tabId)),'pagato'):'Pagato / incassato'}</option>
+    </select></label>
+    ${tabId?'':`<label class="fld">Destinazione<select id="qTab">
+      <option value="">Voci manuali</option>
+      ${scelte.map(t=>`<option value="${t.id}" ${dest===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+    </select></label>`}
+    <button class="primary" id="qAdd">＋ Aggiungi</button>
+  </div>`;
+}
+
+function bindQuickAdd(tabId){
+  const box=$('#view .quickadd'); if(!box) return;
+  const g=id=>$(id,box);
+  const chiave=chiaveQuick(tabId);
+  bindBozza(chiave,{'#qDate':'date','#qName':'name','#qCat':'cat','#qAmt':'amt','#qDue':'due','#qSt':'st'},box);
+  const aggiungi=()=>{
+    const q=S.settings.quick||(S.settings.quick={});
+    q.cat=g('#qCat').value; q.status=g('#qSt').value;
+    const destSel=g('#qTab');
+    if(destSel) q.tab=destSel.value;
+    const data=leggiData('#qDate',box), scad=leggiData('#qDue',box);
+    if(data===null){ toast('Data non riconosciuta. '+TITOLO_DATA,'err'); g('#qDate').focus(); return; }
+    if(scad===null){ toast('Scadenza non riconosciuta. '+TITOLO_DATA,'err'); g('#qDue').focus(); return; }
+    const d=addManual({
+      name:g('#qName').value,
+      amount:g('#qAmt').value.trim(),
+      docDate:data||todayISO(),
+      dueDate:scad||null,
+      category:q.cat, status:q.status,
+      tabId: tabId || (destSel?destSel.value:'')
+    });
+    if(!d){ toast('Importo non valido: usa il formato 1.234,56','err'); g('#qAmt').focus(); return; }
+    pulisciBozza(chiave);
+    avvisaAnnoDiverso(d);
+    toast('Aggiunta: '+d.name+(d.amount!=null?' — '+fmtEur(d.amount):''),'ok');
+    save(); render();
+    const n=$('#view .quickadd #qName'); if(n) n.focus();
+  };
+  g('#qAdd').onclick=aggiungi;
+  ['#qName','#qAmt','#qDate','#qDue'].forEach(sel=>{
+    const e=g(sel); if(!e) return;
+    e.addEventListener('keydown',ev=>{ if(ev.key==='Enter'){ ev.preventDefault(); aggiungi(); } });
+  });
+}
+
+/* ==============================================================================
+   6-ter. TABELLA MANUALE
+   Ogni tab può avere una tabella compilabile a mano, con i totali già pronti.
+   Le righe sono documenti a tutti gli effetti: entrano nella rendicontazione
+   complessiva come qualsiasi altra spesa.
+   ============================================================================== */
+/* L'unità di misura del consumo dipende dalla CATEGORIA della riga: la scegli
+   dal menù «Categoria» e la colonna «Consumo» si adegua da sola. */
+const UNITA_CATEGORIA={ energia:'kWh', gas:'LT', acqua:'MC' };
+const unitaCategoria = cat => UNITA_CATEGORIA[cat]||'';
+const unitaDoc = d => unitaCategoria(d&&d.category);
+
+/** quantità totali raggruppate per unità (un tab può mescolare le utenze) */
+function consumiPerUnita(list){
+  const m=new Map();
+  for(const d of list){
+    const u=unitaDoc(d);
+    if(!u||d.status==='ignorato') continue;
+    const q=+d.kwh||0, e=(d.amount==null?0:d.amount);
+    const r=m.get(u)||{q:0,eur:0};
+    r.q+=q; if(q) r.eur+=e;
+    m.set(u,r);
+  }
+  return [...m.entries()].filter(([,r])=>r.q>0);
+}
+
+/** categoria di partenza per una riga nuova, dedotta dal nome del tab */
+/* Categoria di partenza per la riga nuova, dedotta dal nome del tab.
+   Si usa lo stesso riconoscitore dei documenti, così vale per QUALSIASI tab:
+   «Assicurazioni» parte su Assicurazioni, «Vodafone» su Telefono/Internet,
+   non solo le tre utenze che erano previste a mano. */
+function categoriaDedotta(t){
+  if(t&&t.cat&&CATMAP[t.cat]) return t.cat;
+  return guessCategory(((t&&t.name)||'')+' '+((t&&t.url)||''));
+}
+
+/** vista attiva del tab: 'naviga' | 'tabella' | 'documenti' */
+function vistaDi(t){
+  const v=t.vista;
+  if(v==='tabella'||v==='documenti') return v;
+  if(v==='naviga'&&t.type==='site') return 'naviga';
+  return t.type==='site'?'naviga':'documenti';
+}
+function segmentiHTML(t){
+  const v=vistaDi(t);
+  const n=docsOf(t.id).length;
+  const b=(id,lab,extra='')=>`<button class="${v===id?'on':''}" data-vista="${id}">${lab}${extra}</button>`;
+  return `<div class="segbtns noprint">
+    ${t.type==='site'?b('naviga','🌐 Naviga'):''}
+    ${b('tabella','📋 Tabella manuale')}
+    ${b('documenti','⚙ Automatica',` <span class="cnt">${n}</span>`)}
+  </div>`;
+}
+function bindSegmenti(t){
+  $$('#view .segbtns button').forEach(b=>b.onclick=()=>{
+    confermaCampoAttivo(true);      // salva ciò che si stava scrivendo
+    t.vista=b.dataset.vista; save(); render();
+  });
+}
+
+/* Colonne della tabella: le stesse ovunque — tabella manuale, sezione
+   Automatica e rendicontazione complessiva — e in quest'ordine, che segue il
+   ragionamento di chi compila: quanto costa, in quante rate, ogni quanto,
+   quanto vale la singola rata, entro quando. */
+function colonneTabella(){
+  return [
+    {k:'docDate',  l:'Data',      w:124,tipo:'date'},
+    {k:'name',     l:'Descrizione',tipo:'text'},
+    {k:'file',     l:'Documento',tipo:'doc'},
+    {k:'kwh',      l:'Consumo',w:104,tipo:'num'},
+    {k:'category', l:'Categoria',tipo:'cat'},
+    {k:'amount',   l:'Importo €',w:106,tipo:'eur'},
+    {k:'rate',     l:'N° rate',tipo:'rate'},
+    {k:'frazionamento',l:'Frazionamento',tipo:'fraz'},
+    {k:'rataImporto',l:'Rate €',tipo:'rataimp'},
+    {k:'dueDate',  l:'Scadenza',w:124,tipo:'date'},
+    {k:'status',   l:'Stato',tipo:'stato'},
+    {k:'rimanenza',l:'Rimanenza',w:110,tipo:'rimanenza'},
+  ];
+}
+
+/* Colonne «Rate» e «Scadenza» quando le rate sono più d'una: invece di un solo
+   valore, ogni rata ha la SUA riga, dentro la stessa riga della spesa. Importo
+   e scadenza restano affiancati perché le due colonne usano righe della stessa
+   altezza, e ogni casella è modificabile sul posto. */
+const ALTEZZA_RATA=26;    // px: deve valere per entrambe le colonne, o si sfalsano
+
+function righeRata(d,campo){
+  const r=rateDi(d);
+  if(r.length<2) return null;
+  const oggi=todayISO();
+  return `<div class="rate-righe">${r.map(x=>{
+    const scaduta=!x.pagata&&x.data&&daysBetween(oggi,x.data)<0;
+    const cls=x.pagata?'pagata':scaduta?'scaduta':'';
+    const dentro = campo==='importo'
+      ? `<input class="cell-in num" data-rata-campo="importo" data-rata="${x.n-1}"
+             value="${x.importo!=null?fmtNum(x.importo):''}" placeholder="0,00"
+             title="Rata ${x.n} di ${r.length}${x.pagata?' — già pagata':''}">`
+      : campo==='data'
+      ? `<input class="cell-in data" data-rata-campo="data" data-rata="${x.n-1}" data-date="1"
+             value="${mostraData(x.data)}" placeholder="gg/mm/aaaa"
+             title="Scadenza della rata ${x.n} di ${r.length}. ${TITOLO_DATA}">`
+      /* lo stato si spunta rata per rata: appena la spunti, il suo importo esce
+         dalla rimanenza e passa fra i pagamenti fatti */
+      : `<label class="ratechk" title="Rata ${x.n} di ${r.length}: spunta quando l'hai pagata">
+             <input type="checkbox" data-rata="${x.n-1}" ${x.pagata?'checked':''}>
+             <span class="pill ${x.pagata?'pagato':scaduta?'scaduto':'da_pagare'}"><span class="dot"></span>${L(isEntrata(d),x.pagata?'pagata':scaduta?'scaduta':'da_pagare_r')}</span>
+           </label>`;
+    return `<div class="rata-riga ${cls}">${dentro}</div>`;
+  }).join('')}</div>`;
+}
+
+/** cella «Rate»: una riga per rata, oppure «—» se il pagamento è unico */
+function cellaRataImporto(d){
+  return righeRata(d,'importo')
+      || `<span class="consumo-no" title="Nessuna rata: è un pagamento unico">—</span>`;
+}
+/** cella «Scadenza»: una riga per rata, altrimenti la scadenza della spesa */
+function cellaScadenza(d,w){
+  return righeRata(d,'data') || inputData('dueDate',d.dueDate,w);
+}
+/** lo stato dell'intera voce: etichetta e menu in un elemento solo */
+function pillaStato(d){
+  const st=effStatus(d);
+  const e=isEntrata(d);
+  const lbl=L(e,st);
+  return `<span class="pill ${st}" title="${st==='scaduto'?L(e,'scaduto')+' — scadenza '+fmtDate(prossimaScadenza(d).data||d.dueDate):lbl}"><span class="dot"></span>
+    <select data-f="status">
+      <option value="da_pagare" ${d.status==='da_pagare'?'selected':''}>${st==='scaduto'?L(e,'scaduto'):L(e,'da_pagare')}</option>
+      <option value="pagato" ${d.status==='pagato'?'selected':''}>${L(e,'pagato')}</option>
+      <option value="ignorato" ${d.status==='ignorato'?'selected':''}>Ignorato</option>
+    </select></span>`;
+}
+/* Cella «Stato»: con più rate ognuna ha la sua spunta, in riga con il proprio
+   importo e la propria scadenza. Sotto resta lo stato dell'intera voce, che
+   serve per saldarla in un colpo solo o per metterla fra le ignorate. */
+function cellaStato(d){
+  const righe=righeRata(d,'stato');
+  if(!righe) return pillaStato(d);
+  return righe+`<div class="rata-riga voce" title="Stato dell'intera voce">${pillaStato(d)}</div>`;
+}
+
+/* Quanto resta davvero da versare per una voce: l'importo meno le rate già
+   spuntate. Senza rate è l'importo stesso (zero se la voce è già saldata):
+   è questo il numero che la rendicontazione porta a totale. */
+function rimanenza(d){
+  if(d.amount==null) return null;
+  if(d.status==='pagato') return 0;
+  const r=rateDi(d);
+  if(!r.length) return d.amount;
+  const versato=r.filter(x=>x.pagata).reduce((a,x)=>a+(x.importo||0),0);
+  return Math.round((d.amount-versato)*100)/100;
+}
+
+/** cella «Rimanenza»: sola lettura, si muove da sé quando spunti una rata */
+function cellaRimanenza(d){
+  const v=rimanenza(d);
+  if(v==null) return `<span class="consumo-no" title="Questa voce non ha ancora un importo">—</span>`;
+  const pagate=rateDi(d).filter(x=>x.pagata).length;
+  const perche = pagate
+    ? `${fmtEur(d.amount)} meno ${pagate} rat${pagate===1?'a':'e'} già pagat${pagate===1?'a':'e'}`
+    : (v===0?'Voce già saldata':'Nessuna rata pagata: resta tutto l\'importo');
+  return `<span class="rimanenza${v===0?' saldata':''}" title="${esc(perche)}">${fmtEur(v)}</span>`;
+}
+
+/* La descrizione è l'unico campo di testo libero: ci sta un nome lungo, o due
+   righe di appunto. Enter conferma (e nella riga nuova inserisce), Shift+Enter
+   va a capo — la convenzione a cui si è abituati. */
+function cellaDescrizione(d){
+  return `<textarea class="cell-in desc" data-f="name" rows="1" placeholder="descrizione"
+    title="Shift+Invio per andare a capo">${esc(d.name||'')}</textarea>`;
+}
+
+/** cella «Consumo»: l'unità arriva dalla categoria scelta nella riga */
+function cellaConsumo(d){
+  const u=unitaDoc(d);
+  if(!u) return `<span class="consumo-no" title="Questa categoria non ha un consumo da registrare">—</span>`;
+  return `<span class="consumo"><input class="cell-in num" data-f="kwh"
+      value="${d.kwh!=null?fmtQty(d.kwh):''}" placeholder="0" style="width:66px"><span class="um">${esc(u)}</span></span>`;
+}
+
+/* Classe della cella. Descrizione, Rate e Scadenza hanno bisogno di una classe
+   propria: le prime due per la larghezza, le ultime due perché ospitano
+   l'elenco delle rate e non devono avere spaziatura, o i due elenchi
+   partirebbero da altezze diverse e non sarebbero più affiancati. */
+function classeCella(c){
+  if(c.k==='name')        return 'name';
+  if(c.k==='dueDate')     return 'scad';
+  if(c.k==='rataImporto') return 'num rataimp';
+  if(c.k==='rimanenza')   return 'num rimanenza';
+  if(c.k==='status')      return 'stato';
+  if(c.tipo==='eur'||c.tipo==='num') return 'num';
+  return c.tipo;
+}
+
+function cellaTabella(d,c){
+  if(c.k==='kwh')     return cellaConsumo(d);
+  if(c.tipo==='rate')    return cellaRate(d);
+  if(c.tipo==='rataimp') return cellaRataImporto(d);
+  if(c.tipo==='rimanenza') return cellaRimanenza(d);
+  if(c.tipo==='fraz') return cellaFrazionamento(d);
+  if(c.tipo==='doc')  return cellaDocumento(d);
+  if(c.k==='dueDate') return cellaScadenza(d,c.w);
+  if(c.tipo==='date') return inputData(c.k,d[c.k],c.w);
+  if(c.tipo==='num')  return `<input class="cell-in num" data-f="${c.k}" value="${d[c.k]!=null?fmtQty(d[c.k]):''}" placeholder="0" style="width:${c.w}px">`;
+  if(c.tipo==='eur')  return `<input class="cell-in num" data-f="amount" value="${d.amount!=null?fmtNum(d.amount):''}" placeholder="0,00" style="width:${c.w}px">`;
+  if(c.tipo==='cat')  return `<select class="cell-in" data-f="category" style="width:146px">${CATS.map(x=>`<option value="${x.id}" ${d.category===x.id?'selected':''}>${esc(x.label)}</option>`).join('')}</select>`;
+  if(c.tipo==='stato') return cellaStato(d);
+  if(c.k==='name') return cellaDescrizione(d);
+  return `<input class="cell-in" data-f="${c.k}" value="${esc(d[c.k]||'')}" placeholder="descrizione">`;
+}
+
+/** riepilogo dei consumi per la striscia dei totali */
+function extraConsumi(list){
+  const c=consumiPerUnita(list);
+  if(!c.length) return '';
+  return c.map(([u,r])=>{
+    const medio=r.q>0?r.eur/r.q:null;
+    return `<span class="tv"><b>${fmtQty(r.q)}</b> ${esc(u)}${medio!=null?` · ${fmtEur(medio)}/${esc(u)}`:''}</span>`;
+  }).join('');
+}
+
+function tabellaHTML(t){
+  const cols=colonneTabella();
+  const list=ordinaTabella(docsDiTab(t.id));
+  const T=totals(list);
+
+  const riga=d=>`<tr data-id="${d.id}" class="${numeroRate(d)>1?'con-rate':''}">
+    ${cellaEspandi(d)}
+    ${cols.map(c=>`<td class="${classeCella(c)}">${cellaTabella(d,c)}</td>`).join('')}
+    <td class="noprint" style="white-space:nowrap">
+      <button class="sm ghost" data-act="info" title="Dettagli">ⓘ</button>
+      <button class="sm ghost" data-act="del" title="Elimina riga">🗑</button>
+    </td></tr>`+rigaRate(d,cols.length+2);
+
+  const bz=bozza('tab:'+t.id);
+  const catNuova=bz.cat||categoriaDedotta(t);
+  const uNuova=unitaCategoria(catNuova);
+  const nuova=`<tr class="riga-nuova noprint">
+    <td class="espandi"></td>
+    <td>${inputData('docDate',bz.data||'',124,'nData')}</td>
+    <td class="name"><textarea id="nName" class="cell-in desc" rows="1" placeholder="nuova riga…" autocomplete="off"
+      title="Invio inserisce la riga · Shift+Invio va a capo">${esc(bz.name||'')}</textarea></td>
+    <td class="doc"><span class="hint" style="margin:0">dopo l'inserimento</span></td>
+    <td class="num"><span class="consumo"><input id="nKwh" class="cell-in num" placeholder="0" style="width:66px"
+        value="${esc(bz.kwh||'')}" ${uNuova?'':'disabled'}><span class="um" id="nUm">${esc(uNuova||'—')}</span></span></td>
+    <td><select id="nCat" class="cell-in" style="width:146px">${CATS.map(c=>`<option value="${c.id}" ${c.id===catNuova?'selected':''}>${esc(c.label)}</option>`).join('')}</select></td>
+    <td class="num"><input id="nAmt" class="cell-in num" placeholder="0,00" style="width:106px" value="${esc(bz.amt||'')}"></td>
+    <td class="rate"><input id="nRate" class="cell-in num rate" placeholder="1" inputmode="numeric"
+        value="${esc(bz.rate||'')}" title="Numero di rate (1 = pagamento unico)"></td>
+    <td class="fraz"><select id="nFraz" class="cell-in" title="Ogni quanto torna questa spesa">
+      <option value="" ${bz.fraz?'':'selected'}>—</option>
+      ${Object.entries(FRAZIONAMENTI).map(([k,v])=>`<option value="${k}" ${bz.fraz===k?'selected':''}>${esc(v.label)}</option>`).join('')}
+    </select></td>
+    <td class="num"><span class="consumo-no" title="L'importo della rata si calcola dopo l'inserimento">—</span></td>
+    <td class="scad">${inputData('dueDate',bz.due||'',124,'nDue')}</td>
+    <td><select id="nSt" class="cell-in">
+      <option value="da_pagare" ${bz.st!=='pagato'?'selected':''}>${L(isEntrataTab(t),'da_pagare')}</option>
+      <option value="pagato" ${bz.st==='pagato'?'selected':''}>${L(isEntrataTab(t),'pagato')}</option></select></td>
+    <td class="num"><span class="consumo-no" title="La rimanenza si calcola dopo l'inserimento">—</span></td>
+    <td class="noprint"><button class="sm primary" id="nAdd">＋</button></td>
+  </tr>`;
+
+  return `<div class="panel">
+    <h2>Tabella manuale — ${esc(t.name)}</h2>
+    <p class="sub">Scrivi nella prima riga e premi Invio: la voce si sistema da sola in ordine di data.
+      L'unità del consumo segue la categoria scelta (Luce → kWh, Gas → LT, Acqua → MC).</p>
+    ${strisciaTotali('TOTALE '+t.name.toUpperCase(),T,extraConsumi(list),isEntrataTab(t))}
+    <div class="tablewrap"><table>
+      <thead><tr><th class="espandi"></th>${cols.map(c=>`<th class="${c.k==='name'?'name':c.k==='dueDate'?'scad':(c.tipo==='eur'||c.tipo==='num'?'num':'')}">${esc(c.l)}</th>`).join('')}<th class="noprint"></th></tr></thead>
+      <tbody>${nuova}${list.map(riga).join('')}</tbody>
+    </table></div>
+    ${list.length?'':`<div class="tabvuota">Nessuna riga${annoAttivo()?' nel '+esc(annoAttivo()):''}. Compila la prima riga qui sopra.</div>`}
+  </div>`;
+}
+
+function bindTabella(t){
+  const g=id=>$(id);
+  const chiave='tab:'+t.id;
+  bindBozza(chiave,{'#nData':'data','#nName':'name','#nKwh':'kwh',
+                    '#nCat':'cat','#nDue':'due','#nSt':'st','#nAmt':'amt',
+                    '#nRate':'rate','#nFraz':'fraz'});
+  const dataDi=id=>{ const e=g(id); return e&&e.value.trim()?parseDataLibera(e.value):null; };
+  /* incollando un periodo intero nel campo «Data» si tiene comunque memoria
+     dell'intervallo: serve a riconoscere la bolletta che parla dello stesso mese */
+  let periodoIncollato=null;
+  const aggiungi=async()=>{
+    const data=dataDi('#nData'), scad=dataDi('#nDue');
+    if(g('#nData').value.trim()&&!data){ toast('Data non riconosciuta. '+TITOLO_DATA,'err'); g('#nData').focus(); return; }
+    if(g('#nDue').value.trim()&&!scad){ toast('Scadenza non riconosciuta. '+TITOLO_DATA,'err'); g('#nDue').focus(); return; }
+    const quando=data||todayISO();
+    /* stessa data di un documento già arrivato da solo: decide l'utente */
+    const scontro=collisioneCon(t.id,quando,{manuale:true});
+    if(scontro){
+      const r=await chiediCollisione(scontro,{titoloNuovo:g('#nName').value||'nuova riga',manuale:true});
+      if(!r.scelta) return;
+      if(r.scelta==='sovrascrivi'){
+        scontro.name=g('#nName').value.trim()||scontro.name;
+        const imp=parseAmountString(g('#nAmt').value.trim());
+        if(imp!=null) scontro.amount=imp;
+        scontro.docDate=quando;
+        if(scad) scontro.dueDate=scad;
+        scontro.category=g('#nCat').value;
+        scontro.status=g('#nSt').value;
+        if(unitaCategoria(scontro.category)){
+          const k=parseAmountString(g('#nKwh').value.trim());
+          if(k!=null) scontro.kwh=k;
+        }
+        pulisciBozza(chiave); save(); render();
+        toast('Voce esistente aggiornata','ok');
+        return;
+      }
+    }
+    const periodo=(periodoIncollato&&periodoIncollato.da===quando)?periodoIncollato:null;
+    const d=addManual({
+      name:g('#nName').value,
+      amount:g('#nAmt').value.trim(),
+      docDate:quando,
+      dueDate:scad,
+      category:g('#nCat').value,
+      status:g('#nSt').value,
+      kwh:g('#nKwh')?.value.trim(),
+      rate:g('#nRate')?.value.trim(),
+      frazionamento:g('#nFraz')?.value,
+      periodoDa:periodo&&periodo.da, periodoA:periodo&&periodo.a,
+      tabId:t.id
+    });
+    if(!d){ toast('Importo non valido: usa il formato 1.234,56','err'); g('#nAmt').focus(); return; }
+    pulisciBozza(chiave);
+    periodoIncollato=null;
+    save();
+    avvisaAnnoDiverso(d);
+    toast('Riga aggiunta'+(d.amount!=null?' — '+fmtEur(d.amount):''),'ok');
+    render();
+    const n=$('#nName'); if(n) n.focus();
+  };
+  // cambiando categoria, l'unità accanto al consumo si adegua subito
+  const nc=$('#nCat'), nk=$('#nKwh'), num=$('#nUm');
+  if(nc) nc.addEventListener('change',()=>{
+    const u=unitaCategoria(nc.value);
+    if(num) num.textContent=u||'—';
+    if(nk){ nk.disabled=!u; if(!u) nk.value=''; }
+  });
+  const add=$('#nAdd'); if(add) add.onclick=aggiungi;
+  ['#nName','#nAmt','#nKwh','#nData','#nDue'].forEach(s=>{
+    const e=$(s); if(!e) return;
+    e.addEventListener('keydown',ev=>{
+      if(ev.key!=='Enter') return;
+      if(e.tagName==='TEXTAREA'&&ev.shiftKey) return;   // a capo nella descrizione
+      ev.preventDefault(); aggiungi();
+    });
+  });
+  /* incollando «01/06/2026 - 30/06/2026» il campo prende la data d'inizio e
+     l'intervallo resta memorizzato per il riconoscimento dei doppioni */
+  const nd=$('#nData');
+  if(nd) nd.addEventListener('paste',ev=>{
+    const testo=(ev.clipboardData||window.clipboardData)?.getData('text')||'';
+    const ds=allDates(testo);
+    if(ds.length<2) return;
+    ev.preventDefault();
+    nd.value=fmtDataIT(ds[0].v);
+    periodoIncollato={da:ds[0].v,a:ds[1].v};
+    setBozza(chiave,'data',nd.value);
+    toast('Periodo riconosciuto: '+fmtDataIT(ds[0].v)+' → '+fmtDataIT(ds[1].v),'ok');
+    const nn=$('#nName'); if(nn) nn.focus();
+  });
+  bindRows();
+}
+
+/* raccoglie i file da un DataTransfer, anche cartelle */
+async function filesFromDataTransfer(dt){
+  const out=[];
+  const items=[...(dt.items||[])];
+  const entries=items.map(i=>i.webkitGetAsEntry&&i.webkitGetAsEntry()).filter(Boolean);
+  if(entries.length){
+    const walk=async(entry,prefix)=>{
+      if(entry.isFile){
+        const f=await new Promise((res,rej)=>entry.file(res,rej)).catch(()=>null);
+        if(f) out.push({name:f.name,path:prefix+f.name,blob:f,lastModified:f.lastModified});
+      } else if(entry.isDirectory){
+        const rd=entry.createReader();
+        let batch;
+        do{
+          batch=await new Promise(res=>rd.readEntries(res,()=>res([])));
+          for(const e of batch) await walk(e,prefix+entry.name+'/');
+        }while(batch.length);
+      }
+    };
+    for(const e of entries) await walk(e,'');
+    if(out.length) return out;
+  }
+  for(const f of dt.files) out.push({name:f.name,path:f.webkitRelativePath||f.name,blob:f,lastModified:f.lastModified});
+  return out;
+}
+
+/* ==============================================================================
+   7. CARTELLA COLLEGATA (File System Access API)
+   ============================================================================== */
+let FSA = 'showDirectoryPicker' in window;
+const watchers = new Map(); // tabId -> intervalId
+
+async function pickFolderFor(tabId){
+  if(!FSA){ toast('Il tuo browser non supporta le cartelle collegate. Usa Chrome o Edge.','err'); return; }
+  try{
+    const h=await window.showDirectoryPicker({mode:'read',id:'rendiconto-business'});
+    await DB.set('handles','dir:'+tabId,h);
+    const t=tabById(tabId);
+    t.watch={name:h.name, enabled:true, lastScan:null, count:0};
+    save(); render();
+    toast('Cartella «'+h.name+'» collegata','ok');
+    scanFolder(tabId,true);
+  }catch(e){ if(e.name!=='AbortError') toast('Errore: '+e.message,'err'); }
+}
+async function unlinkFolder(tabId){
+  stopWatch(tabId);
+  await DB.del('handles','dir:'+tabId).catch(()=>{});
+  const t=tabById(tabId); if(t) delete t.watch;
+  save(); render();
+}
+async function getDirHandle(tabId,prompt=false){
+  const h=await DB.get('handles','dir:'+tabId).catch(()=>null);
+  if(!h) return null;
+  let perm=await h.queryPermission({mode:'read'});
+  if(perm!=='granted'&&prompt) perm=await h.requestPermission({mode:'read'});
+  return perm==='granted'?h:{__denied:true,handle:h};
+}
+async function scanFolder(tabId,interactive=false){
+  const t=tabById(tabId); if(!t||!t.watch) return;
+  const h=await getDirHandle(tabId,interactive);
+  if(!h){ return; }
+  if(h.__denied){ t.watch.error='Permesso non concesso — clicca «Riattiva»'; save(); if(currentTab()===tabId) render(); return; }
+  delete t.watch.error;
+  const found=[];
+  const walk=async(dir,prefix,depth)=>{
+    if(depth>4) return;
+    for await(const [name,ent] of dir.entries()){
+      if(name.startsWith('.')) continue;
+      if(ent.kind==='file'){
+        const f=await ent.getFile().catch(()=>null);
+        if(f) found.push({name:f.name,path:prefix+f.name,blob:f,lastModified:f.lastModified});
+      } else await walk(ent,prefix+name+'/',depth+1);
+    }
+  };
+  try{ await walk(h,'',0); }
+  catch(e){ t.watch.error=e.message; save(); return; }
+  const added=await addDocuments(tabId,found);
+  t.watch.lastScan=new Date().toISOString();
+  t.watch.count=found.length;
+  save();
+  const ab=(added.abbinati||[]).length, sv=(added.sovrascritti||[]).length;
+  if(added.length||ab||sv){
+    const m=[added.length?added.length+' nuovi documenti':'',
+             ab?ab+' abbinati alle righe esistenti':'',
+             sv?sv+' aggiornati':''].filter(Boolean).join(' · ');
+    toast(m+' da «'+t.name+'»','ok');
+    notify(t.name, m);
+  }
+  if(currentTab()===tabId||currentTab()==='summary') render();
+  return added.length;
+}
+function startWatch(tabId){
+  stopWatch(tabId);
+  const sec=clamp(+S.settings.autoScanSec||60,10,3600);
+  watchers.set(tabId, setInterval(()=>{ const t=tabById(tabId); if(t?.watch?.enabled) scanFolder(tabId,false); }, sec*1000));
+}
+function stopWatch(tabId){ if(watchers.has(tabId)){ clearInterval(watchers.get(tabId)); watchers.delete(tabId); } }
+function refreshWatchers(){
+  S.tabs.forEach(t=>{ if(t.watch?.enabled) startWatch(t.id); else stopWatch(t.id); });
+}
+
+function notify(title,body){
+  if(!('Notification' in window)||Notification.permission!=='granted') return;
+  try{ new Notification(title,{body}); }catch(_){}
+}
+
+/* ==============================================================================
+   8. CALCOLI RENDICONTO
+   ============================================================================== */
+function effStatus(d){
+  if(d.status==='pagato'||d.status==='ignorato') return d.status;
+  // con le rate conta la prima non ancora pagata, non la scadenza complessiva
+  const s=prossimaScadenza(d).data;
+  if(s && daysBetween(todayISO(),s)<0) return 'scaduto';
+  return 'da_pagare';
+}
+/* L'anno di una voce è quello della SCADENZA: è quando la spesa va onorata che
+   dice a che anno appartiene, non quando è stato emesso il documento — una
+   bolletta di dicembre che si paga a gennaio pesa sull'anno nuovo. Le voci
+   senza scadenza ripiegano sulla data del documento, o sparirebbero da tutti
+   gli anni. Vale ovunque: rendicontazione, tabelle manuali, sezione Automatica. */
+/* La data che conta per anno, mese, periodo e ordinamento. Con più rate è la
+   PRIMA rata, non «dueDate»: quando le rate sono più d'una la colonna Scadenza
+   mostra loro, quel campo sparisce dalla vista e non lo si può più correggere.
+   Restava indietro e portava la voce in un anno che non era il suo — una copia
+   con le rate nel 2027 compariva fra quelle del 2026. */
+function dataUtile(d){
+  if(!d) return '';
+  const r=rateDi(d).map(x=>x.data).filter(Boolean).sort();
+  if(r.length) return r[0];
+  return d.dueDate||d.docDate||'';
+}
+/** riporta «dueDate» sulla prima rata: il campo nascosto non deve mentire */
+function allineaScadenzaAlleRate(d){
+  if(!d||!Array.isArray(d.rateLista)||!d.rateLista.length) return false;
+  const prima=d.rateLista.map(x=>x.data).filter(Boolean).sort()[0];
+  if(!prima||d.dueDate===prima) return false;
+  d.dueDate=prima;
+  return true;
+}
+const annoDi   = d => dataUtile(d).slice(0,4);
+const meseDi   = d => dataUtile(d).slice(0,7);
+
+/* Anno, mesi e periodo sono un filtro solo, e guardano tutti la stessa data —
+   la scadenza. Sta in una funzione unica perché deve valere identico in
+   rendicontazione e in ogni tab: se le due strade divergono, si finisce col
+   vedere in un posto quello che nell'altro è nascosto. */
+const MESI_BREVI=['GEN','FEB','MAR','APR','MAG','GIU','LUG','AGO','SET','OTT','NOV','DIC'];
+const MESI_NOMI =['gennaio','febbraio','marzo','aprile','maggio','giugno',
+                  'luglio','agosto','settembre','ottobre','novembre','dicembre'];
+const mesiAttivi = () => Array.isArray(S.settings.mesi) ? S.settings.mesi : [];
+
+function nelPeriodoScelto(d){
+  const anno=annoAttivo();
+  if(anno && annoDi(d)!==anno) return false;
+  const mesi=mesiAttivi();
+  if(mesi.length && !mesi.includes(dataUtile(d).slice(5,7))) return false;
+  const f=S.settings.filter||{}, q=dataUtile(d);
+  if(f.from && (!q || q<f.from)) return false;
+  if(f.to   && (!q || q>f.to))   return false;
+  return true;
+}
+
+/** documenti di un tab, limitati ad anno, mesi e periodo scelti */
+function docsDiTab(id){
+  return docsOf(id).filter(nelPeriodoScelto);
+}
+/** ordine della tabella manuale: prima le righe ancora senza data, poi le altre
+    dalla più recente — così quello che si aggiunge resta subito sotto la riga
+    di inserimento, e appena c'è la data va al posto giusto */
+function ordinaTabella(list){
+  return [...list].sort((a,b)=>{
+    const da=a.docDate||'', db=b.docDate||'';
+    if(!da&&!db) return (b.addedAt||'')<(a.addedAt||'')?-1:1;
+    if(!da) return -1;
+    if(!db) return 1;
+    return da<db?1:da>db?-1:0;
+  });
+}
+
+/** anni presenti nei documenti (per scadenza), più quello corrente, dal più recente */
+function anniDisponibili(){
+  const s=new Set(S.docs.map(annoDi).filter(a=>/^\d{4}$/.test(a)));
+  s.add(String(new Date().getFullYear()));
+  return [...s].sort().reverse();
+}
+const annoAttivo=()=>S.settings.anno||'';
+
+function filteredDocs(){
+  const f=S.settings.filter;
+  const q=(f.q||'').toLowerCase().trim();
+  return S.docs.filter(d=>{
+    if(!nelPeriodoScelto(d)) return false;        // anno, mesi e periodo di scadenza
+    if(f.tab && d.tabId!==f.tab) return false;
+    if(f.cat && d.category!==f.cat) return false;
+    if(f.status){ if(f.status==='scaduto'? effStatus(d)!=='scaduto' : d.status!==f.status) return false; }
+    if(q && !((d.name+' '+d.path+' '+(d.note||'')+' '+catLabel(d.category)+' '+(tabById(d.tabId)?.name||'')).toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+function sortDocs(list){
+  const {by,dir}=S.settings.sort, s=dir==='asc'?1:-1;
+  const key=d=>({
+    date:d.docDate||'', due:dataUtile(d)||'9999', amount:d.amount==null?-1:d.amount,
+    name:d.name.toLowerCase(), cat:catLabel(d.category), tab:(tabById(d.tabId)?.name||''), status:effStatus(d)
+  }[by]);
+  return [...list].sort((a,b)=>{ const ka=key(a),kb=key(b); return ka<kb?-s:ka>kb?s:0; });
+}
+/* «total» è quanto valgono i documenti; «rimanenza» è quanto resta da versare
+   dopo aver tolto le rate già spuntate — dove non ci sono rate i due numeri
+   coincidono. È la rimanenza il valore che la rendicontazione porta a totale. */
+function totals(list){
+  const t={count:list.length,total:0,rimanenza:0,pagato:0,daPagare:0,scaduto:0,senzaImporto:0};
+  const oggi=todayISO();
+  for(const d of list){
+    if(d.amount==null){ t.senzaImporto++; continue; }
+    if(d.status==='ignorato') continue;
+    t.total+=d.amount;
+    t.rimanenza+=rimanenza(d)||0;
+    if(d.status==='pagato'){ t.pagato+=d.amount; continue; }
+    /* con le rate si conta rata per rata: quelle già saldate stanno fra i
+       pagamenti fatti, non fra quelli da fare */
+    const r=rateDi(d);
+    if(r.length){
+      for(const x of r){
+        if(x.importo==null) continue;
+        if(x.pagata) t.pagato+=x.importo;
+        else {
+          t.daPagare+=x.importo;
+          if(x.data&&daysBetween(oggi,x.data)<0) t.scaduto+=x.importo;
+        }
+      }
+      continue;
+    }
+    const st=effStatus(d);
+    if(st==='scaduto'){ t.scaduto+=d.amount; t.daPagare+=d.amount; }
+    else t.daPagare+=d.amount;
+  }
+  return t;
+}
+/** selettore dell'anno, riusabile: in rendicontazione e in ogni tab */
+function annoBarHTML(riepilogo){
+  const anno=annoAttivo();
+  const spiega="Anno, mesi e periodo si contano sulla scadenza. Le voci senza scadenza usano la data del documento.";
+  const mesi=mesiAttivi();
+  const f=S.settings.filter||{};
+  const attivi = mesi.length||f.from||f.to;
+  return `<div class="annobar noprint">
+    <div class="annoriga">
+      <span class="annok" title="${spiega}">Anno di scadenza</span>
+      <select id="fAnno" class="annosel" title="${spiega}">
+        <option value="">Tutti gli anni</option>
+        ${anniDisponibili().map(a=>`<option value="${a}" ${anno===a?'selected':''}>${a}</option>`).join('')}
+      </select>
+      <span class="annoval">${anno?esc(anno):'tutti'}</span>
+      <div class="spacer"></div>
+      <span class="annoinfo">${riepilogo||''}</span>
+    </div>
+    <!-- seconda riga: i mesi da guardare dentro l'anno, e il periodo a mano -->
+    <div class="annoriga mesiriga">
+      <span class="annok" title="Scegli uno o più mesi: si vedono solo le scadenze di quei mesi.">Mese di scadenza</span>
+      <div class="mesibtns" id="fMesi">
+        <button class="mese tutti ${mesi.length?'':'on'}" data-mese="" title="Tutti i mesi dell'anno">Tutti</button>
+        ${MESI_BREVI.map((m,i)=>{
+          const v=String(i+1).padStart(2,'0');
+          return `<button class="mese ${mesi.includes(v)?'on':''}" data-mese="${v}"
+                    title="${MESI_NOMI[i]}${mesi.includes(v)?' — premi di nuovo per togliere':''}">${m}</button>`;
+        }).join('')}
+      </div>
+      <label class="fld periodo">Periodo dal${inputDataForm('pDa',f.from,'style="width:120px"')}</label>
+      <label class="fld periodo">Periodo al${inputDataForm('pA',f.to,'style="width:120px"')}</label>
+      ${attivi?`<button id="pReset" class="sm" title="Torna a tutto l'anno">✕ Azzera mesi e periodo</button>`:''}
+    </div>
+  </div>`;
+}
+function bindAnno(){
+  const s=$('#view #fAnno');
+  if(s) s.onchange=e=>{ confermaCampoAttivo(true); S.settings.anno=e.target.value; save(); render(); };
+
+  /* i mesi si accendono e si spengono uno per uno: «Tutti» li spegne tutti */
+  $$('#view #fMesi .mese').forEach(b=>b.onclick=()=>{
+    confermaCampoAttivo(true);
+    const v=b.dataset.mese;
+    if(!v){ S.settings.mesi=[]; }
+    else {
+      const set=new Set(mesiAttivi());
+      if(set.has(v)) set.delete(v); else set.add(v);
+      S.settings.mesi=[...set].sort();
+    }
+    save(); render();
+  });
+
+  const f=S.settings.filter;
+  const periodo=(sel,campo)=>{
+    const e=$('#view '+sel); if(!e) return;
+    e.onchange=()=>{
+      const v=leggiData('#view '+sel);
+      if(v===null){ toast('Data non riconosciuta. '+TITOLO_DATA,'err'); return; }
+      f[campo]=v; save(); render();
+    };
+  };
+  periodo('#pDa','from');
+  periodo('#pA','to');
+
+  const az=$('#view #pReset');
+  if(az) az.onclick=()=>{ S.settings.mesi=[]; f.from=''; f.to=''; save(); render(); };
+}
+
+/** striscia dei totali, in cima alle tabelle */
+function strisciaTotali(titolo,T,extra,entrata){
+  const scaduto=T.scaduto?`<span class="tv crit">Scaduto <b>${fmtEur(T.scaduto)}</b></span>`:'';
+  const senza=T.senzaImporto?`<span class="tv">${T.senzaImporto} senza importo</span>`:'';
+  return `<div class="totalbar">
+    <div class="tmain">
+      <span class="tlabel">${esc(titolo)}</span><span class="flusso ${entrata?'in':'out'}">${entrata?'Entrate':'Uscite'}</span>
+      <span class="tbig">${fmtEur(T.total)}</span>
+      <span class="tv">${T.count} rig${T.count===1?'a':'he'}</span>
+      ${extra||''}
+    </div>
+    <div class="tsub">
+      <span class="tv">Rimanenza <b>${fmtEur(T.rimanenza)}</b></span>
+      <span class="tv warn">${L(entrata,'daTot')} <b>${fmtEur(T.daPagare)}</b></span>
+      <span class="tv good">${L(entrata,'giaTot')} <b>${fmtEur(T.pagato)}</b></span>
+      ${scaduto}${senza}
+    </div>
+  </div>`;
+}
+
+/* ==============================================================================
+   RATE E FRAZIONAMENTO
+   La voce resta una sola e vale il totale: le rate sono un dettaglio che si
+   apre a tendina. Così i totali non vengono mai contati due volte.
+   ============================================================================== */
+const FRAZIONAMENTI={
+  mensile:    {label:'Mensile',     mesi:1},
+  bimestrale: {label:'Bimestrale',  mesi:2},
+  trimestrale:{label:'Trimestrale', mesi:3},
+  quadrimestrale:{label:'Quadrimestrale', mesi:4},
+  semestrale: {label:'Semestrale',  mesi:6},
+  annuale:    {label:'Annuale',     mesi:12},
+};
+/* Le rate nascono calcolate (totale diviso in parti uguali). Appena se ne
+   aggiunge, se ne toglie o se ne modifica una, l'elenco viene «materializzato»
+   in d.rateLista e da quel momento comanda quello: serve per le rate che non
+   erano previste o che arrivano dopo, con importi e date loro. */
+const rateManuali = d => Array.isArray(d.rateLista) && d.rateLista.length>0;
+const numeroRate = d => {
+  if(rateManuali(d)) return d.rateLista.length;
+  const n=Math.round(+d.rate||1); return (n>1&&n<=240)?n:1;
+};
+const frazDi     = d => FRAZIONAMENTI[d.frazionamento]?d.frazionamento:'mensile';
+
+/** somma di mesi tenendo conto dei mesi corti (31 gennaio + 1 mese = 28/29 feb) */
+function aggiungiMesi(iso,m){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(iso||'')) return iso||null;
+  const [y,mo,g]=iso.split('-').map(Number);
+  const tot=mo-1+m;
+  const ny=y+Math.floor(tot/12), nm=((tot%12)+12)%12;
+  const ultimo=new Date(ny,nm+1,0).getDate();
+  return `${ny}-${String(nm+1).padStart(2,'0')}-${String(Math.min(g,ultimo)).padStart(2,'0')}`;
+}
+
+/** le rate di una voce: importi che sommati danno esattamente il totale */
+function rateDi(d){
+  if(rateManuali(d))
+    return d.rateLista.map((x,i)=>({n:i+1,data:x.data||null,importo:(x.importo==null?null:+x.importo),pagata:!!x.pagata,manuale:true}));
+  const n=numeroRate(d);
+  if(n<2) return [];
+  const passo=FRAZIONAMENTI[frazDi(d)].mesi;
+  const base=d.dueDate||d.docDate||todayISO();
+  const cent=(d.amount==null)?null:Math.round(d.amount*100);
+  const quota=(cent==null)?null:Math.floor(cent/n);
+  const pagate=new Set(d.ratePagate||[]);
+  const out=[];
+  for(let i=0;i<n;i++){
+    const c=(cent==null)?null:(i===n-1?cent-quota*(n-1):quota);   // il resto sull'ultima
+    out.push({n:i+1, data:aggiungiMesi(base,passo*i), importo:c==null?null:c/100, pagata:pagate.has(i)});
+  }
+  return out;
+}
+const rateResidue = d => rateDi(d).filter(r=>!r.pagata);
+
+/* --- operazioni sulle rate ------------------------------------------------ */
+/** passa dalle rate calcolate a un elenco modificabile, senza cambiare nulla */
+function materializzaRate(d){
+  if(rateManuali(d)) return d.rateLista;
+  const base=rateDi(d);
+  d.rateLista=(base.length?base:[{data:d.dueDate||d.docDate||todayISO(),importo:d.amount,pagata:d.status==='pagato'}])
+    .map(x=>({data:x.data,importo:x.importo,pagata:!!x.pagata}));
+  delete d.ratePagate;
+  return d.rateLista;
+}
+/** il totale della voce è sempre la somma delle sue rate */
+function aggiornaTotaleDaRate(d){
+  if(!rateManuali(d)) return;
+  const s=d.rateLista.reduce((a,x)=>a+(x.importo==null?0:+x.importo),0);
+  d.amount=Math.round(s*100)/100;
+  d.rate=d.rateLista.length;
+  allineaScadenzaAlleRate(d);      // spostando una rata si sposta la scadenza
+  const tutte=d.rateLista.length>0&&d.rateLista.every(x=>x.pagata);
+  if(tutte) d.status='pagato'; else if(d.status==='pagato') d.status='da_pagare';
+}
+/** accoda una rata all'elenco personalizzato, distanziata dal frazionamento */
+function aggiungiRataInCoda(d){
+  const lista=d.rateLista;
+  const ultima=lista[lista.length-1];
+  const passo=FRAZIONAMENTI[frazDi(d)].mesi;
+  lista.push({
+    data: ultima&&ultima.data ? aggiungiMesi(ultima.data,passo) : (d.dueDate||todayISO()),
+    importo: ultima?ultima.importo:null,
+    pagata: false
+  });
+}
+
+/** aggiunge una rata non prevista */
+function aggiungiRata(d){
+  materializzaRate(d);
+  aggiungiRataInCoda(d);
+  if(!d.frazionamento) d.frazionamento='mensile';
+  aggiornaTotaleDaRate(d);
+  righeAperte.add(d.id);
+  save(); render();
+  toast('Rata aggiunta — totale ora '+fmtEur(d.amount),'ok');
+}
+function rimuoviRata(d,i){
+  if(!rateManuali(d)) materializzaRate(d);
+  if(d.rateLista.length<=1){ toast('Deve restare almeno una rata','err'); return; }
+  d.rateLista.splice(i,1);
+  aggiornaTotaleDaRate(d);
+  save(); render();
+}
+/** torna alla divisione automatica in parti uguali */
+function ridividiRate(d){
+  const n=numeroRate(d);
+  const tot=d.amount;
+  const prima=(d.rateLista&&d.rateLista[0]&&d.rateLista[0].data)||d.dueDate||d.docDate;
+  delete d.rateLista;
+  d.rate=n; d.dueDate=prima||d.dueDate;
+  d.amount=tot;
+  d.ratePagate=[];
+  save(); render();
+  toast(n+' rate ridivise in parti uguali','ok');
+}
+
+/** la scadenza che conta: con più rate è quella della prima non ancora pagata */
+function prossimaScadenza(d){
+  const r=rateDi(d);
+  if(!r.length) return {data:d.dueDate||null, etichetta:''};
+  const p=r.find(x=>!x.pagata);
+  if(!p) return {data:null, etichetta:'tutte le rate pagate'};
+  return {data:p.data, etichetta:`rata ${p.n} di ${r.length}`};
+}
+
+/** somma dei consumi di una sola unità di misura (kWh, LT, MC) */
+function sommaConsumo(list,unita){
+  return list.reduce((a,d)=>a+((d.status==='ignorato'||unitaDoc(d)!==unita)?0:(+d.kwh||0)),0);
+}
+function groupSum(list,keyFn){
+  const m=new Map();
+  for(const d of list){ if(d.amount==null||d.status==='ignorato') continue;
+    const k=keyFn(d); m.set(k,(m.get(k)||0)+d.amount); }
+  return [...m.entries()].sort((a,b)=>b[1]-a[1]);
+}
+
+/* ==============================================================================
+   9. RENDER — TAB BAR
+   ============================================================================== */
+const currentTab=()=> S.tabs.some(t=>t.id===S.active)?S.active:'summary';
+let dragId=null;
+
+function renderTabs(){
+  const bar=$('#tabbar');
+  bar.innerHTML='';
+  S.tabs.forEach(t=>{
+    const b=document.createElement('button');
+    b.className='tab'+(t.id===currentTab()?' active':'');
+    b.draggable=t.type!=='summary';
+    b.dataset.id=t.id;
+    const n=t.type==='summary'?filteredDocs().length:docsDiTab(t.id).length;
+    b.innerHTML=`<span class="ico">${t.icon||(t.type==='site'?'🌐':'📁')}</span>
+      <span class="lbl">${esc(t.name)}</span>
+      <span class="cnt">${n}</span>` +
+      (t.type!=='summary'?`<span class="x" data-act="close" title="Elimina tab">×</span>`:'');
+    b.onclick=e=>{
+      if(e.target.dataset.act==='close'){ e.stopPropagation(); deleteTab(t.id); return; }
+      confermaCampoAttivo(true);    // salva ciò che si stava scrivendo
+      S.active=t.id; save(); render();
+    };
+    b.ondblclick=e=>{ if(t.type!=='summary'){ e.preventDefault(); renameTab(t.id); } };
+    if(t.type!=='summary'){
+      b.ondragstart=()=>{dragId=t.id;};
+      b.ondragover=e=>{ if(dragId&&dragId!==t.id){e.preventDefault();b.classList.add('dragover');} };
+      b.ondragleave=()=>b.classList.remove('dragover');
+      b.ondrop=e=>{ e.preventDefault(); b.classList.remove('dragover');
+        const from=S.tabs.findIndex(x=>x.id===dragId), to=S.tabs.findIndex(x=>x.id===t.id);
+        if(from>0&&to>0){ const [m]=S.tabs.splice(from,1); S.tabs.splice(to,0,m); save(); render(); }
+      };
+    }
+    bar.appendChild(b);
+  });
+  const add=document.createElement('div');
+  add.className='tabadd';
+  add.innerHTML=`<button class="sm" id="addSite">＋ Sito</button><button class="sm" id="addFiles">＋ File/Cartella</button>`;
+  bar.appendChild(add);
+  $('#addSite').onclick=()=>siteDialog();
+  $('#addFiles').onclick=()=>filesTabDialog();
+}
+
+function renameTab(id){
+  const t=tabById(id); if(!t) return;
+  modal(`Rinomina tab`,`
+    <label class="fld">Nome<input id="mName" value="${esc(t.name)}"></label>
+    <label class="fld" style="margin-top:10px">Icona (emoji)<input id="mIcon" value="${esc(t.icon||'')}" maxlength="4" style="width:90px"></label>
+    ${selFlusso(t)}
+  `,[{label:'Annulla'},{label:'Salva',primary:true,fn:()=>{
+    const v=$('#mName').value.trim(); if(v) t.name=v;
+    t.flusso=$('#tFlusso').value;
+    t.icon=$('#mIcon').value.trim()||t.icon; save(); render();
+  }}], ()=>$('#mName').select());
+}
+function deleteTab(id){
+  const t=tabById(id); if(!t) return;
+  const n=docsOf(id).length;
+  modal('Eliminare il tab?',
+    `<p style="margin:0 0 8px">Stai per eliminare <b>${esc(t.name)}</b>.</p>
+     ${n?`<p class="hint" style="margin:0">Verranno rimossi anche <b>${n}</b> documenti da questo tab (e dalla rendicontazione complessiva).</p>`:''}`,
+    [{label:'Annulla'},{label:'Elimina',danger:true,fn:async()=>{
+      stopWatch(id);
+      for(const d of docsOf(id)){ DB.del('blobs',d.id).catch(()=>{}); DB.del('blobs','txt:'+d.id).catch(()=>{}); }
+      S.docs=S.docs.filter(d=>d.tabId!==id);
+      S.tabs=S.tabs.filter(x=>x.id!==id);
+      await DB.del('handles','dir:'+id).catch(()=>{});
+      if(S.active===id) S.active='summary';
+      save(); render(); toast('Tab eliminato');
+    }}]);
+}
+
+/* ==============================================================================
+   10. RENDER — DISPATCH
+   ============================================================================== */
+function render(){
+  // qualsiasi ridisegno (anche automatico, in sottofondo) non deve buttare via
+  // la modifica che l'utente sta scrivendo in quel momento
+  confermaCampoAttivo(false);
+  renderTabs();
+  const t=tabById(currentTab());
+  const v=$('#view');
+  v.innerHTML = t.type==='summary' ? viewSummary()
+              : t.type==='site'    ? viewSite(t)
+              :                      viewFiles(t);
+  if(t.type==='summary') bindSummary(); else if(t.type==='site') bindSite(t); else bindFiles(t);
+  bindCampiData();          // tutti i campi data si scrivono e si incollano
+  adattaDescrizioni();      // le descrizioni prendono l'altezza del loro testo
+}
+
+/* ------------------------------------------------------------------
+   Descrizioni su più righe e testo tagliato
+   ------------------------------------------------------------------ */
+const ALTEZZA_MAX_DESC=76;   // circa quattro righe: oltre si taglia e si spiega col suggerimento
+
+/** dà al riquadro l'altezza del suo contenuto, entro un massimo */
+function adattaDescrizione(el){
+  if(!el) return;
+  el.style.height='auto';
+  el.style.height=Math.min(el.scrollHeight,ALTEZZA_MAX_DESC)+'px';
+}
+function adattaDescrizioni(radice){
+  $$('textarea.cell-in',radice||document).forEach(adattaDescrizione);
+}
+
+/* Il suggerimento compare SOLO quando il testo non ci sta davvero: mostrarlo
+   sempre sarebbe rumore, e ripeterebbe quello che si legge già. */
+function suggerimentoSeTagliato(el){
+  if(!el||!el.matches||!el.matches('.cell-in, .fn, .fp, .tag, .um, .ratecnt')) return;
+  const testo=(('value' in el) ? el.value : el.textContent)||'';
+  const tagliato = el.scrollWidth>el.clientWidth+1 || el.scrollHeight>el.clientHeight+1;
+  if(tagliato && testo.trim()){
+    if(el.dataset.titoloSuo==null) el.dataset.titoloSuo=el.getAttribute('title')||'';
+    el.setAttribute('title',testo.trim());
+  }
+  else if(el.dataset.titoloSuo!=null){
+    const suo=el.dataset.titoloSuo;
+    if(suo) el.setAttribute('title',suo); else el.removeAttribute('title');
+    delete el.dataset.titoloSuo;
+  }
+}
+document.addEventListener('mouseover',e=>suggerimentoSeTagliato(e.target));
+/* scrivendo, il riquadro cresce e il suggerimento si aggiorna da solo */
+document.addEventListener('input',e=>{
+  if(e.target&&e.target.matches&&e.target.matches('textarea.cell-in')){
+    adattaDescrizione(e.target);
+    suggerimentoSeTagliato(e.target);
+  }
+});
+
+/* ==============================================================================
+   11. VISTA — RENDICONTAZIONE COMPLESSIVA
+   ============================================================================== */
+function viewSummary(){
+  const list=sortDocs(filteredDocs());
+  const T=totals(list);
+  const all=totals(S.docs);
+  const TE=totals(list.filter(isEntrata)), TU=totals(list.filter(d=>!isEntrata(d)));
+  const allE=totals(S.docs.filter(isEntrata)), allU=totals(S.docs.filter(d=>!isEntrata(d)));
+  const saldo=TE.total-TU.total, cassa=TE.pagato-TU.pagato;
+  const today=todayISO(), ad=+S.settings.alertDays||7;
+  const alerts=S.docs.filter(d=>d.status==='da_pagare')
+    .map(d=>{ const p=prossimaScadenza(d); return p.data?{d,dd:daysBetween(today,p.data),data:p.data,quale:p.etichetta}:null; })
+    .filter(x=>x&&x.dd<=ad).sort((a,b)=>a.dd-b.dd);
+  const noAmount=S.docs.filter(d=>d.amount==null&&d.status!=='ignorato');
+
+  const byCat=groupSum(list.filter(d=>!isEntrata(d)),d=>catLabel(d.category)).slice(0,10);
+  const byTab=groupSum(list,d=>tabById(d.tabId)?.name||'—');
+  const mensile=sub=>{
+    const m=new Map();
+    // con un anno scelto si mostrano tutti e dodici i mesi, anche quelli vuoti
+    if(S.settings.anno) for(let i=1;i<=12;i++) m.set(S.settings.anno+'-'+String(i).padStart(2,'0'),0);
+    /* i mesi seguono la scadenza come l'anno, o dentro un anno scelto
+       spunterebbero mesi che a quell'anno non appartengono */
+    for(const d of sub){ const k=meseDi(d);
+      if(d.amount==null||d.status==='ignorato'||!k) continue;
+      m.set(k,(m.get(k)||0)+d.amount); }
+    const arr=[...m.entries()].sort((a,b)=>a[0]<b[0]?-1:1);
+    return S.settings.anno?arr:arr.slice(-12);
+  };
+  const byMonth=mensile(list.filter(d=>!isEntrata(d)));
+  const byMonthE=mensile(list.filter(isEntrata));
+  const maxMonE=Math.max(1,...byMonthE.map(x=>x[1]));
+  const colonne=(titolo,sotto,dati,max,cls)=>dati.length>1&&dati.some(x=>x[1])?`
+    <div class="panel chart" style="grid-column:1/-1">
+      <h3>${titolo}</h3><p class="csub">${sotto} — ultimi ${dati.length} mesi.</p>
+      <div class="cols ${cls||''}">
+        ${dati.map(([k,v])=>`<div class="col" title="${esc(k)}: ${fmtEur(v)}">
+          <span class="colv">${fmtNum(v)}</span>
+          <span class="colfill" style="height:${Math.max(2,v/max*100)}%"></span></div>`).join('')}
+      </div>
+      <div class="collbl">${dati.map(([k])=>`<span>${k.slice(5)}/${k.slice(2,4)}</span>`).join('')}</div>
+    </div>`:'';
+  const anno=annoAttivo();
+  const maxCat=Math.max(1,...byCat.map(x=>x[1]));
+  const maxTab=Math.max(1,...byTab.map(x=>x[1]));
+  const maxMon=Math.max(1,...byMonth.map(x=>x[1]));
+  const f=S.settings.filter;
+  const filterActive = f.tab||f.cat||f.status||f.from||f.to||f.q||mesiAttivi().length;
+
+  const bars=(rows,max)=>rows.map(([k,v])=>`
+    <div class="brow">
+      <span class="bl" title="${esc(k)}">${esc(k)}</span>
+      <span class="btrack"><span class="bfill" style="width:${(v/max*100).toFixed(1)}%"></span></span>
+      <span class="bv">${fmtEur(v)}</span>
+    </div>`).join('');
+
+  return `
+  ${annoBarHTML(`${T.count} voc${T.count===1?'e':'i'} · ricavi <b>${fmtEur(TE.total)}</b> · costi <b>${fmtEur(TU.total)}</b>`+
+    consumiPerUnita(list).map(([u,r])=>` · <b>${fmtQty(r.q)}</b> ${esc(u)}`).join(''))}
+  <h1 class="printonly">Rendicontazione ${anno?esc(anno):'— tutti gli anni'}</h1>
+
+  <div class="tiles">
+    <div class="tile good"><div class="k">Ricavi${anno?' '+esc(anno):''}</div><div class="v">${fmtEur(TE.total)}</div>
+      <div class="d">incassato <b>${fmtEur(TE.pagato)}</b> · da incassare <b>${fmtEur(TE.daPagare)}</b>${filterActive?' (filtrati)':''}</div></div>
+    <div class="tile warn"><div class="k">Costi${anno?' '+esc(anno):''}</div><div class="v">${fmtEur(TU.total)}</div>
+      <div class="d">pagato <b>${fmtEur(TU.pagato)}</b> · da pagare <b>${fmtEur(TU.daPagare)}</b></div></div>
+    <div class="tile ${saldo<0?'crit':'good'}"><div class="k">Saldo (ricavi − costi)</div><div class="v">${fmtEur(saldo)}</div>
+      <div class="d">di cassa, solo movimenti saldati: <b>${fmtEur(cassa)}</b></div></div>
+    <div class="tile ${(TE.scaduto+TU.scaduto)>0?'crit':''}"><div class="k">Scaduto</div><div class="v">${fmtEur(TE.scaduto+TU.scaduto)}</div>
+      <div class="d">crediti non incassati <b>${fmtEur(TE.scaduto)}</b> · debiti <b>${fmtEur(TU.scaduto)}</b></div></div>
+  </div>
+
+  ${(alerts.length||noAmount.length)?`
+  <div class="panel noprint">
+    <h2>Avvisi scadenze</h2>
+    <p class="sub">Pagamenti e incassi attesi entro ${ad} giorni, e documenti da completare.</p>
+    ${alerts.map(({d,dd,data,quale})=>{
+      const r=rateDi(d);
+      const imp=r.length?(r.find(x=>!x.pagata)?.importo):d.amount;
+      const e=isEntrata(d);
+      return `
+      <div class="alert ${dd<0?'critical':'warning'}">
+        <span class="ai">${dd<0?'⛔':'⏰'}</span>
+        <div style="flex:1">
+          <span class="flusso ${e?'in':'out'}">${e?'Incasso':'Pagamento'}</span> <b>${esc(d.name)}</b> — ${fmtEur(imp)}${quale?` <span class="tag">${esc(quale)}</span>`:''}
+          <div class="when">${dd<0?`${e?'Da incassare, in ritardo di':'Scaduto da'} ${-dd} giorn${-dd===1?'o':'i'}`:dd===0?'Scade <b>oggi</b>':`Scade tra ${dd} giorn${dd===1?'o':'i'}`}
+            · ${fmtDate(data)} · <span class="tag">${esc(tabById(d.tabId)?.name||'')}</span></div>
+        </div>
+        <button class="sm" data-pay="${d.id}">${L(e,r.length?'segnaRata':'segna')}</button>
+      </div>`;}).join('')}
+    ${noAmount.length?`<div class="alert info"><span class="ai">✎</span><div style="flex:1">
+      <b>${noAmount.length} document${noAmount.length===1?'o':'i'} senza importo</b>
+      <div class="when">Non è stato possibile rilevare la cifra automaticamente: inseriscila a mano nella tabella.</div>
+    </div><button class="sm" id="goNoAmount">Mostra</button></div>`:''}
+  </div>`:`
+  <div class="panel noprint"><h2>Avvisi scadenze</h2>
+    <p class="sub" style="margin:0">Nessuna scadenza nei prossimi ${ad} giorni. ✔</p></div>`}
+
+  <div class="panel noprint">
+    <h2>Aggiungi una voce a mano</h2>
+    <p class="sub">Compila e premi Invio (o «Aggiungi»). Scegli la destinazione: le voci di «Fatture Emesse» e «Corrispettivi» contano come ricavi, le altre come costi.</p>
+    ${quickAddHTML()}
+  </div>
+
+  <div class="panel noprint">
+    <div class="row">
+      <label class="fld" style="flex:2;min-width:180px">Cerca
+        <input id="fQ" placeholder="nome, nota, categoria…" value="${esc(f.q)}"></label>
+      <label class="fld">Tab
+        <select id="fTab"><option value="">Tutti</option>
+        ${S.tabs.filter(t=>t.type!=='summary').map(t=>`<option value="${t.id}" ${f.tab===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+        </select></label>
+      <label class="fld">Categoria
+        <select id="fCat"><option value="">Tutte</option>
+        ${CATS.map(c=>`<option value="${c.id}" ${f.cat===c.id?'selected':''}>${esc(c.label)}</option>`).join('')}
+        </select></label>
+      <label class="fld">Stato
+        <select id="fSt"><option value="">Tutti</option>
+          <option value="da_pagare" ${f.status==='da_pagare'?'selected':''}>Da pagare / incassare</option>
+          <option value="scaduto" ${f.status==='scaduto'?'selected':''}>Scaduti</option>
+          <option value="pagato" ${f.status==='pagato'?'selected':''}>Pagati / incassati</option>
+          <option value="ignorato" ${f.status==='ignorato'?'selected':''}>Ignorati</option>
+        </select></label>
+      <!-- il periodo non sta più qui: è nella barra in alto, e vale in ogni tab -->
+      <button id="fReset">Azzera tutto</button>
+      <div class="spacer"></div>
+      <button id="btnCsv">⇩ CSV</button>
+      <button id="btnPrint">🖶 Stampa / PDF</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Dettaglio voci</h2>
+    <p class="sub">${T.count} voc${T.count===1?'e':'i'} · ricavi ${fmtEur(TE.total)} · costi ${fmtEur(TU.total)} · <b>saldo ${fmtEur(saldo)}</b>${T.senzaImporto?` · ${T.senzaImporto} senza importo`:''}. I campi sono modificabili.</p>
+    ${list.length?`
+    <div class="tablewrap"><table>
+      <thead><tr>
+        <th class="espandi"></th>
+        <th class="sortable" data-s="date">Data ${sortArrow('date')}</th>
+        <th class="sortable" data-s="name">Descrizione ${sortArrow('name')}</th>
+        <th>Documento</th>
+        <th class="sortable" data-s="tab">Origine ${sortArrow('tab')}</th>
+        <th class="sortable" data-s="cat">Categoria ${sortArrow('cat')}</th>
+        <th class="num sortable" data-s="amount">Importo € ${sortArrow('amount')}</th>
+        <th>N° rate</th>
+        <th>Frazionamento</th>
+        <th class="num">Rate €</th>
+        <th class="scad sortable" data-s="due">Scadenza ${sortArrow('due')}</th>
+        <th class="sortable" data-s="status">Stato ${sortArrow('status')}</th>
+        <th class="num">Rimanenza</th>
+        <th class="noprint"></th>
+      </tr></thead>
+      <tbody>${list.map(rowHTML).join('')}</tbody>
+      <!-- due totali: a sinistra quanto valgono i documenti, a destra quanto
+           resta davvero da versare una volta tolte le rate già pagate -->
+      <tfoot><tr class="entrata">
+        <td colspan="6">TOTALE RICAVI${filterActive?' (selezione filtrata)':''}</td>
+        <td class="num">${fmtEur(TE.total)}</td>
+        <td colspan="5" style="font-weight:500;color:var(--ink-2)">da incassare</td>
+        <td class="num">${fmtEur(TE.rimanenza)}</td><td class="noprint"></td>
+      </tr><tr>
+        <td colspan="6">TOTALE COSTI${filterActive?' (selezione filtrata)':''}</td>
+        <td class="num">${fmtEur(TU.total)}</td>
+        <td colspan="5" style="font-weight:500;color:var(--ink-2)">da pagare</td>
+        <td class="num">${fmtEur(TU.rimanenza)}</td><td class="noprint"></td>
+      </tr><tr>
+        <td colspan="6">SALDO (ricavi − costi)</td>
+        <td class="num">${fmtEur(saldo)}</td>
+        <td colspan="5" style="font-weight:500;color:var(--ink-2)">saldo dei sospesi</td>
+        <td class="num">${fmtEur(TE.rimanenza-TU.rimanenza)}</td><td class="noprint"></td>
+      </tr>
+      ${filterActive?`<tr><td colspan="6" style="font-weight:500;color:var(--ink-2)">Saldo generale (senza filtri)</td>
+        <td class="num" style="font-weight:600">${fmtEur(allE.total-allU.total)}</td>
+        <td colspan="5"></td>
+        <td class="num" style="font-weight:600">${fmtEur(allE.rimanenza-allU.rimanenza)}</td><td class="noprint"></td></tr>`:''}
+      </tfoot>
+    </table></div>`:`<div class="empty">Nessuna voce corrisponde ai filtri.<br>Apri uno dei tab (Fatture Emesse, Fornitori, Corrispettivi…) e aggiungi le prime righe, o trascina lì i PDF.</div>`}
+  </div>
+
+  ${list.length?`
+  <div class="charts">
+    <div class="panel chart">
+      <h3>Costi per categoria</h3><p class="csub">Somma dei costi, ordine decrescente.</p>
+      <div class="bars">${bars(byCat,maxCat)||'<div class="empty">—</div>'}</div>
+    </div>
+    <div class="panel chart">
+      <h3>Importi per tab</h3><p class="csub">Quanto pesa ogni tab (ricavi e costi).</p>
+      <div class="bars">${bars(byTab,maxTab)||'<div class="empty">—</div>'}</div>
+    </div>
+    ${colonne('Ricavi mensili','Fatture emesse e corrispettivi per mese di scadenza',byMonthE,maxMonE,'in')}
+    ${colonne('Costi mensili','Totale dei costi per mese di scadenza',byMonth,maxMon,'')}
+  </div>`:''}
+  `;
+}
+function sortArrow(k){ return S.settings.sort.by===k ? (S.settings.sort.dir==='asc'?'▲':'▼') : ''; }
+
+function rowHTML(d,opts={}){
+  const conOrigine=opts.origine!==false;
+  const conConsumo=!!opts.consumo;
+  // espandi, data, descrizione, documento, [origine], [consumo], categoria,
+  // importo, n° rate, frazionamento, rate, scadenza, stato, rimanenza, azioni
+  const colonne=13+(conOrigine?1:0)+(conConsumo?1:0);
+  return `<tr data-id="${d.id}" class="${numeroRate(d)>1?'con-rate':''}${isEntrata(d)?' entrata':''}">
+    ${cellaEspandi(d)}
+    <td>${inputData('docDate',d.docDate,124)}</td>
+    <td class="name">${cellaDescrizione(d)}
+      ${d.manuale&&!d.file?`<span class="fp">✍ inserita a mano</span>`:''}</td>
+    <td class="doc">${cellaDocumento(d)}</td>
+    ${conOrigine?`<td><span class="tag">${esc(tabById(d.tabId)?.name||'—')}</span> <span class="flusso ${isEntrata(d)?'in':'out'}">${isEntrata(d)?'Entrata':'Uscita'}</span></td>`:''}
+    ${conConsumo?`<td class="num">${cellaConsumo(d)}</td>`:''}
+    <td><select class="cell-in" data-f="category">
+      ${CATS.map(c=>`<option value="${c.id}" ${d.category===c.id?'selected':''}>${esc(c.label)}</option>`).join('')}
+    </select></td>
+    <td class="num"><input class="cell-in num" data-f="amount" value="${d.amount!=null?fmtNum(d.amount):''}" placeholder="0,00" style="width:104px">
+      ${d.auto?.amount?`<div class="auto" title="${esc(d.auto.snippet||'')}">auto ${d.auto.conf||''}%</div>`:''}</td>
+    <td class="rate">${cellaRate(d)}</td>
+    <td class="fraz">${cellaFrazionamento(d)}</td>
+    <td class="num rataimp">${cellaRataImporto(d)}</td>
+    <td class="scad">${cellaScadenza(d,124)}</td>
+    <td class="stato">${cellaStato(d)}</td>
+    <td class="num rimanenza">${cellaRimanenza(d)}</td>
+    <td class="noprint" style="white-space:nowrap">
+      <button class="sm ghost" data-act="open" title="Apri documento">↗</button>
+      <button class="sm ghost" data-act="info" title="Dettagli / testo estratto">ⓘ</button>
+      <button class="sm ghost" data-act="del" title="Elimina">🗑</button>
+    </td>
+  </tr>`+rigaRate(d,colonne);
+}
+
+function bindSummary(){
+  const f=S.settings.filter;
+  bindQuickAdd(); bindAnno();
+  const on=(id,ev,fn)=>{const e=$(id); if(e) e.addEventListener(ev,fn);};
+  on('#fQ','input',e=>{f.q=e.target.value; save(); const p=e.target.selectionStart; render(); const n=$('#fQ'); if(n){n.focus();n.setSelectionRange(p,p);} });
+  on('#fTab','change',e=>{f.tab=e.target.value;save();render();});
+  on('#fCat','change',e=>{f.cat=e.target.value;save();render();});
+  on('#fSt','change',e=>{f.status=e.target.value;save();render();});
+  // «Azzera tutto» toglie anche mesi e periodo, che stanno nella barra dell'anno
+  on('#fReset','click',()=>{
+    S.settings.filter=DEFAULT_STATE().settings.filter;
+    S.settings.mesi=[];
+    save(); render();
+  });
+  on('#btnCsv','click',exportCsv);
+  on('#btnPrint','click',()=>window.print());
+  on('#goNoAmount','click',()=>{ S.settings.sort={by:'amount',dir:'asc'}; save(); render(); });
+  $$('#view .alert [data-pay]').forEach(b=>b.onclick=()=>{
+    const d=S.docs.find(x=>x.id===b.dataset.pay); if(!d) return;
+    const r=rateDi(d);
+    if(r.length){ const p=r.find(x=>!x.pagata); if(p){ segnaRata(d,p.n-1,true); return; } }
+    d.status='pagato'; save(); render();
+  });
+  bindRows();
+}
+
+/* Ridisegnare mentre un campo perde il fuoco distrugge il pulsante che si sta
+   premendo, e il clic va perso: si rimanda di un istante. */
+function ridisegnaDopo(){ setTimeout(render,0); }
+
+/* Importi e scadenze delle singole rate. Sta in una funzione a sé perché ora
+   compaiono in DUE posti: nelle colonne «Rate» e «Scadenza» della riga, e nella
+   tendina del dettaglio. Devono comportarsi allo stesso modo in entrambi. */
+function bindCampiRata(radice,d){
+  $$('[data-rata-campo]',radice).forEach(inp=>{
+    const i=+inp.dataset.rata, campo=inp.dataset.rataCampo;
+    const conferma=()=>{
+      // toccare una rata rende l'elenco modificabile: da lì in poi comanda lui
+      if(!rateManuali(d)) materializzaRate(d);
+      const riga=(d.rateLista||[])[i]; if(!riga) return;
+      const v=inp.value.trim();
+      if(campo==='data'){
+        if(v===''){ riga.data=null; }
+        else{
+          const iso=parseDataLibera(v);
+          if(!iso){ inp.value=mostraData(riga.data); toast('Data non riconosciuta. '+TITOLO_DATA,'err'); return; }
+          riga.data=iso;
+        }
+        inp.value=mostraData(riga.data);
+      } else {
+        const n=v===''?0:parseAmountString(v);
+        if(v!==''&&n==null){ inp.value=riga.importo!=null?fmtNum(riga.importo):''; toast('Importo non valido','err'); return; }
+        riga.importo=n;
+      }
+      aggiornaTotaleDaRate(d);
+      save(); ridisegnaDopo();
+    };
+    inp.__conferma=conferma;
+    inp.addEventListener('blur',conferma);
+    inp.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); inp.blur(); } });
+    // scrivere in una rata non deve aprire o chiudere la tendina della riga
+    inp.addEventListener('click',e=>e.stopPropagation());
+  });
+}
+
+/* Le spunte «pagata» delle singole rate: anche queste stanno in due posti — la
+   colonna «Stato» della riga e la tendina del dettaglio. */
+function bindSpunteRata(radice,d){
+  $$('input[type=checkbox][data-rata]',radice).forEach(c=>{
+    c.onchange=()=>segnaRata(d,+c.dataset.rata,c.checked);
+    c.addEventListener('click',e=>e.stopPropagation());
+  });
+}
+
+function bindRows(){
+  $$('#view th.sortable').forEach(th=>th.onclick=()=>{
+    const k=th.dataset.s, s=S.settings.sort;
+    s.dir = s.by===k ? (s.dir==='asc'?'desc':'asc') : (k==='name'||k==='cat'||k==='tab'?'asc':'desc');
+    s.by=k; save(); render();
+  });
+  $$('#view tbody tr[data-id]').forEach(tr=>{
+    const d=S.docs.find(x=>x.id===tr.dataset.id); if(!d) return;
+    bindCampiRata(tr,d);          // le rate mostrate dentro la riga stessa
+    bindSpunteRata(tr,d);         // e le loro spunte nella colonna «Stato»
+    tr.addEventListener('contextmenu',e=>menuRiga(e,d));
+    $$('[data-f]',tr).forEach(inp=>{
+      const commit=()=>{
+        const k=inp.dataset.f;
+        if(inp.dataset.date){
+          const v=inp.value.trim();
+          if(v===''){ d[k]=null; }
+          else{
+            const iso=parseDataLibera(v);
+            if(!iso){ inp.value=fmtDataIT(d[k]); toast('Data non riconosciuta. '+TITOLO_DATA,'err'); return; }
+            d[k]=iso;
+            if(k==='periodoDa') d.docDate=iso;   // la data documento segue il periodo
+          }
+          inp.value=fmtDataIT(d[k]);
+          save(); ridisegnaDopo();
+          return;
+        }
+        if(k==='amount'||k==='kwh'){
+          const v=inp.value.trim();
+          const n=v===''?null:parseAmountString(v);
+          const fmt=k==='kwh'?fmtQty:fmtNum;
+          if(v!==''&&n==null){ inp.value=d[k]!=null?fmt(d[k]):''; toast(k==='kwh'?'Quantità non valida':'Importo non valido','err'); return; }
+          d[k]=n;
+          if(k==='amount'&&d.auto) d.auto.amount=false;
+          inp.value=n!=null?fmt(n):'';
+        }
+        else if(k==='rate'){
+          const v=inp.value.trim();
+          const n=v===''?1:parseInt(v,10);
+          if(v!==''&&(!Number.isFinite(n)||n<1||n>240)){ inp.value=numeroRate(d)>1?numeroRate(d):''; toast('Numero di rate non valido (da 1 a 240)','err'); return; }
+          if(rateManuali(d)){
+            /* elenco personalizzato: si aggiungono o si tolgono rate in coda,
+               senza buttare via quelle già sistemate a mano */
+            while(d.rateLista.length<n) aggiungiRataInCoda(d);
+            while(d.rateLista.length>n&&d.rateLista.length>1) d.rateLista.pop();
+            aggiornaTotaleDaRate(d);
+            if(n<2){ const tot=d.amount; delete d.rateLista; delete d.rate; delete d.ratePagate; d.amount=tot; righeAperte.delete(d.id); }
+          }
+          else if(n>1){ d.rate=n; if(!d.frazionamento) d.frazionamento='mensile'; if(d.ratePagate) d.ratePagate=d.ratePagate.filter(i=>i<n); }
+          else { delete d.rate; delete d.ratePagate; righeAperte.delete(d.id); }
+        }
+        else if(k==='name') d.name=inp.value.trim()||d.name;
+        else {
+          d[k]=inp.value||null;
+          // nelle tabelle a periodo la data del documento segue l'inizio periodo
+          if(k==='periodoDa'&&inp.value) d.docDate=inp.value;
+        }
+        save();
+        if(['status','amount','category','dueDate','kwh','rate','frazionamento'].includes(k)) ridisegnaDopo();
+      };
+      inp.__conferma=commit;      // conferma esplicita, indipendente dal fuoco
+      inp.addEventListener(inp.tagName==='SELECT'||inp.type==='date'?'change':'blur',commit);
+      /* Invio conferma; nella descrizione Shift+Invio va a capo invece di
+         chiudere la modifica */
+      if((inp.tagName==='INPUT'&&inp.type!=='date')||inp.tagName==='TEXTAREA')
+        inp.addEventListener('keydown',e=>{
+          if(e.key!=='Enter') return;
+          if(inp.tagName==='TEXTAREA'&&e.shiftKey) return;   // a capo
+          e.preventDefault(); inp.blur();
+        });
+      /* Incollando «1/06/2026 - 30/06/2026» nella cella «Data» si prende la
+         data d'inizio; l'intervallo resta registrato sulla riga e serve a
+         riconoscere la bolletta che parla dello stesso periodo. */
+      if(inp.dataset.date&&(inp.dataset.f==='docDate'||inp.dataset.f==='periodoDa')) inp.addEventListener('paste',e=>{
+        const testo=(e.clipboardData||window.clipboardData)?.getData('text')||'';
+        const ds=allDates(testo);
+        if(ds.length<2) return;
+        e.preventDefault();
+        d.periodoDa=ds[0].v; d.docDate=ds[0].v; d.periodoA=ds[1].v;
+        /* il campo va aggiornato PRIMA di ridisegnare: perdendo il fuoco
+           scatta comunque la conferma, e riscriverebbe il valore vecchio */
+        inp.value=fmtDataIT(ds[0].v);
+        save(); ridisegnaDopo();
+        toast('Periodo riconosciuto: '+fmtDataIT(ds[0].v)+' → '+fmtDataIT(ds[1].v),'ok');
+      });
+    });
+    $$('[data-act]',tr).forEach(b=>b.onclick=()=>{
+      if(b.dataset.act==='open') openDoc(d);
+      if(b.dataset.act==='info') docInfo(d);
+      if(b.dataset.act==='del') delDoc(d);
+      if(b.dataset.act==='allega') scegliDocumentoPer(d);
+      if(b.dataset.act==='stacca') staccaDocumento(d);
+      if(b.dataset.act==='rate') apriChiudiRate(d);
+    });
+
+    /* Il dettaglio si apre da tutta la riga: la freccia a sinistra segnala che
+       c'è altro sotto, ma vale il clic su qualunque punto non modificabile.
+       I campi restano cliccabili per scriverci, altrimenti non si potrebbe più
+       correggere nulla. */
+    if(numeroRate(d)>1) tr.addEventListener('click',e=>{
+      // i pulsanti hanno già il loro gestore: intervenire qui li farebbe
+      // scattare due volte, e la tendina si aprirebbe e richiuderebbe subito
+      if(e.target.closest('input,select,textarea,a,button')) return;
+      apriChiudiRate(d);
+    });
+  });
+
+  // dettaglio delle rate: spunte, modifica, aggiunta ed eliminazione
+  $$('#view tr.dettaglio-rate').forEach(tr=>{
+    const d=S.docs.find(x=>x.id===tr.dataset.rateDi); if(!d) return;
+    bindSpunteRata(tr,d);
+    const agg=$('[data-rata-aggiungi]',tr); if(agg) agg.onclick=()=>aggiungiRata(d);
+    const rid=$('[data-rata-ridividi]',tr); if(rid) rid.onclick=()=>ridividiRate(d);
+    $$('[data-rata-rimuovi]',tr).forEach(b=>b.onclick=()=>{
+      if(!rateManuali(d)) materializzaRate(d);
+      rimuoviRata(d,+b.dataset.rataRimuovi);
+    });
+
+    bindCampiRata(tr,d);
+  });
+}
+async function openDoc(d){
+  if(d.manuale&&!d.file){ docInfo(d); return; } // senza file collegato si apre la scheda
+  let b=await DB.get('blobs',d.id).catch(()=>null);
+  if(!b){ toast('File non più disponibile in archivio','err'); return; }
+  /* I documenti archiviati prima d'ora sono stati salvati senza tipo: aperti
+     così un PDF esce come testo illeggibile. Il tipo si ricava dal nome. */
+  if(!b.type){
+    const m=mimeDoc(d);
+    if(m) b=new Blob([b],{type:m});
+  }
+  const url=URL.createObjectURL(b);
+  window.open(url,'_blank','noopener');
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
+async function docInfo(d){
+  const txt=await DB.get('blobs','txt:'+d.id).catch(()=>null);
+  modal('Dettagli documento',`
+    <div class="grid2">
+      <label class="fld">Nome<input id="dName" value="${esc(d.name)}"></label>
+      <label class="fld">Importo (€)<input id="dAmt" value="${d.amount!=null?fmtNum(d.amount):''}"></label>
+      <label class="fld">Data documento${inputDataForm('dDate',d.docDate)}</label>
+      <label class="fld">Scadenza${inputDataForm('dDue',d.dueDate)}</label>
+    </div>
+    <label class="fld" style="margin-top:12px">Note<textarea id="dNote" rows="2">${esc(d.note||'')}</textarea></label>
+    <label class="fld" style="margin-top:12px">Categoria<select id="dCat">
+      ${CATS.map(c=>`<option value="${c.id}" ${d.category===c.id?'selected':''}>${esc(c.label)}</option>`).join('')}
+    </select></label>
+    <div class="hint">${d.manuale?'Spesa inserita a mano':'Percorso: '+esc(d.path)+'<br>Dimensione: '+fmtSize(d.size)} · Aggiunto: ${new Date(d.addedAt).toLocaleString('it-IT')}
+    ${d.auto?.snippet?`<br>Rilevamento automatico (${d.auto.conf}%): «${esc(d.auto.snippet)}»`:''}</div>
+    ${txt?`<div class="hr"></div><div style="font-size:12px;font-weight:600;margin-bottom:6px">Testo estratto (primi 6000 caratteri)</div>
+      <pre class="txt">${esc(txt.slice(0,6000))}</pre>`
+      :(d.manuale?'':`<div class="hr"></div><p class="hint" style="margin:0">Nessun testo estraibile (PDF scansionato/immagine o formato binario). Inserisci l'importo manualmente.</p>`)}
+  `,[{label:'Chiudi'},{label:'Salva',primary:true,fn:()=>{
+    const data=leggiData('#dDate'), scad=leggiData('#dDue');
+    if(data===null){ toast('Data documento non riconosciuta. '+TITOLO_DATA,'err'); return false; }
+    if(scad===null){ toast('Scadenza non riconosciuta. '+TITOLO_DATA,'err'); return false; }
+    d.name=$('#dName').value.trim()||d.name;
+    const a=$('#dAmt').value.trim(); const n=a===''?null:parseAmountString(a);
+    if(a===''||n!=null){ d.amount=n; if(d.auto)d.auto.amount=false; }
+    d.docDate=data||null; d.dueDate=scad||null; d.note=$('#dNote').value;
+    d.category=$('#dCat').value;
+    save(); render();
+  }}],null,'wide');
+}
+function delDoc(d){
+  modal('Eliminare il documento?',`<p style="margin:0">${esc(d.name)}</p>`,
+    [{label:'Annulla'},{label:'Elimina',danger:true,fn:()=>{
+      DB.del('blobs',d.id).catch(()=>{}); DB.del('blobs','txt:'+d.id).catch(()=>{});
+      S.docs=S.docs.filter(x=>x.id!==d.id); save(); render();
+    }}]);
+}
+
+/* ==============================================================================
+   12. VISTA — TAB SITO
+   ============================================================================== */
+function viewSite(t){
+  const list=sortDocs(docsDiTab(t.id));
+  const T=totals(list);
+  let host=''; try{ host=new URL(t.url).host; }catch(_){}
+  const w=t.watch;
+  const vista=vistaDi(t);
+  return `
+  ${annoBarHTML(`${list.length} document${list.length===1?'o':'i'} · <b>${fmtEur(T.total)}</b>`)}
+  <div class="panel">
+    <div class="siteinfo">
+      <div class="favi">${host?`<img src="https://www.google.com/s2/favicons?domain=${esc(host)}&sz=64" alt="" onerror="this.replaceWith(document.createTextNode('🌐'))">`:'🌐'}</div>
+      <div style="flex:1;min-width:220px">
+        <h2 style="margin:0">${esc(t.name)}</h2>
+        <a class="siteurl" href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.url)}</a>
+        ${t.note?`<div class="hint" style="margin-top:4px">${esc(t.note)}</div>`:''}
+      </div>
+      <div class="row noprint" style="align-items:center">
+        <button class="primary" id="sOpen">↗ Apri sito e accedi</button>
+        <button id="sEmbed">${t.embed?'Nascondi anteprima':'Prova anteprima'}</button>
+        <button id="sEdit">✎ Modifica</button>
+      </div>
+    </div>
+    <div class="hr"></div>
+    ${segmentiHTML(t)}
+  </div>` + (vista==='tabella' ? tabellaHTML(t) : `
+  <div class="panel">
+    <div class="watchbar noprint">
+      <span class="led ${w?.enabled?(w.error?'err':'on'):''}"></span>
+      ${w?`<b>Cartella collegata:</b> ${esc(w.name)}
+          <span style="color:var(--ink-2)">· ${w.error?('⚠ '+esc(w.error)):(w.lastScan?('ultima scansione '+new Date(w.lastScan).toLocaleTimeString('it-IT')):'in attesa…')}</span>
+          <div class="spacer"></div>
+          <button class="sm" id="wScan">↻ Scansiona ora</button>
+          <button class="sm" id="wToggle">${w.enabled?'⏸ Pausa auto':'▶ Riprendi auto'}</button>
+          ${w.error?`<button class="sm" id="wPerm">Riattiva permesso</button>`:''}
+          <button class="sm danger" id="wUnlink">Scollega</button>`
+        :`<b>Aggiornamento automatico</b>
+          <span style="color:var(--ink-2)">· collega la cartella dove scarichi i documenti da questo sito: verranno importati da soli.</span>
+          <div class="spacer"></div>
+          <button class="sm primary" id="wPick" ${FSA?'':'disabled title="Richiede Chrome o Edge"'}>📂 Collega cartella</button>`}
+    </div>
+    ${t.embed?`
+    <div class="framenote noprint"><span>🔒</span>
+      <span>Se l'anteprima resta vuota o mostra «rifiuto di connettersi», <b>${esc(host||'il sito')}</b> vieta di essere incorporato
+      (<code>X-Frame-Options</code>): è una protezione del sito, non un errore dell'app. Usa «Apri sito e accedi».</span></div>
+    <div class="framebox noprint">
+      <iframe src="${esc(t.url)}" referrerpolicy="no-referrer" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>
+    </div>`:''}
+  </div>
+
+  <div class="panel noprint">
+    <h2>Documenti scaricati da questo sito</h2>
+    <p class="sub">Trascina qui i file scaricati, oppure lascia che la cartella collegata li importi da sola.</p>
+    ${dropzoneHTML(t.id)}
+  </div>
+
+  ${docsPanel(t,list,T)}
+  `);
+}
+function bindSite(t){
+  $('#sOpen').onclick=()=>window.open(t.url,'_blank','noopener');
+  $('#sEmbed').onclick=()=>{ t.embed=!t.embed; save(); render(); };
+  $('#sEdit').onclick=()=>siteDialog(t);
+  bindSegmenti(t); bindAnno();
+  if(vistaDi(t)==='tabella'){ bindTabella(t); return; }
+  const on=(id,fn)=>{const e=$(id); if(e)e.onclick=fn;};
+  on('#wPick',()=>pickFolderFor(t.id));
+  on('#wScan',()=>{toast('Scansione in corso…');scanFolder(t.id,true);});
+  on('#wToggle',()=>{ t.watch.enabled=!t.watch.enabled; save(); refreshWatchers(); render(); });
+  on('#wPerm',()=>scanFolder(t.id,true));
+  on('#wUnlink',()=>unlinkFolder(t.id));
+  on('#btnAggiorna',()=>aggiornaTab(t.id));
+  bindDropzone(t.id);
+  bindRows();
+}
+
+/* ==============================================================================
+   13. VISTA — TAB FILE/CARTELLA
+   ============================================================================== */
+function viewFiles(t){
+  const list=sortDocs(docsDiTab(t.id));
+  const T=totals(list);
+  const w=t.watch;
+  const testa=`
+  ${annoBarHTML(`${list.length} document${list.length===1?'o':'i'} · <b>${fmtEur(T.total)}</b>`)}
+  <div class="panel">
+    <div class="row" style="align-items:center">
+      <div style="flex:1">
+        <h2 style="margin:0">${t.icon||'📁'} ${esc(t.name)}</h2>
+      </div>
+      <button class="noprint" id="fEdit">✎ Rinomina</button>
+    </div>
+    <div class="hr"></div>
+    ${segmentiHTML(t)}
+  </div>`;
+  if(vistaDi(t)==='tabella') return testa+tabellaHTML(t);
+  return testa+`
+  <div class="panel">
+    ${quickAddHTML(t.id)}
+    <div class="hr"></div>
+    ${dropzoneHTML(t.id)}
+    <div class="watchbar noprint" style="margin-top:12px">
+      <span class="led ${w?.enabled?(w.error?'err':'on'):''}"></span>
+      ${w?`<b>Cartella collegata:</b> ${esc(w.name)}
+        <span style="color:var(--ink-2)">· ${w.error?('⚠ '+esc(w.error)):(w.lastScan?('ultima scansione '+new Date(w.lastScan).toLocaleTimeString('it-IT')):'in attesa…')}</span>
+        <div class="spacer"></div>
+        <button class="sm" id="wScan">↻ Scansiona ora</button>
+        <button class="sm" id="wToggle">${w.enabled?'⏸ Pausa auto':'▶ Riprendi auto'}</button>
+        ${w.error?`<button class="sm" id="wPerm">Riattiva permesso</button>`:''}
+        <button class="sm danger" id="wUnlink">Scollega</button>`
+      :`<b>Sincronizzazione automatica</b><span style="color:var(--ink-2)">· collega una cartella del disco: i nuovi file entrano da soli.</span>
+        <div class="spacer"></div>
+        <button class="sm primary" id="wPick" ${FSA?'':'disabled title="Richiede Chrome o Edge"'}>📂 Collega cartella</button>`}
+    </div>
+  </div>
+  ${docsPanel(t,list,T)}`;
+}
+function bindFiles(t){
+  $('#fEdit').onclick=()=>renameTab(t.id);
+  bindSegmenti(t); bindAnno();
+  if(vistaDi(t)==='tabella'){ bindTabella(t); return; }
+  bindQuickAdd(t.id);
+  const on=(id,fn)=>{const e=$(id); if(e)e.onclick=fn;};
+  on('#wPick',()=>pickFolderFor(t.id));
+  on('#wScan',()=>{toast('Scansione in corso…');scanFolder(t.id,true);});
+  on('#wToggle',()=>{ t.watch.enabled=!t.watch.enabled; save(); refreshWatchers(); render(); });
+  on('#wPerm',()=>scanFolder(t.id,true));
+  on('#wUnlink',()=>unlinkFolder(t.id));
+  on('#btnAggiorna',()=>aggiornaTab(t.id));
+  bindDropzone(t.id);
+  bindRows();
+}
+
+/* pannello documenti condiviso */
+function docsPanel(t,list,T){
+  return `<div class="panel">
+    <div class="row" style="align-items:center">
+      <div style="flex:1">
+        <h2 style="margin:0">Automatica — ${esc(t.name)}</h2>
+        <p class="sub" style="margin:2px 0 0">Documenti arrivati da soli: scaricati dal portale o presi dalla cartella collegata.
+          I campi restano modificabili.</p>
+      </div>
+      <button class="primary noprint" id="btnAggiorna" title="Cerca nuovi documenti e rilegge i consumi da quelli già presenti">↻ Aggiorna</button>
+    </div>
+    <div class="hr"></div>
+    ${strisciaTotali('TOTALE '+t.name.toUpperCase(),T,extraConsumi(list),isEntrataTab(t))}
+    ${list.length?`<div class="tablewrap"><table>
+      <thead><tr>
+        <th class="espandi"></th>
+        <th class="sortable" data-s="date">Data</th><th class="sortable" data-s="name">Descrizione</th>
+        <th>Documento</th>
+        <th class="num">Consumo</th>
+        <th class="sortable" data-s="cat">Categoria</th>
+        <th class="num sortable" data-s="amount">Importo €</th>
+        <th>N° rate</th><th>Frazionamento</th><th class="num">Rate €</th>
+        <th class="scad sortable" data-s="due">Scadenza</th>
+        <th class="sortable" data-s="status">Stato</th>
+        <th class="num">Rimanenza</th><th class="noprint"></th>
+      </tr></thead>
+      <tbody>${list.map(d=>rowHTML(d,{origine:false,consumo:true})).join('')}</tbody>
+    </table></div>`:`<div class="empty">Nessun documento in questo tab${annoAttivo()?' nel '+esc(annoAttivo()):''}.
+      <br>Premi <b>↻ Aggiorna</b> per cercarne di nuovi.</div>`}
+  </div>`;
+}
+
+/* ------------------------------------------------------------------
+   Consumo letto dal documento
+   ------------------------------------------------------------------ */
+/* Il numero NON può contenere spazi: «Consumo medio annuo 2026 361 mc» va letto
+   come 361, non come 2026361 (era proprio l'errore sulle bollette dell'acqua). */
+const NUM_Q="(\\d{1,3}(?:[.']\\d{3})+(?:,\\d+)?|\\d+(?:[.,]\\d+)?)";
+const UNITA_RE={
+  kWh:"k\\s?wh\\b",
+  MC :"(?:mc\\b|m3\\b|m³|smc\\b|metri\\s*cubi)",
+  LT :"(?:lt\\b|litri\\b|l\\b)",
+};
+const RE_UNITA={};
+for(const [u,frammento] of Object.entries(UNITA_RE)) RE_UNITA[u]=new RegExp(NUM_Q+"\\s*"+frammento,"gi");
+
+/* La dicitura che indica il consumo davvero addebitato: «CONSUMO FATTURATO:
+   495 kWh» (Octopus), «Tot. Consumi Fatturati 90 mc» (SECAM). Quando c'è, è
+   quella e basta: non il consumo annuo, non le letture del contatore. */
+const RE_FATTURATO={};
+for(const [u,frammento] of Object.entries(UNITA_RE))
+  RE_FATTURATO[u]=new RegExp("(?:tot(?:ale)?\\.?\\s*)?consum[oi]\\s*fatturat[oi]\\s*[:\\-]?\\s*"+NUM_Q+"\\s*"+frammento,"i");
+
+/* contesti che indicano tutt'altro numero */
+const CTX_ALTRO=/(medi[oa]|annu[oai]|\/\s*anno|all'anno|storic|ultimi\s*12|lettur|contator|matricola|installat|rimosso|autolettur|tentativi|precedent|scaglion|stimat)/;
+const CTX_PREZZO=/(prezzo|costo|tariffa|€\s*\/|eur\s*\/|corrispettiv|imposta|accis|aliquot|x\s*$)/;
+
+/** cerca la quantità consumata nel testo del documento, per l'unità richiesta */
+function detectConsumo(testo,unita){
+  if(!testo||!RE_UNITA[unita]) return null;
+
+  // 1) la dicitura esplicita vince su tutto
+  const diretto=RE_FATTURATO[unita].exec(testo);
+  if(diretto){
+    const v=parseAmountString(diretto[1]);
+    if(v!=null&&v>0&&v<1e7) return Math.round(v*100)/100;
+  }
+
+  // 2) altrimenti si pesano i candidati in base a cosa li precede
+  const re=RE_UNITA[unita];
+  re.lastIndex=0;
+  const cand=[];
+  let m;
+  while((m=re.exec(testo))){
+    const v=parseAmountString(m[1]);
+    if(v==null||v<=0||v>1e7) continue;
+    const ctx=testo.slice(Math.max(0,m.index-55),m.index).toLowerCase();
+    let sc=0;
+    if(/(consum|prelevat|erogat|hai\s*consumato)/.test(ctx)) sc+=45;
+    if(/(del\s*periodo|fatturat|totale\s*consum)/.test(ctx)) sc+=35;
+    if(CTX_ALTRO.test(ctx))  sc-=80;
+    if(CTX_PREZZO.test(ctx)) sc-=60;
+    if(/\/\s*(anno|mese)/.test(testo.slice(m.index,m.index+m[0].length+8))) sc-=80;
+    if(v<1) sc-=40;
+    cand.push({q:Math.round(v*100)/100,sc});
+  }
+  if(!cand.length) return null;
+  /* a parità di punteggio conta la ripetizione: il consumo del periodo torna in
+     più punti della bolletta, una lettura del contatore compare una volta sola */
+  const quante=new Map();
+  for(const c of cand) quante.set(c.q,(quante.get(c.q)||0)+1);
+  cand.sort((a,b)=> b.sc-a.sc || quante.get(b.q)-quante.get(a.q) || b.q-a.q);
+  return cand[0].sc>-20?cand[0].q:null;
+}
+
+/** Aggiorna un tab: cerca documenti nuovi e rilegge i consumi da quelli presenti */
+async function aggiornaTab(tabId){
+  const t=tabById(tabId); if(!t) return {};
+  const b=$('#btnAggiorna');
+  if(b){ b.disabled=true; b.dataset.old=b.textContent; b.textContent='⏳ Aggiorno…'; }
+  let nuovi=0;
+  try{
+    if(t.watch) nuovi=await scanFolder(tabId,true)||0;
+  }catch(_){}
+  const letti=await rileggiConsumi(tabId);
+  if(b){ b.disabled=false; if(b.dataset.old) b.textContent=b.dataset.old; }
+  const parti=[];
+  if(nuovi) parti.push(nuovi+' nuovi documenti');
+  if(letti) parti.push(letti+' consumi aggiornati');
+  toast(parti.length?parti.join(' · '):'Nessuna novità: tutto già aggiornato', parti.length?'ok':'');
+  render();
+  return {nuovi,letti};
+}
+
+/** rilegge il testo archiviato dei documenti e completa i consumi mancanti */
+async function rileggiConsumi(tabId){
+  let n=0;
+  for(const d of docsOf(tabId)){
+    const u=unitaDoc(d);
+    if(!u||d.kwh!=null) continue;
+    const txt=await DB.get('blobs','txt:'+d.id).catch(()=>null);
+    if(!txt) continue;
+    const q=detectConsumo(txt,u);
+    if(q!=null){ d.kwh=q; n++; }
+  }
+  if(n) save();
+  return n;
+}
+
+/* ==============================================================================
+   14. DROPZONE
+   ============================================================================== */
+function dropzoneHTML(tabId){
+  return `<div class="dz" id="dz-${tabId}">
+    <div class="big">Trascina qui file, cartelle o archivi ZIP</div>
+    <div class="sm">PDF, immagini, TXT/CSV, Excel/Word, ZIP (anche annidati). Importo e scadenza vengono rilevati automaticamente dove possibile.</div>
+    <div class="acts">
+      <button class="primary" data-pick="files">📄 Scegli file</button>
+      <button data-pick="dir">📁 Scegli cartella</button>
+      ${FSA?`<button data-pick="watch">🔗 Collega cartella (auto)</button>`:''}
+    </div>
+    <div class="progress" hidden><i></i></div>
+  </div>`;
+}
+function bindDropzone(tabId){
+  const dz=$('#dz-'+tabId); if(!dz) return;
+  const bar=$('.progress',dz), fill=$('.progress i',dz);
+  const prog=(i,n,name)=>{ bar.hidden=false; fill.style.width=(i/n*100)+'%'; bar.title=name; };
+  const done=async(items)=>{
+    if(!items.length) return;
+    toast('Importazione di '+items.length+' file…');
+    const added=await addDocuments(tabId,items,{onProgress:prog});
+    bar.hidden=true; fill.style.width='0';
+    const ab=(added.abbinati||[]).length, sv=(added.sovrascritti||[]).length;
+    const parti=[];
+    if(added.length) parti.push(added.length+' documenti importati');
+    if(ab) parti.push(ab+' abbinati a righe già presenti');
+    if(sv) parti.push(sv+' aggiornati (erano già presenti)');
+    toast(parti.length?parti.join(' · '):'Nessun nuovo documento (già presenti)', parti.length?'ok':'');
+    render();
+  };
+  ['dragenter','dragover'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('over');}));
+  ['dragleave','drop'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.remove('over');}));
+  dz.addEventListener('drop',async ev=>{ done(await filesFromDataTransfer(ev.dataTransfer)); });
+  $$('[data-pick]',dz).forEach(b=>b.onclick=()=>{
+    const k=b.dataset.pick;
+    if(k==='watch') return pickFolderFor(tabId);
+    const inp = k==='dir' ? $('#dirInput') : $('#fileInput');
+    inp.value='';
+    inp.onchange=()=>done([...inp.files].map(f=>({name:f.name,path:f.webkitRelativePath||f.name,blob:f,lastModified:f.lastModified})));
+    inp.click();
+  });
+}
+
+/* ==============================================================================
+   15. DIALOGHI TAB
+   ============================================================================== */
+function siteDialog(existing){
+  const t=existing;
+  modal(t?'Modifica sito':'Nuovo tab — Sito',`
+    <label class="fld">Indirizzo del sito (URL)
+      <input id="tUrl" placeholder="https://www.esempio.it/area-clienti" value="${esc(t?.url||'')}"></label>
+    <div class="grid2" style="margin-top:12px">
+      <label class="fld">Nome del tab<input id="tName" placeholder="es. Enel — Area clienti" value="${esc(t?.name||'')}"></label>
+      <label class="fld">Icona<input id="tIcon" maxlength="4" value="${esc(t?.icon||'🌐')}"></label>
+    </div>
+    <label class="fld" style="margin-top:12px">Note (utente, promemoria…)
+      <textarea id="tNote" rows="2" placeholder="Nessuna password viene salvata">${esc(t?.note||'')}</textarea></label>
+    ${selFlusso(t)}
+    <div class="hint">
+      <b>Come funziona il login.</b> Il sito si apre nel tuo browser: la sessione resta attiva come sempre, quindi normalmente non devi rifare l'accesso ogni volta (spunta «Ricordami» sul sito).
+      Una pagina web non può, per motivi di sicurezza, leggere i contenuti di un altro sito: per questo l'aggiornamento automatico avviene tramite la <b>cartella collegata</b> — scarichi lì i documenti e l'app li importa da sola.
+    </div>
+  `,[{label:'Annulla'},{label:t?'Salva':'Crea tab',primary:true,fn:()=>{
+    let url=$('#tUrl').value.trim();
+    if(!url){ toast('Inserisci l\'indirizzo del sito','err'); return false; }
+    if(!/^https?:\/\//i.test(url)) url='https://'+url;
+    try{ new URL(url); }catch(_){ toast('Indirizzo non valido','err'); return false; }
+    let name=$('#tName').value.trim();
+    if(!name){ try{ name=new URL(url).host.replace(/^www\./,''); }catch(_){ name='Sito'; } }
+    const flusso=$('#tFlusso').value;
+    if(t){ Object.assign(t,{url,name,icon:$('#tIcon').value.trim()||'🌐',note:$('#tNote').value.trim(),flusso}); }
+    else{
+      const nt={id:uid(),type:'site',url,name,flusso,icon:$('#tIcon').value.trim()||'🌐',note:$('#tNote').value.trim(),createdAt:new Date().toISOString()};
+      S.tabs.push(nt); S.active=nt.id;
+    }
+    save(); render();
+  }}],()=>$('#tUrl').focus());
+}
+function filesTabDialog(){
+  modal('Nuovo tab — File / Cartella',`
+    <div class="grid2">
+      <label class="fld">Nome del tab<input id="tName" placeholder="es. Fatture Amazon Business"></label>
+      <label class="fld">Icona<input id="tIcon" maxlength="4" value="📁"></label>
+    </div>
+    ${selFlusso(null)}
+    <div class="hint">Dopo la creazione potrai trascinare file, cartelle o ZIP, oppure collegare una cartella del disco per l'importazione automatica.</div>
+  `,[{label:'Annulla'},{label:'Crea tab',primary:true,fn:()=>{
+    const name=$('#tName').value.trim()||'Documenti '+(S.tabs.filter(t=>t.type==='files').length+1);
+    const nt={id:uid(),type:'files',name,flusso:$('#tFlusso').value,icon:$('#tIcon').value.trim()||'📁',createdAt:new Date().toISOString()};
+    S.tabs.push(nt); S.active=nt.id; save(); render();
+  }}],()=>$('#tName').focus());
+}
+
+/* ==============================================================================
+   16. MODALE
+   ============================================================================== */
+function modal(title,bodyHTML,buttons=[{label:'Chiudi'}],onOpen,cls='',onClose){
+  const ov=$('#overlay'), m=$('#modal');
+  m.className='modal '+cls;
+  m.innerHTML=`<h3>${esc(title)}</h3><div class="body">${bodyHTML}</div>
+    <div class="foot">${buttons.map((b,i)=>`<button data-i="${i}" class="${b.primary?'primary':b.danger?'danger':''}">${esc(b.label)}</button>`).join('')}</div>`;
+  ov.hidden=false;
+  // onClose scatta comunque: anche con Escape o clic fuori, così chi attende
+  // una risposta non resta appeso per sempre
+  const close=()=>{ov.hidden=true;m.innerHTML='';document.removeEventListener('keydown',key);if(onClose)onClose();};
+  const key=e=>{ if(e.key==='Escape') close(); };
+  document.addEventListener('keydown',key);
+  $$('.foot button',m).forEach(b=>b.onclick=async()=>{
+    const cfg=buttons[+b.dataset.i];
+    if(cfg.fn){ const r=await cfg.fn(); if(r===false) return; }
+    close();
+  });
+  ov.onclick=e=>{ if(e.target===ov) close(); };
+  bindCampiData(m);
+  if(onOpen) setTimeout(onOpen,30);
+}
+
+/* ==============================================================================
+   17. EXPORT / BACKUP / IMPOSTAZIONI
+   ============================================================================== */
+function exportCsv(){
+  const list=sortDocs(filteredDocs());
+  const head=['Data','Documento','Percorso','Origine','Tipo','Categoria','Scadenza','Stato','Importo','Note'];
+  const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
+  const rows=list.map(d=>[d.docDate||'',d.name,d.path,tabById(d.tabId)?.name||'',isEntrata(d)?'Entrata':'Uscita',catLabel(d.category),
+    d.dueDate||'',L(isEntrata(d),effStatus(d)),
+    d.amount!=null?fmtNum(d.amount):'',d.note||''].map(q).join(';'));
+  const T=totals(list);
+  const TE=totals(list.filter(isEntrata)), TU=totals(list.filter(d=>!isEntrata(d)));
+  rows.push(['','','','','','','','TOTALE RICAVI',q(fmtNum(TE.total)),''].join(';'));
+  rows.push(['','','','','','','','TOTALE COSTI',q(fmtNum(TU.total)),''].join(';'));
+  rows.push(['','','','','','','','SALDO',q(fmtNum(TE.total-TU.total)),''].join(';'));
+  const csv='﻿'+[head.map(q).join(';'),...rows].join('\r\n');
+  dl(new Blob([csv],{type:'text/csv;charset=utf-8'}),
+     `rendiconto-business${annoAttivo()?'_'+annoAttivo():''}_${todayISO()}.csv`);
+  toast('CSV esportato','ok');
+}
+function dl(blob,name){
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
+  a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+function backupDialog(){
+  modal('Backup e ripristino',`
+    <p style="margin:0 0 12px">Il backup salva tab, importi, categorie e note in un file JSON. <b>I file originali non sono inclusi</b> (restano nell'archivio locale del browser).</p>
+    <div class="row">
+      <button class="primary" id="bkExp">⇩ Scarica backup JSON</button>
+      <button id="bkImp">⇧ Ripristina da file</button>
+      <div class="spacer"></div>
+      <button class="danger" id="bkWipe">Cancella tutto</button>
+    </div>
+    <div class="hint">Documenti totali: ${S.docs.length} · Tab: ${S.tabs.length-1}</div>
+  `,[{label:'Chiudi'}],()=>{
+    $('#bkExp').onclick=()=>{ dl(new Blob([JSON.stringify(S,null,2)],{type:'application/json'}),`rendiconto_backup_${todayISO()}.json`); toast('Backup scaricato','ok'); };
+    $('#bkImp').onclick=()=>{ const i=$('#restoreInput'); i.value=''; i.onchange=async()=>{
+      try{
+        const j=JSON.parse(await i.files[0].text());
+        if(!j.tabs) throw new Error('File non valido');
+        S=Object.assign(DEFAULT_STATE(),j); save(); render(); refreshWatchers();
+        toast('Backup ripristinato','ok'); $('#overlay').hidden=true;
+      }catch(e){ toast('Ripristino fallito: '+e.message,'err'); }
+    }; i.click(); };
+    $('#bkWipe').onclick=()=>modal('Cancellare tutti i dati?','<p style="margin:0">Operazione irreversibile: tab, documenti e file archiviati verranno rimossi.</p>',
+      [{label:'Annulla'},{label:'Cancella tutto',danger:true,fn:async()=>{
+        watchers.forEach(v=>clearInterval(v)); watchers.clear();
+        await DB.clear('blobs').catch(()=>{}); await DB.clear('handles').catch(()=>{});
+        S=DEFAULT_STATE(); save(); render(); toast('Dati cancellati');
+      }}]);
+  });
+}
+function settingsDialog(){
+  modal('Impostazioni',`
+    <div class="grid2">
+      <label class="fld">Valuta
+        <select id="stCur">${['EUR','USD','GBP','CHF'].map(c=>`<option ${S.settings.currency===c?'selected':''}>${c}</option>`).join('')}</select></label>
+      <label class="fld">Avvisa con anticipo di (giorni)
+        <input type="number" id="stDays" min="0" max="90" value="${S.settings.alertDays}"></label>
+      <label class="fld">Scansione automatica cartelle (secondi)
+        <input type="number" id="stScan" min="10" max="3600" value="${S.settings.autoScanSec}"></label>
+      <label class="fld">Tema
+        <select id="stTheme"><option value="light" ${S.settings.theme==='light'?'selected':''}>Chiaro</option>
+        <option value="dark" ${S.settings.theme==='dark'?'selected':''}>Scuro</option></select></label>
+    </div>
+    <div class="hr"></div>
+    <button id="stNotif">🔔 Attiva notifiche di scadenza</button>
+    <div class="hint">Le notifiche del browser ti avvisano quando arrivano nuovi documenti dalle cartelle collegate.
+    Stato attuale: <b>${('Notification' in window)?Notification.permission:'non supportate'}</b>.</div>
+    <div class="hr"></div>
+    <div class="hint"><b>Ricalcolo:</b> riesegue il rilevamento automatico di importo, data e categoria su tutti i documenti con testo estratto, senza toccare i valori che hai modificato a mano.</div>
+    <button id="stRecalc" style="margin-top:8px">↻ Ricalcola rilevamento automatico</button>
+  `,[{label:'Annulla'},{label:'Salva',primary:true,fn:()=>{
+    S.settings.currency=$('#stCur').value;
+    S.settings.alertDays=clamp(+$('#stDays').value||0,0,90);
+    S.settings.autoScanSec=clamp(+$('#stScan').value||60,10,3600);
+    S.settings.theme=$('#stTheme').value;
+    document.documentElement.dataset.theme=S.settings.theme;
+    save(); refreshWatchers(); render();
+  }}],()=>{
+    $('#stNotif').onclick=async()=>{ if('Notification' in window){ const p=await Notification.requestPermission(); toast('Notifiche: '+p, p==='granted'?'ok':'err'); } };
+    $('#stRecalc').onclick=async()=>{
+      let n=0;
+      for(const d of S.docs){
+        const txt=await DB.get('blobs','txt:'+d.id).catch(()=>null);
+        if(!txt) continue;
+        const det=detectAmount(txt), dts=detectDates(txt);
+        if(det && d.auto?.amount!==false){ d.amount=det.amount; d.auto={amount:true,conf:det.confidence,snippet:det.snippet}; n++; }
+        if(dts.dueDate&&!d.dueDate) d.dueDate=dts.dueDate;
+        if(dts.docDate&&!d.docDate) d.docDate=dts.docDate;
+        d.category=categoriaPer(d.tabId,d.path+' '+d.name+' '+txt.slice(0,3000));
+      }
+      save(); render(); toast(n+' documenti ricalcolati','ok');
+    };
+  });
+}
+
+/* ==============================================================================
+   18. AVVIO
+   ============================================================================== */
+$('#btnTheme').onclick=()=>{
+  S.settings.theme = S.settings.theme==='dark'?'light':'dark';
+  document.documentElement.dataset.theme=S.settings.theme; save();
+};
+$('#btnSettings').onclick=settingsDialog;
+$('#btnExport').onclick=backupDialog;
+
+// drop globale sul tab attivo
+document.addEventListener('dragover',e=>e.preventDefault());
+document.addEventListener('drop',e=>e.preventDefault());
+
+window.addEventListener('beforeunload',()=>{ if(saveTimer){ clearTimeout(saveTimer); DB.set('kv','state',JSON.parse(JSON.stringify(S))); } });
+
+window.__init = async function init(){
+  await load();
+  render();
+  // riprende le cartelle collegate
+  for(const t of S.tabs){
+    if(!t.watch) continue;
+    const h=await getDirHandle(t.id,false);
+    if(!h){ delete t.watch; continue; }
+    if(h.__denied) t.watch.error='Permesso non concesso — clicca «Riattiva»';
+    else if(t.watch.enabled) scanFolder(t.id,false);
+  }
+  refreshWatchers();
+  save(); render();
+  // controllo scadenze una volta al giorno / all'avvio
+  const ad=+S.settings.alertDays||7, today=todayISO();
+  const due=S.docs.filter(d=>d.status==='da_pagare'&&d.dueDate&&daysBetween(today,d.dueDate)<=ad);
+  if(due.length) notify('Avvisi scadenze', due.length+' scadenz'+(due.length===1?'a':'e')+' da gestire (pagamenti e incassi)');
+};
+if(!window.__DESKTOP__) window.__init();

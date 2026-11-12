@@ -1,0 +1,12 @@
+# dipendenze e build
+node_modules/
+App/Installer/
+dist/
+# documenti scaricati / archiviati: dati personali dell'attività, mai su GitHub
+App/Documenti/
+Documenti/
+# file locali
+*.log
+.prova-scrittura
+Thumbs.db
+desktop.ini

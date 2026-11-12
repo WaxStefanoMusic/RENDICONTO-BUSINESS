@@ -16,7 +16,8 @@ if not exist "node_modules\electron\dist\electron.exe" (
   if not exist "node_modules\electron\dist\electron.exe" call node node_modules\electron\install.js
 )
 
-echo Avvio Rendicontazione Business...
+echo Avvio Gestionale SNC...
+call npm run css || goto :errore
 call npx electron .
 goto :fine
 

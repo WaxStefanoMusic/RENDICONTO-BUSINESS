@@ -1,22 +1,26 @@
 {
   "name": "rendiconto-business-desktop",
-  "version": "1.0.0",
-  "description": "Rendicontazione Business — fatture emesse e ricevute, corrispettivi, commercialista, scadenze",
+  "version": "2.0.0",
+  "description": "Gestionale contabile e fiscale per SNC in contabilità semplificata: entrate, acquisti, LIPE, imposte soci e INPS",
   "main": "main.js",
   "author": "Mattew",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --enable-logging",
-    "installer": "electron-builder --win nsis portable",
-    "dist": "electron-builder --win nsis portable",
-    "pack": "electron-builder --dir",
-    "release": "electron-builder --win nsis portable --publish always"
+    "css": "tailwindcss -i src/tailwind.css -o renderer/app.css --minify",
+    "start": "npm run css && electron .",
+    "dev": "npm run css && electron . --enable-logging",
+    "dist": "npm run css && electron-builder --win nsis portable --publish never",
+    "installer": "npm run dist",
+    "pack": "npm run css && electron-builder --dir",
+    "release": "npm run css && electron-builder --win nsis portable --publish always"
   },
   "devDependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@tailwindcss/cli": "^4.3.5",
     "electron": "^43.2.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "tailwindcss": "^4.3.5"
   },
   "build": {
     "appId": "it.mattew.rendiconto.business",
@@ -27,16 +31,13 @@
     "files": [
       "**/*",
       "!Installer/**",
-      "!Documenti/**",
       "!build/**",
-      "!sync-core.js",
+      "!src/**",
       "!avvia.cmd",
-      "!*.md",
-      "!**/_body.html",
-      "!business-patch.js"
+      "!*.md"
     ],
     "win": {
-      "requestedExecutionLevel": "requireAdministrator",
+      "requestedExecutionLevel": "asInvoker",
       "target": [
         {
           "target": "nsis",
@@ -57,13 +58,13 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Rendicontazione Business",
+      "shortcutName": "Gestionale SNC",
       "include": "build/installer.nsh",
       "perMachine": false,
       "artifactName": "Rendicontazione-Business-Setup-${version}.${ext}"
     },
     "portable": {
-      "artifactName": "RendicontazioneBusiness-portable-${version}.exe"
+      "artifactName": "GestionaleSNC-portable-${version}.exe"
     },
     "publish": [
       {

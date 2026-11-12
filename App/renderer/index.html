@@ -1,39 +1,494 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob: data:">
-<title>Rendicontazione Business — fatture, corrispettivi e scadenze</title>
-<link rel="stylesheet" href="styles.css">
-<link rel="stylesheet" href="desktop.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'">
+  <title>Gestionale Contabile &amp; Fiscale SNC</title>
+  <link rel="stylesheet" href="app.css" />
 </head>
-<body>
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen flex flex-col font-sans">
 
-<header class="app">
-  <div class="brand">
-    <span class="logo">€</span>
-    <span>Rendicontazione Business<small>Fatture, corrispettivi &amp; scadenze</small></span>
+  <!-- Notifica -->
+  <div id="toast" class="fixed bottom-4 right-4 z-50 hidden max-w-[calc(100vw-2rem)] sm:max-w-md bg-slate-900 text-white px-4 py-3 rounded-xl shadow-lg border border-slate-700 items-center gap-3 text-sm" role="status" aria-live="polite">
+    <span id="toast-icon" class="text-emerald-400 font-bold">✓</span>
+    <span id="toast-msg">Operazione completata</span>
   </div>
-  <div class="spacer"></div>
-  <button id="btnTheme" class="ghost" title="Tema chiaro/scuro">◐</button>
-  <button id="btnSettings" class="ghost" title="Impostazioni">⚙</button>
-  <button id="btnExport" class="ghost" title="Backup / ripristino">⇩ Backup</button>
-</header>
 
-<nav class="tabbar" id="tabbar"></nav>
+  <!-- Modale di conferma -->
+  <div id="confirm-modal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <h3 id="confirm-title" class="text-lg font-bold text-slate-900 mb-2">Conferma operazione</h3>
+      <p id="confirm-desc" class="text-sm text-slate-600 mb-6">Sei sicuro di voler procedere?</p>
+      <div class="flex justify-end gap-3">
+        <button id="confirm-cancel" class="px-4 py-2 rounded-xl text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition">Annulla</button>
+        <button id="confirm-ok" class="px-4 py-2 rounded-xl text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 transition">Conferma</button>
+      </div>
+    </div>
+  </div>
 
-<main><div class="wrap" id="view"></div></main>
+  <!-- Modale impostazioni (dati della società: restano solo su questo computer) -->
+  <div id="settings-modal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs items-center justify-center p-4">
+    <form id="form-settings" class="bg-white rounded-2xl max-w-3xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-200" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between gap-3 z-10">
+        <div>
+          <h3 id="settings-title" class="text-lg font-bold text-slate-900">Impostazioni della società</h3>
+          <p class="text-xs text-slate-500">Questi dati restano solo su questo computer: non sono nel codice dell'app.</p>
+        </div>
+        <button type="button" data-action="close-settings" class="shrink-0 w-9 h-9 rounded-xl text-slate-500 hover:bg-slate-100" aria-label="Chiudi">✕</button>
+      </div>
 
-<div class="ov" id="overlay" hidden><div class="modal" id="modal"></div></div>
-<div id="toasts"></div>
+      <div class="p-6 space-y-6">
+        <fieldset class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <legend class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Società</legend>
+          <label class="block sm:col-span-2 text-xs font-semibold text-slate-700">Ragione sociale
+            <input id="set-ragione" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm" placeholder="Es. Rossi & C. S.N.C." />
+          </label>
+          <label class="block sm:col-span-2 text-xs font-semibold text-slate-700">Descrizione attività (sotto il nome)
+            <input id="set-attivita" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm" placeholder="Es. Vendita al dettaglio arredamento • UE & Svizzera" />
+          </label>
+        </fieldset>
 
-<input type="file" id="fileInput" multiple hidden>
-<input type="file" id="dirInput" webkitdirectory directory multiple hidden>
-<input type="file" id="restoreInput" accept="application/json" hidden>
+        <fieldset class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <legend class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Soci e collaboratore</legend>
+          <label class="block sm:col-span-2 text-xs font-semibold text-slate-700">Nome socio 1 (amministratore)
+            <input id="set-s1-nome" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Quota socio 1 (%)
+            <input id="set-s1-quota" type="number" min="0" max="100" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+          </label>
+          <label class="block sm:col-span-2 text-xs font-semibold text-slate-700">Nome socio 2
+            <input id="set-s2-nome" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm" />
+          </label>
+          <div class="text-xs font-semibold text-slate-700">Quota socio 2 (%)
+            <div id="set-s2-quota" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm text-right">—</div>
+          </div>
+          <label class="block sm:col-span-3 text-xs font-semibold text-slate-700">Nome collaboratore familiare
+            <input id="set-collab-nome" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm" />
+          </label>
+        </fieldset>
 
-<script src="boot.js"></script>
-<script src="core.js"></script>
-<script src="desktop.js"></script>
+        <fieldset class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <legend class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Costo attuale del commercialista (per il confronto)</legend>
+          <label class="block text-xs font-semibold text-slate-700">Totale lordo annuo (€)
+            <input id="set-comm-lordo" type="number" min="0" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Di cui imponibile (€)
+            <input id="set-comm-imp" type="number" min="0" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Software fatture fai-da-te (€/anno)
+            <input id="set-comm-sw" type="number" min="0" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+          </label>
+        </fieldset>
+
+        <details class="rounded-xl border border-slate-200 p-4">
+          <summary class="cursor-pointer text-xs font-bold uppercase tracking-wider text-slate-500">Parametri fiscali (aliquote e soglie)</summary>
+          <p class="text-xs text-slate-500 mt-2 mb-4">Valori di stima da verificare ogni anno con la normativa in vigore.</p>
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <label class="block text-xs font-semibold text-slate-700">IRPEF fino a 28.000 € (%)
+              <input id="set-irpef1" type="number" min="0" max="100" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">IRPEF 28.000–50.000 € (%)
+              <input id="set-irpef2" type="number" min="0" max="100" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">IRPEF oltre 50.000 € (%)
+              <input id="set-irpef3" type="number" min="0" max="100" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">Addizionali reg. + com. (%)
+              <input id="set-addiz" type="number" min="0" max="10" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">Aliquota IRAP (%)
+              <input id="set-irap" type="number" min="0" max="20" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">Deduzione IRAP (€)
+              <input id="set-irap-ded" type="number" min="0" step="1" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">INPS: reddito minimale (€)
+              <input id="set-inps-min" type="number" min="0" step="1" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">INPS: contributo fisso (€/anno)
+              <input id="set-inps-fisso" type="number" min="0" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">INPS: aliquota eccedenza (%)
+              <input id="set-inps-aliq" type="number" min="0" max="100" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+          </div>
+        </details>
+      </div>
+
+      <div class="sticky bottom-0 bg-white border-t border-slate-200 px-6 py-4 flex flex-wrap justify-end gap-3">
+        <button type="button" data-action="close-settings" class="px-4 py-2 rounded-xl text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition">Annulla</button>
+        <button type="submit" class="px-5 py-2 rounded-xl text-sm font-semibold text-slate-950 bg-amber-500 hover:bg-amber-400 transition">Salva impostazioni</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Header -->
+  <!-- fissa in alto solo su schermi larghi: su un telefono o una finestra bassa ruberebbe metà dello spazio -->
+  <header class="bg-slate-900 text-white border-b border-slate-800 lg:sticky top-0 z-30">
+    <div class="max-w-7xl 2xl:max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="shrink-0 w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/30 flex items-center justify-center text-amber-400 font-bold text-lg">SNC</div>
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h1 id="hdr-ragione" class="text-lg sm:text-xl font-bold tracking-tight truncate">Gestionale Contabile &amp; Fiscale</h1>
+            <span id="hdr-badge" class="hidden sm:inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Semplificata</span>
+          </div>
+          <p id="hdr-attivita" class="text-xs text-slate-400 truncate"></p>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <label class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs text-slate-300">Anno
+          <select id="sel-anno" class="bg-slate-800 text-white font-semibold text-sm outline-none"></select>
+        </label>
+        <button data-action="open-settings" class="px-3 py-2 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">⚙ Impostazioni</button>
+        <button data-action="demo" class="px-3 py-2 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">Carica esempio</button>
+        <button data-action="clear" class="px-3 py-2 rounded-xl text-xs font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 transition">Svuota / Inizia da zero</button>
+        <button data-action="import" class="px-3 py-2 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">Ripristina backup</button>
+        <button data-action="export" class="px-3 py-2 rounded-xl text-xs bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold transition">Esporta backup</button>
+      </div>
+    </div>
+
+    <div class="tabs-scroll max-w-7xl 2xl:max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 overflow-x-auto">
+      <nav class="flex gap-1 sm:gap-2 border-t border-slate-800/80 pt-2" aria-label="Sezioni">
+        <button data-tab="dashboard" class="tab-btn">1. Dashboard &amp; Riepilogo</button>
+        <button data-tab="entrate" class="tab-btn">2. Entrate (Corrispettivi &amp; Fatture)</button>
+        <button data-tab="acquisti" class="tab-btn">3. Acquisti &amp; Spese</button>
+        <button data-tab="iva" class="tab-btn">4. Liquidazione IVA (LIPE)</button>
+        <button data-tab="imposte" class="tab-btn">5. Imposte Soci &amp; INPS</button>
+        <button data-tab="guida" class="tab-btn">6. Guida &amp; Adempimenti</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="flex-1 max-w-7xl 2xl:max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+
+    <!-- TAB 1: DASHBOARD -->
+    <section id="tab-dashboard" class="tab-content space-y-6">
+      <div id="demo-banner" class="hidden bg-amber-50 border border-amber-200 rounded-2xl p-4">
+        <div class="flex items-start gap-3">
+          <span class="text-amber-600 text-lg mt-0.5">💡</span>
+          <div class="text-xs sm:text-sm text-amber-900">
+            <strong>Dati di esempio:</strong> stai guardando movimenti dimostrativi di una piccola SNC di arredamento (corrispettivi, fatture Italia/Svizzera, acquisti UE, caffè, furgone). Puoi modificarli o premere <strong>«Svuota / Inizia da zero»</strong> per inserire i tuoi numeri reali.
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Ricavi imponibili <span data-anno></span></p>
+          <p id="kpi-ricavi" class="text-2xl font-extrabold text-slate-900 mt-1 break-words">0,00 €</p>
+          <p class="text-xs text-slate-500 mt-1">Corrispettivi + fatture emesse</p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Costi deducibili fiscali</p>
+          <p id="kpi-costi" class="text-2xl font-extrabold text-slate-900 mt-1 break-words">0,00 €</p>
+          <p class="text-xs text-slate-500 mt-1">Al netto delle quote indeducibili</p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Utile fiscale stimato SNC</p>
+          <p id="kpi-utile" class="text-2xl font-extrabold text-emerald-600 mt-1 break-words">0,00 €</p>
+          <p id="kpi-utile-sub" class="text-xs text-slate-500 mt-1"></p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Carico fiscale + INPS soci</p>
+          <p id="kpi-tasse" class="text-2xl font-extrabold text-indigo-600 mt-1 break-words">0,00 €</p>
+          <p class="text-xs text-slate-500 mt-1">IRPEF + addizionali + INPS + IRAP</p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 class="text-base font-bold text-slate-900">Andamento economico &amp; fiscale <span data-anno></span></h2>
+              <p class="text-xs text-slate-500">Ricavi imponibili, costi deducibili e utile netto dopo tasse e INPS</p>
+            </div>
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700">Contabilità semplificata</span>
+          </div>
+          <div id="bars" class="space-y-4 pt-2"></div>
+
+          <div id="box-risparmio" class="hidden mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <p class="text-xs font-bold text-emerald-900 uppercase tracking-wide">Risparmio potenziale gestione autonoma</p>
+              <p id="txt-risparmio" class="text-xs text-emerald-800 mt-0.5"></p>
+            </div>
+            <button data-tab="guida" class="shrink-0 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition">Vedi come fare</button>
+          </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between space-y-5">
+          <div>
+            <h2 class="text-base font-bold text-slate-900">Ripartizione soci (trasparenza)</h2>
+            <p class="text-xs text-slate-500 mb-4">Utile e imposte stimati per quota societaria</p>
+            <div id="dash-soci" class="space-y-3"></div>
+          </div>
+          <button data-tab="imposte" class="w-full py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition">Apri dettaglio imposte &amp; INPS →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: ENTRATE -->
+    <section id="tab-entrate" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">Registra entrata (corrispettivi o fattura emessa)</h2>
+          <p class="text-xs text-slate-500">Inserisci il totale incassato: per i corrispettivi con IVA l'app scorpora il 22% da sola. Per le fatture all'estero l'operazione è non imponibile.</p>
+        </div>
+        <form id="form-entrata" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
+          <label class="block text-xs font-semibold text-slate-700">Data
+            <input type="date" id="ent-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Tipo documento
+            <select id="ent-tipo" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+              <option value="Corrispettivi">Corrispettivi negozio</option>
+              <option value="Fattura">Fattura emessa</option>
+            </select>
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Descrizione / cliente
+            <input type="text" id="ent-desc" placeholder="Es. Corrispettivi gennaio / Fatt. n. 12 Rossi" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Regime IVA / destinazione
+            <select id="ent-regime" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+              <option value="IT_22">Italia / privato UE (IVA 22%)</option>
+              <option value="CH_ART8">Esportazione Svizzera / extra-UE (art. 8 - 0%)</option>
+              <option value="UE_ART41">Cessione a impresa UE VIES (art. 41 - 0%)</option>
+            </select>
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Totale documento (€ IVA incl.)
+            <input type="number" step="0.01" min="0" id="ent-totale" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <div class="sm:col-span-2 lg:col-span-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
+            <div id="ent-preview" class="text-xs text-slate-600"></div>
+            <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-xs transition">+ Aggiungi entrata</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Corrispettivi e fatture attive <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">Fatture emesse nell'anno: <strong id="count-fatture-attive">0</strong></p>
+          </div>
+          <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+            Imponibile: <span id="tot-entrate-imp" class="text-slate-900">0,00 €</span> | IVA a debito: <span id="tot-entrate-iva" class="text-rose-600">0,00 €</span>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Trim.</th><th class="py-3 px-4">Tipo</th>
+                <th class="py-3 px-4">Descrizione</th><th class="py-3 px-4">Regime</th>
+                <th class="py-3 px-4 text-right">Imponibile</th><th class="py-3 px-4 text-right">IVA debito</th>
+                <th class="py-3 px-4 text-right">Totale</th><th class="py-3 px-4 text-center">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-entrate" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: ACQUISTI -->
+    <section id="tab-acquisti" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">Registra acquisto o spesa aziendale</h2>
+          <p class="text-xs text-slate-500">Scegli categoria e provenienza del fornitore: l'app applica le regole fiscali (IVA indetraibile portata a costo, limiti auto e telefonia, reverse charge UE TD18, bolle doganali Svizzera).</p>
+        </div>
+        <form id="form-acquisto" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <label class="block text-xs font-semibold text-slate-700">Data documento
+            <input type="date" id="acq-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Fornitore e descrizione spesa
+            <input type="text" id="acq-desc" placeholder="Es. Capsule caffè ufficio / Fornitore mobili / Bolla doganale CH" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Provenienza fornitore
+            <select id="acq-provenienza" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+              <option value="IT">Italia (fattura SDI con IVA)</option>
+              <option value="UE_MERCE">Fornitore UE (reverse charge TD18)</option>
+              <option value="CH_BOLLA">Svizzera / extra-UE (merce + bolla doganale)</option>
+              <option value="CH_SERVIZI">Svizzera / extra-UE servizi (reverse charge TD17)</option>
+            </select>
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Categoria fiscale (regole TUIR / IVA)
+            <select id="acq-categoria" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none"></select>
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Imponibile (€)
+            <input type="number" step="0.01" min="0" id="acq-imponibile" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700"><span id="lbl-acq-iva">IVA in fattura (€)</span>
+            <input type="number" step="0.01" min="0" id="acq-iva" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <div class="sm:col-span-2 lg:col-span-4 p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div id="acq-preview" class="text-xs text-slate-700 space-y-1"></div>
+            <button type="submit" class="shrink-0 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition">+ Registra spesa</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Acquisti &amp; spese deducibili <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">L'IVA indetraibile (es. caffè o 60% dell'auto) si somma al costo prima di applicare la % di deducibilità.</p>
+          </div>
+          <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+            IVA detraibile: <span id="tot-acq-iva-det" class="text-emerald-700">0,00 €</span> | Costo deducibile: <span id="tot-acq-costo-ded" class="text-slate-900">0,00 €</span>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Trim.</th><th class="py-3 px-4">Descrizione &amp; origine</th>
+                <th class="py-3 px-4">Regola fiscale</th><th class="py-3 px-4 text-right">Imponibile</th>
+                <th class="py-3 px-4 text-right">IVA tot.</th><th class="py-3 px-4 text-right">IVA detraibile</th>
+                <th class="py-3 px-4 text-right">Costo deducibile</th><th class="py-3 px-4 text-center">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-acquisti" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: LIPE -->
+    <section id="tab-iva" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+          <div>
+            <h2 class="text-lg font-bold text-slate-900">Liquidazione periodica IVA trimestrale (LIPE <span data-anno></span>)</h2>
+            <p class="text-xs text-slate-500">Le SNC in semplificata liquidano l'IVA ogni trimestre, con interessi dell'1% se a debito; il 4° trimestre va nella dichiarazione annuale.</p>
+          </div>
+          <label class="flex items-center gap-2 bg-slate-100 px-3 py-2 rounded-xl text-xs font-semibold text-slate-700">Credito IVA anno precedente (€)
+            <input type="number" step="0.01" min="0" id="iva-credito-prec" value="0" class="w-28 px-2 py-1 rounded-lg border border-slate-300 text-xs font-bold text-right bg-white" />
+          </label>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" id="cards-trimestri-iva"></div>
+        <div class="mt-6 p-4 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-900 space-y-1.5">
+          <p class="font-bold">Promemoria reverse charge UE / Svizzera (TD17 e TD18):</p>
+          <p>Per un acquisto intracomunitario o un servizio da fornitore svizzero l'app aggiunge l'IVA al 22% <strong>sia</strong> a debito <strong>sia</strong> a credito del trimestre: il saldo non cambia, ma l'autofattura elettronica va trasmessa allo SDI entro il 15 del mese successivo.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: IMPOSTE -->
+    <section id="tab-imposte" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <h2 class="text-lg font-bold text-slate-900 mb-1">Posizioni previdenziali (INPS commercianti)</h2>
+        <p class="text-xs text-slate-500 mb-5">Stato contributivo dei soci e del collaboratore familiare. I contributi INPS si deducono dal reddito imponibile IRPEF.</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-sm font-bold text-slate-900"><span data-s1-nome></span> (<span data-s1-quota></span>)</span>
+              <span class="px-2 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-800">Attivo INPS</span>
+            </div>
+            <p id="txt-inps-s1" class="text-xs text-slate-600"></p>
+          </div>
+          <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-sm font-bold text-slate-900"><span data-s2-nome></span> (<span data-s2-quota></span>)</span>
+              <label class="inline-flex items-center cursor-pointer">
+                <input type="checkbox" id="toggle-socio2-inps" class="sr-only peer">
+                <div class="w-9 h-5 bg-slate-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all relative peer-checked:bg-emerald-600"></div>
+                <span id="lbl-socio2-inps" class="ml-2 text-xs font-semibold text-slate-700">INPS attivo</span>
+              </label>
+            </div>
+            <p class="text-xs text-slate-600">Attivo se il socio lavora abitualmente in negozio; disattivo se è socio di capitale o già assicurato altrove come dipendente a tempo pieno.</p>
+          </div>
+          <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-sm font-bold text-slate-900" data-collab-nome></span>
+              <label class="inline-flex items-center cursor-pointer">
+                <input type="checkbox" id="toggle-collab-inps" class="sr-only peer">
+                <div class="w-9 h-5 bg-slate-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all relative peer-checked:bg-emerald-600"></div>
+                <span id="lbl-collab-inps" class="ml-2 text-xs font-semibold text-slate-700">Cessato</span>
+              </label>
+            </div>
+            <p id="txt-inps-collab" class="text-xs text-slate-600"></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div class="border-b border-slate-100 pb-3">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-amber-600">Imputazione per trasparenza <span data-s1-quota></span></span>
+            <h3 class="text-lg font-bold text-slate-900" data-s1-nome></h3>
+          </div>
+          <div class="space-y-2.5 text-xs sm:text-sm" id="dettaglio-socio1"></div>
+        </div>
+        <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div class="border-b border-slate-100 pb-3">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-amber-600">Imputazione per trasparenza <span data-s2-quota></span></span>
+            <h3 class="text-lg font-bold text-slate-900" data-s2-nome></h3>
+          </div>
+          <div class="space-y-2.5 text-xs sm:text-sm" id="dettaglio-socio2"></div>
+        </div>
+        <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div class="border-b border-slate-100 pb-3">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-indigo-600">Imposta regionale &amp; scadenze</span>
+            <h3 class="text-lg font-bold text-slate-900">IRAP società &amp; riepilogo F24</h3>
+          </div>
+          <div class="space-y-2.5 text-xs sm:text-sm" id="dettaglio-societa"></div>
+          <div class="pt-3 border-t border-slate-100">
+            <h4 class="text-xs font-bold uppercase text-slate-500 mb-2">Principali scadenze F24</h4>
+            <ul class="text-xs text-slate-600 space-y-1.5">
+              <li>• <strong>16 mag / 20 ago / 16 nov / 16 feb:</strong> rate fisse INPS commercianti.</li>
+              <li>• <strong>30 giugno:</strong> saldo IRPEF, addizionali, IRAP e INPS eccedenza + 1° acconto (40%).</li>
+              <li>• <strong>30 novembre:</strong> 2° acconto IRPEF, IRAP e INPS eccedenza (60%).</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 6: GUIDA -->
+    <section id="tab-guida" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-6">
+        <div>
+          <h2 class="text-lg font-bold text-slate-900">Come gestire la SNC in autonomia (o abbattere i costi)</h2>
+          <p class="text-xs text-slate-500 mt-1">Strumenti gratuiti dell'Agenzia delle Entrate e regole utili per un negozio di arredamento.</p>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+            <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2"><span class="shrink-0 w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center text-xs">1</span>Fatturazione elettronica &amp; corrispettivi (0 € – 35 €/anno)</h3>
+            <p class="text-xs text-slate-600 leading-relaxed">Con poche decine di fatture l'anno non serve un gestionale costoso: il portale <strong>Fatture e Corrispettivi</strong> dell'Agenzia delle Entrate è gratuito (accesso con SPID del legale rappresentante), oppure un servizio semplice come <strong>Aruba Fatturazione</strong> (~25–35 €/anno) che conserva a norma per 10 anni e invia allo SDI.</p>
+          </div>
+          <div class="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+            <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2"><span class="shrink-0 w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center text-xs">2</span>Operazioni con l'estero: UE e Svizzera</h3>
+            <ul class="text-xs text-slate-600 space-y-1.5 leading-relaxed">
+              <li>• <strong>Acquisto da fornitore UE:</strong> la SNC deve essere iscritta al VIES. Ricevi fattura senza IVA ed emetti autofattura <strong>TD18</strong> entro il 15 del mese successivo.</li>
+              <li>• <strong>Merci dalla Svizzera:</strong> la dogana emette la <strong>bolla doganale</strong> con l'IVA italiana pagata, che poi detrai. Per i servizi svizzeri si usa l'autofattura <strong>TD17</strong>.</li>
+              <li>• <strong>Vendita con consegna in Svizzera:</strong> fattura <strong>non imponibile art. 8</strong>, conservando la prova di uscita doganale (MRN).</li>
+            </ul>
+          </div>
+          <div class="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+            <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2"><span class="shrink-0 w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center text-xs">3</span>Software gratuiti per le dichiarazioni</h3>
+            <p class="text-xs text-slate-600 leading-relaxed">Ogni anno l'Agenzia delle Entrate rilascia gratis <strong>Redditi SP</strong> (dichiarazione della SNC + ISA), <strong>Dichiarazione IVA</strong>, <strong>IRAP</strong> e <strong>Redditi PF</strong> per i soci. Si inviano da <em>Fisconline</em> con SPID senza intermediari (salvo compensazioni di crediti oltre 5.000 €/anno, che richiedono il visto di conformità).</p>
+          </div>
+          <div class="p-5 rounded-2xl bg-emerald-50 border border-emerald-200 space-y-3">
+            <h3 class="text-sm font-bold text-emerald-900 flex items-center gap-2"><span class="shrink-0 w-6 h-6 rounded-lg bg-emerald-600 text-white flex items-center justify-center text-xs">4</span>Strategia consigliata: «fai-da-te assistito»</h3>
+            <p id="txt-guida-strategia" class="text-xs text-emerald-800 leading-relaxed"></p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="bg-white border-t border-slate-200 py-4 mt-8">
+    <div class="max-w-7xl 2xl:max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-slate-400 text-center">
+      <span>Gestionale contabile &amp; simulatore fiscale SNC • Dati salvati solo su questo computer</span>
+      <span>Strumento di simulazione e controllo: le stime non sostituiscono le dichiarazioni ufficiali</span>
+    </div>
+  </footer>
+
+  <input type="file" id="restore-input" accept="application/json,.json" hidden />
+  <script src="app.js"></script>
 </body>
 </html>

@@ -11,7 +11,8 @@
     "dev": "electron . --enable-logging",
     "installer": "electron-builder --win nsis portable",
     "dist": "electron-builder --win nsis portable",
-    "pack": "electron-builder --dir"
+    "pack": "electron-builder --dir",
+    "release": "electron-builder --win nsis portable --publish always"
   },
   "devDependencies": {
     "electron": "^43.2.0",
@@ -56,10 +57,24 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Rendicontazione Business"
+      "shortcutName": "Rendicontazione Business",
+      "include": "build/installer.nsh",
+      "perMachine": false,
+      "artifactName": "Rendicontazione-Business-Setup-${version}.${ext}"
     },
     "portable": {
       "artifactName": "RendicontazioneBusiness-portable-${version}.exe"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "WaxStefanoMusic",
+        "repo": "RENDICONTO-BUSINESS",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

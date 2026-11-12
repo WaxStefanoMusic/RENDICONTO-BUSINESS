@@ -11,6 +11,7 @@ const { app, BrowserWindow, WebContentsView, session, ipcMain, dialog, shell, Me
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
+const { autoUpdater } = require('electron-updater');
 
 /* Deve precedere qualsiasi getPath('userData'): fissa la cartella dati a
    %APPDATA%\Rendicontazione sia in sviluppo sia da eseguibile installato, così
@@ -393,7 +394,83 @@ function buildMenu() {
       { role: 'cut', label: 'Taglia' }, { role: 'copy', label: 'Copia' }, { role: 'paste', label: 'Incolla' },
       { role: 'selectAll', label: 'Seleziona tutto' },
     ]},
+    { label: '?', submenu: [
+      { label: 'Controlla aggiornamenti…', click: () => cercaAggiornamenti(true) },
+      { label: 'Informazioni', click: () => dialog.showMessageBox(win, {
+        type: 'info', title: 'Rendicontazione Business', buttons: ['Chiudi'],
+        message: 'Rendicontazione Business ' + app.getVersion(),
+        detail: 'Fatture emesse e ricevute, corrispettivi, commercialista e scadenze.\n\nDocumenti:\n' + DOWNLOAD_ROOT,
+      }) },
+    ]},
   ]);
+}
+
+/* -------------------------------------------------------------------------
+   Aggiornamenti automatici (come in App Preventivi)
+
+   Le versioni nuove stanno nelle Release della repository GitHub
+   RENDICONTO-BUSINESS, insieme a «latest.yml» che dice qual è l'ultima. L'app
+   lo legge all'avvio e poi ogni sei ore, scarica in sottofondo e si fa viva
+   SOLO quando il pacchetto è pronto. Decide l'utente: «Installa adesso»
+   chiude e riapre l'app aggiornata, «Alla prossima chiusura» la applica
+   uscendo. La versione portatile non si aggiorna da sé: si riscarica.
+   ------------------------------------------------------------------------- */
+let controlloChiesto = false;
+const aggiornabile = () => app.isPackaged && !process.env.PORTABLE_EXECUTABLE_DIR;
+
+function installaAggiornamento() {
+  /* prima si chiude la finestra con le sue regole (salvataggi compresi),
+     poi parte l'installazione */
+  if (!win || win.isDestroyed()) { autoUpdater.quitAndInstall(false, true); return; }
+  win.once('closed', () => setTimeout(() => autoUpdater.quitAndInstall(false, true), 300));
+  win.close();
+}
+
+function preparaAggiornamenti() {
+  if (!aggiornabile()) return;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-downloaded', (info) => {
+    const r = dialog.showMessageBoxSync(win, {
+      type: 'question', noLink: true, defaultId: 0, cancelId: 1,
+      buttons: ['Installa adesso', 'Alla prossima chiusura'],
+      title: 'Aggiornamento pronto',
+      message: 'È pronta la versione ' + info.version + '.',
+      detail: 'È già stata scaricata. Installandola adesso l\'app si chiude e si riapre aggiornata; i dati restano come sono.',
+    });
+    if (r === 0) installaAggiornamento();
+  });
+  autoUpdater.on('update-not-available', () => {
+    if (!controlloChiesto) return;
+    controlloChiesto = false;
+    dialog.showMessageBox(win, { type: 'info', buttons: ['Chiudi'], title: 'Rendicontazione Business',
+      message: 'Sei già all\'ultima versione.', detail: 'Versione installata: ' + app.getVersion() });
+  });
+  /* senza rete non è successo niente di grave: si riproverà; lo si dice solo a chi ha chiesto */
+  autoUpdater.on('error', (e) => {
+    if (!controlloChiesto) return;
+    controlloChiesto = false;
+    dialog.showMessageBox(win, { type: 'warning', buttons: ['Chiudi'], title: 'Rendicontazione Business',
+      message: 'Non sono riuscito a controllare gli aggiornamenti.', detail: String((e && e.message) || e) });
+  });
+
+  cercaAggiornamenti();
+  setInterval(cercaAggiornamenti, 6 * 60 * 60 * 1000);
+}
+
+function cercaAggiornamenti(chiestoDallUtente) {
+  if (chiestoDallUtente) controlloChiesto = true;
+  if (!aggiornabile()) {
+    if (chiestoDallUtente) dialog.showMessageBox(win, { type: 'info', buttons: ['Chiudi'], title: 'Rendicontazione Business',
+      message: 'Gli aggiornamenti automatici valgono per l\'app installata.',
+      detail: process.env.PORTABLE_EXECUTABLE_DIR
+        ? 'Questa è la versione portatile: scarica la nuova da GitHub (RENDICONTO-BUSINESS → Releases).'
+        : 'Questa copia gira dai sorgenti, quindi non c\'è niente da aggiornare.' });
+    controlloChiesto = false;
+    return;
+  }
+  autoUpdater.checkForUpdates().catch(() => {});
 }
 
 /* -------------------------------------------------------------------------
@@ -1116,6 +1193,7 @@ else {
     migrazioneIniziale = migraVecchiDownload();
     portalSession();
     createWindow();
+    preparaAggiornamenti();
     screen.on('display-metrics-changed', onDisplaysChanged);
     screen.on('display-added', onDisplaysChanged);
     screen.on('display-removed', onDisplaysChanged);

@@ -36,7 +36,9 @@ vengono riconosciuti. Tutto avviene sul computer: nessun file viene inviato.
 
 ### Ricerca e spostamento delle fatture
 Ogni tab con un elenco ha una **barra di ricerca** (Ctrl+F): filtra per descrizione, cliente o
-fornitore, Partita IVA, data o importo e segnala i risultati negli altri anni.
+fornitore, Partita IVA, data o importo e segnala i risultati negli altri anni. Sopra ogni
+tabella tre riquadri sommano **Totale, Imponibile e IVA** delle righe visibili: tutto l'anno,
+oppure solo i risultati della ricerca.
 
 Con il **tasto destro** su una fattura si apre un menu per spostarla in un altro tab (fatture
 emesse, fornitori, autofatture/estere, spese, commercialista): la voce viene convertita tenendo

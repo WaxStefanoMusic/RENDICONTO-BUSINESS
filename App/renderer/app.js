@@ -1353,9 +1353,9 @@ function renderAll() {
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
       <td class="py-3 px-4 font-medium text-slate-900 min-w-[200px]">${esc(item.desc)}${item.xml ? XML_BADGE : ''}${item.registro ? badgeRegistro(item) : ''}</td>
       ${p === 'fe' ? `<td class="py-3 px-4">${REGIME[item.regime] || esc(item.regime)}</td>` : ''}
-      <td class="py-3 px-4 text-right font-semibold text-slate-900 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
-      <td class="py-3 px-4 text-right text-rose-600 whitespace-nowrap">${fmtEuro(b.iva)}</td>
       <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.totale)}</td>
+      <td class="py-3 px-4 text-right font-semibold text-slate-700 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
+      <td class="py-3 px-4 text-right text-rose-600 whitespace-nowrap">${fmtEuro(b.iva)}</td>
       ${btnElimina('del-entrata', item.id)}
     </tr>`;
   }
@@ -1391,6 +1391,7 @@ function renderAll() {
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
       <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}${item.xml ? XML_BADGE : ''}</div>${PROV[item.provenienza] || ''}${termineAutofattura(item)}</td>
       <td class="py-3 px-4 text-xs text-slate-600 min-w-[140px]">${b.rule.badge}</td>
+      <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.imponibile + b.ivaDocumento)}</td>
       <td class="py-3 px-4 text-right font-medium text-slate-800 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
       <td class="py-3 px-4 text-right text-slate-500 whitespace-nowrap">${fmtEuro(b.ivaDocumento)}</td>
       <td class="py-3 px-4 text-right font-semibold text-emerald-700 whitespace-nowrap">${fmtEuro(b.ivaDetraibile)}</td>
@@ -1398,13 +1399,13 @@ function renderAll() {
       ${btnElimina('del-acquisto', item.id)}
     </tr>`;
   }
-  $('tbody-fornitori').innerHTML = htmlSp.fo || vuota(9, `Nessuna fattura di fornitori nel ${anno}. Registra qui merce e servizi acquistati per la rivendita.`);
+  $('tbody-fornitori').innerHTML = htmlSp.fo || vuota(10, `Nessuna fattura di fornitori nel ${anno}. Registra qui merce e servizi acquistati per la rivendita.`);
   $('tot-fo-iva-det').textContent = fmtEuro(totSp.fo.det);
   $('tot-fo-costo-ded').textContent = fmtEuro(totSp.fo.ded);
-  $('tbody-estero').innerHTML = htmlSp.es || vuota(9, `Nessun acquisto dall'estero nel ${anno}. Registra qui merce UE, servizi esteri e importazioni con bolla doganale.`);
+  $('tbody-estero').innerHTML = htmlSp.es || vuota(10, `Nessun acquisto dall'estero nel ${anno}. Registra qui merce UE, servizi esteri e importazioni con bolla doganale.`);
   $('tot-es-iva-det').textContent = fmtEuro(totSp.es.det);
   $('tot-es-costo-ded').textContent = fmtEuro(totSp.es.ded);
-  $('tbody-acquisti').innerHTML = htmlSp.acq || vuota(9, `Nessuna spesa nel ${anno}. Registra abbonamenti, bollette, carburante e le altre spese del negozio.`);
+  $('tbody-acquisti').innerHTML = htmlSp.acq || vuota(10, `Nessuna spesa nel ${anno}. Registra abbonamenti, bollette, carburante e le altre spese del negozio.`);
   $('tot-acq-iva-det').textContent = fmtEuro(totSp.acq.det);
   $('tot-acq-costo-ded').textContent = fmtEuro(totSp.acq.ded);
 
@@ -1440,9 +1441,9 @@ function renderAll() {
     html += `<tr data-voce="parcella:${item.id}" class="hover:bg-slate-50/80 transition align-top">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-medium text-slate-900 min-w-[220px]">${esc(item.desc)}${item.xml ? XML_BADGE : ''}${item.regime === 'forfettario' ? '<div class="text-[10px] font-bold text-slate-500 mt-1">FORFETTARIO</div>' : ''}</td>
+      <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.totale)}</td>
       <td class="py-3 px-4 text-right whitespace-nowrap">${fmtEuro(b.imponibileIva)}</td>
       <td class="py-3 px-4 text-right text-emerald-700 whitespace-nowrap">${fmtEuro(b.iva)}</td>
-      <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.totale)}</td>
       <td class="py-3 px-4 text-right text-rose-600 whitespace-nowrap">${b.ritenuta ? fmtEuro(b.ritenuta) : '—'}</td>
       <td class="py-3 px-4 text-right font-semibold whitespace-nowrap">${fmtEuro(b.netto)}</td>
       <td class="py-3 px-4">${stato}</td>
@@ -1653,6 +1654,10 @@ function installaRicerche() {
       </label>
       <span data-cerca-esito="${r.tbody}" class="text-xs text-slate-500" aria-live="polite"></span>`;
     card.firstElementChild.after(barra);
+    const riquadri = document.createElement('div');
+    riquadri.dataset.riquadri = r.tbody;
+    riquadri.className = 'grid grid-cols-1 sm:grid-cols-3 gap-4';
+    card.before(riquadri);
   }
 }
 
@@ -1667,16 +1672,22 @@ function applicaRicerche() {
     const righe = [...tb.querySelectorAll('tr[data-voce]')];
     // la riga «nessun movimento» resta solo senza ricerca
     tb.querySelectorAll('tr:not([data-voce])').forEach((tr) => tr.classList.toggle('hidden', parole.length > 0));
-    if (!parole.length) { righe.forEach((tr) => tr.classList.remove('hidden')); esito.textContent = ''; continue; }
     const voci = r.voci();
+    if (!parole.length) {
+      righe.forEach((tr) => tr.classList.remove('hidden')); esito.textContent = '';
+      disegnaRiquadri(r, voci.filter((x) => annoDi(x.data) === appState.anno), false);
+      continue;
+    }
+    const visibili = [];
     const perRif = new Map(voci.map((x) => [`${r.tipo}:${x.id}`, x]));
     let n = 0;
     for (const tr of righe) {
       const x = perRif.get(tr.dataset.voce);
       const ok = !!x && trovata(testoVoce(r.tipo, x), parole);
       tr.classList.toggle('hidden', !ok);
-      if (ok) n++;
+      if (ok) { n++; visibili.push(x); }
     }
+    disegnaRiquadri(r, visibili, true);
     const altri = new Map();
     for (const x of voci) {
       const a = annoDi(x.data);
@@ -1691,6 +1702,54 @@ function applicaRicerche() {
       tb.insertAdjacentHTML('beforeend', `<tr data-nessuno><td colspan="${col}" class="py-8 text-center text-slate-400 text-xs">Nessun risultato per «${esc(input.value.trim())}» nel ${appState.anno}.</td></tr>`);
     }
   }
+}
+
+/* Riquadri sopra ogni tabella: totale, imponibile e IVA delle righe che si
+   vedono (tutto l'anno, o solo i risultati della ricerca). */
+function sommeVoci(tipo, lista) {
+  const t = { totale: 0, imponibile: 0, iva: 0, det: 0, rc: 0, netto: 0, ritenuta: 0, n: lista.length };
+  for (const x of lista) {
+    if (tipo === 'entrata') {
+      const b = calcEntrataBreakdown(x);
+      t.totale += b.totale; t.imponibile += b.imponibile; t.iva += b.iva;
+    } else if (tipo === 'acquisto') {
+      const b = calcAcquistoBreakdown(x);
+      t.totale += b.imponibile + b.ivaDocumento; t.imponibile += b.imponibile; t.iva += b.ivaDocumento;
+      t.det += b.ivaDetraibile; t.rc += b.ivaDebitoRC;
+    } else {
+      const b = calcParcella(x);
+      t.totale += b.totale; t.imponibile += b.imponibileIva; t.iva += b.iva; t.netto += b.netto; t.ritenuta += b.ritenuta;
+    }
+  }
+  return t;
+}
+
+function disegnaRiquadri(r, lista, filtrata) {
+  const box = document.querySelector(`[data-riquadri="${r.tbody}"]`);
+  if (!box) return;
+  const t = sommeVoci(r.tipo, lista);
+  const corr = r.tbody === 'tbody-corrispettivi';
+  const quante = corr ? (t.n === 1 ? 'registrazione' : 'registrazioni') : r.tipo === 'parcella' ? (t.n === 1 ? 'parcella' : 'parcelle') : (t.n === 1 ? 'fattura' : 'fatture');
+  const dove = filtrata ? ' · solo i risultati della ricerca' : ` nel ${appState.anno}`;
+  let subTot = `${t.n} ${quante}${dove}`;
+  let titIva = 'IVA', colIva = 'text-slate-900', subIva = '', subImp = 'Senza IVA';
+  if (r.tipo === 'entrata') { titIva = 'IVA a debito'; colIva = 'text-rose-600'; subIva = 'Da versare con la liquidazione'; }
+  else if (r.tipo === 'acquisto') {
+    titIva = 'IVA delle fatture';
+    subIva = `Detraibile <strong class="text-emerald-700">${fmtEuro(t.det)}</strong>` + (t.rc ? ` · reverse charge ${fmtEuro(t.rc)}` : '');
+  } else {
+    titIva = 'IVA delle parcelle';
+    subImp = 'Onorario + cassa';
+    subTot += ` · pagato a lui ${fmtEuro(t.netto)} + ritenuta ${fmtEuro(t.ritenuta)}`;
+  }
+  const cella = (titolo, valore, sub, colore, forte) => `<div class="bg-white rounded-2xl border ${filtrata ? 'border-amber-300' : 'border-slate-200'} shadow-xs p-4">
+      <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500">${titolo}</div>
+      <div class="mt-1 ${forte ? 'text-2xl' : 'text-xl'} font-bold ${colore} whitespace-nowrap">${fmtEuro(valore)}</div>
+      <div class="mt-1 text-[11px] text-slate-500">${sub}</div>
+    </div>`;
+  box.innerHTML = cella(corr ? 'Totale incassato' : 'Totale', t.totale, subTot, 'text-slate-900', true)
+    + cella('Imponibile', t.imponibile, subImp, 'text-slate-900')
+    + cella(titIva, t.iva, subIva, colIva);
 }
 
 function cambiaAnnoRicerca(anno) {

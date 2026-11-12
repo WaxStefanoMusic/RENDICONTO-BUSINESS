@@ -1574,7 +1574,9 @@ function renderAll() {
   $('cards-trimestri-iva').innerHTML = html;
 
   // 5. Utile, imposte dei soci e INPS
-  const utileSnc = Math.max(0, totRicaviImp - totCostiDeducibili);
+  // il risultato può essere una perdita; le imposte si calcolano solo sull'utile
+  const risultato = totRicaviImp - totCostiDeducibili;
+  const utileSnc = Math.max(0, risultato);
   const q1 = utileSnc * quotaS1() / 100;
   const q2 = utileSnc * quotaS2() / 100;
   const inpsS1 = calcolaInpsCommercianti(q1, true);
@@ -1614,7 +1616,7 @@ function renderAll() {
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>`;
 
   $('dettaglio-societa').innerHTML =
-    riga('Utile fiscale SNC:', fmtEuro(utileSnc), 'font-bold text-slate-900') +
+    riga(risultato < 0 ? 'Perdita fiscale SNC:' : 'Utile fiscale SNC:', fmtEuro(risultato), risultato < 0 ? 'font-bold text-rose-600' : 'font-bold text-slate-900') +
     riga('Deduzione base IRAP stimata:', '- ' + fmtEuro(s.irapDed), 'font-semibold text-emerald-700') +
     riga(`IRAP (${fmtPct(s.irap)}):`, fmtEuro(irapSocieta), 'font-bold text-slate-900') +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Carico complessivo (soci + IRAP):</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totaleTasse)}</span></div>`;
@@ -1622,14 +1624,20 @@ function renderAll() {
   // 6. Cruscotto
   $('kpi-ricavi').textContent = fmtEuro(totRicaviImp);
   $('kpi-costi').textContent = fmtEuro(totCostiDeducibili);
-  $('kpi-utile').textContent = fmtEuro(utileSnc);
+  $('kpi-utile').textContent = fmtEuro(risultato);
+  $('kpi-utile').classList.toggle('text-rose-600', risultato < 0);
+  $('kpi-utile').classList.toggle('text-emerald-600', risultato >= 0);
+  $('kpi-utile-titolo').textContent = risultato < 0 ? 'Perdita fiscale stimata SNC' : 'Utile fiscale stimato SNC';
+  if (risultato < 0) $('kpi-utile-sub').textContent = 'I costi superano i ricavi: niente IRPEF né IRAP sul reddito, l\'INPS minimale resta dovuto.';
   $('kpi-tasse').textContent = fmtEuro(totaleTasse);
 
   const maxVal = Math.max(totRicaviImp, 1);
   $('bars').innerHTML =
     barra('Ricavi imponibili totali', totRicaviImp, totRicaviImp > 0 ? 100 : 0, 'bg-slate-800', 'text-slate-900') +
     barra('Costi fiscalmente deducibili', totCostiDeducibili, totCostiDeducibili / maxVal * 100, 'bg-amber-500', 'text-amber-700') +
-    barra('Utile fiscale SNC (base imponibile)', utileSnc, utileSnc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700') +
+    (risultato < 0
+      ? barra('Perdita fiscale SNC (costi oltre i ricavi)', risultato, -risultato / Math.max(totCostiDeducibili, 1) * 100, 'bg-rose-500', 'text-rose-600')
+      : barra('Utile fiscale SNC (base imponibile)', utileSnc, utileSnc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700')) +
     barra('Utile netto residuo (dopo IRPEF, IRAP e INPS)', nettoTasca, nettoTasca / maxVal * 100, 'bg-indigo-600', 'text-indigo-700');
 
   const scheda = (nome, quota, utile, irpef, inps) => `
@@ -1681,7 +1689,7 @@ const RICERCHE = [
   { tbody: 'tbody-estero', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'estero'), ph: 'Cerca fornitore, numero, data o importo…' },
   { tbody: 'tbody-acquisti', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => !['fornitori', 'estero', 'polizze', 'carta'].includes(x.sezione)), ph: 'Cerca spesa, fornitore, categoria, data o importo…' },
   { tbody: 'tbody-polizze', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'polizze'), ph: 'Cerca compagnia, polizza, data o importo…', riquadri: (lista, filtrata) => riquadriPolizze(lista, filtrata) },
-  { tbody: 'tbody-carta', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'carta'), ph: 'Cerca esercente, data o importo…', riquadri: (lista, filtrata) => riquadriCarta(lista, filtrata) },
+  { tbody: 'tbody-carta', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'carta'), ph: 'Cerca esercente, data o importo…', riquadri: (lista, filtrata) => riquadriCarta(lista, filtrata), colonne: 'grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4' },
   { tbody: 'tbody-parcelle', tipo: 'parcella', voci: () => appState.parcelle, ph: 'Cerca professionista, numero, data o importo…' },
 ];
 const normTesto = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').toLowerCase();
@@ -1727,7 +1735,7 @@ function installaRicerche() {
     card.firstElementChild.after(barra);
     const riquadri = document.createElement('div');
     riquadri.dataset.riquadri = r.tbody;
-    riquadri.className = 'grid grid-cols-1 sm:grid-cols-3 gap-4';
+    riquadri.className = r.colonne || 'grid grid-cols-1 sm:grid-cols-3 gap-4';
     card.before(riquadri);
   }
 }
@@ -2774,6 +2782,18 @@ function disegnaEstrattiCarta() {
     </span>`).join('') : '';
 }
 
+/* Saldo della carta a inizio anno (il saldo iniziale del primo estratto
+   dell'anno, o quello finale dell'ultimo dell'anno prima) e l'ultimo segnato */
+function saldiCarta(anno) {
+  const conSaldi = appState.cartaEstratti.filter((e) => e.saldoIniziale != null || e.saldoFinale != null);
+  const iniziali = conSaldi.filter((e) => e.saldoIniziale != null).map((e) => ({ data: e.dataSaldoIniziale || e.dal, importo: e.saldoIniziale }));
+  const finali = conSaldi.filter((e) => e.saldoFinale != null).map((e) => ({ data: e.dataSaldoFinale || e.al, importo: e.saldoFinale }));
+  const inizio = iniziali.filter((x) => annoDi(x.data) === anno).sort((a, b) => a.data.localeCompare(b.data))[0]
+    || finali.filter((x) => annoDi(x.data) === anno - 1).sort((a, b) => b.data.localeCompare(a.data))[0] || null;
+  const fine = finali.filter((x) => annoDi(x.data) === anno).sort((a, b) => b.data.localeCompare(a.data))[0] || null;
+  return { inizio, fine: fine && inizio && fine.data === inizio.data ? null : fine };
+}
+
 function riquadriCarta(lista, filtrata) {
   let spese = 0, n = 0, fatturate = 0, ded = 0, entrate = 0;
   for (const x of lista) {
@@ -2783,7 +2803,7 @@ function riquadriCarta(lista, filtrata) {
     if (x.categoria === 'carta_fatturata') { fatturate += -imp; continue; }
     spese += -imp; n++;
   }
-  const ultimo = appState.cartaEstratti.filter((e) => e.saldoFinale != null && annoDi(e.al) === appState.anno).sort((a, b) => String(b.al).localeCompare(String(a.al)))[0];
+  const s = saldiCarta(appState.anno);
   const bordo = filtrata ? 'border-amber-300' : 'border-slate-200';
   const cella = (titolo, valore, sub, colore = 'text-slate-900', forte = false) => `<div class="bg-white rounded-2xl border ${bordo} shadow-xs p-4">
       <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500">${titolo}</div>
@@ -2793,7 +2813,16 @@ function riquadriCarta(lista, filtrata) {
   const dove = filtrata ? ' · solo i risultati della ricerca' : ` nel ${appState.anno}`;
   return cella('Spese con la carta', fmtEuro(spese), `${n} ${n === 1 ? 'pagamento' : 'pagamenti'}${dove}${fatturate ? ` · più ${fmtEuro(fatturate)} già fatturate` : ''}`, 'text-slate-900', true)
     + cella('Costo deducibile', fmtEuro(ded), 'Senza fattura l\'IVA non si detrae: va tutta a costo')
-    + cella('Ricariche e accrediti', fmtEuro(entrate), ultimo ? `Saldo al ${esc(fmtData(ultimo.al))}: <strong class="text-slate-800">${fmtEuro(ultimo.saldoFinale)}</strong>` : 'Soldi messi sulla carta: non sono ricavi', 'text-emerald-700');
+    + cella('Ricariche e accrediti', fmtEuro(entrate), 'Soldi messi sulla carta: non sono ricavi', 'text-emerald-700')
+    + `<div class="bg-white rounded-2xl border ${bordo} shadow-xs p-4">
+      <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500">Saldo della carta</div>
+      ${s.inizio || s.fine ? `<div class="mt-1.5 space-y-1">
+        ${s.inizio ? `<div class="flex items-baseline justify-between gap-3"><span class="text-xs text-slate-500">Al ${esc(fmtData(s.inizio.data))}</span><span class="text-lg font-bold ${s.inizio.importo < 0 ? 'text-rose-600' : 'text-slate-700'} whitespace-nowrap">${fmtEuro(s.inizio.importo)}</span></div>` : ''}
+        ${s.fine ? `<div class="flex items-baseline justify-between gap-3"><span class="text-xs text-slate-500">Al ${esc(fmtData(s.fine.data))}</span><span class="text-xl font-bold ${s.fine.importo < 0 ? 'text-rose-600' : 'text-slate-900'} whitespace-nowrap">${fmtEuro(s.fine.importo)}</span></div>` : ''}
+      </div>
+      <div class="mt-1 text-[11px] text-slate-500">${s.inizio && s.fine ? `Variazione ${fmtEuro(s.fine.importo - s.inizio.importo)}` : 'Dai saldi degli estratti in PDF'}</div>`
+      : '<div class="mt-1 text-xl font-bold text-slate-400">—</div><div class="mt-1 text-[11px] text-slate-500">Si legge dagli estratti in PDF che riportano i saldi</div>'}
+    </div>`;
 }
 
 // cambio del tipo di spesa direttamente nella riga: vale anche per le altre
@@ -2938,7 +2967,7 @@ async function confermaEstrattoCarta() {
         if (!allegato) persi++;
       }
       appState.cartaEstratti = appState.cartaEstratti.filter((v) => !(v.dal === e.dal && v.al === e.al));
-      appState.cartaEstratti.push({ file: e.file, dal: e.dal, al: e.al, saldoIniziale: e.saldoIniziale, saldoFinale: e.saldoFinale, allegato, caricato: oggi() });
+      appState.cartaEstratti.push({ file: e.file, dal: e.dal, al: e.al, saldoIniziale: e.saldoIniziale, saldoFinale: e.saldoFinale, dataSaldoIniziale: e.dataSaldoIniziale || e.dal, dataSaldoFinale: e.dataSaldoFinale || e.al, allegato, caricato: oggi() });
     }
   } finally { $('carta-ok').disabled = false; }
   appState.acquisti.push(...nuove);

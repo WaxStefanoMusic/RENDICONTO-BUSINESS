@@ -89,7 +89,8 @@ non si detrae: l'importo pagato va tutto a costo, deducibile secondo il tipo. Ri
 e rimborsi della carta restano nell'elenco ma non sono spese; un pagamento che ha anche la fattura,
 già registrata in un altro tab, si segna «Già fatturata» e non conta due volte. Il tipo cambiato
 dalla riga vale anche per le altre spese dello stesso esercente e viene ricordato per i prossimi
-estratti. Ricaricare un estratto che si sovrappone a uno già caricato aggiunge solo i movimenti
+estratti. In alto, accanto a spese, costo deducibile e ricariche, il saldo della carta a inizio anno e
+l'ultimo segnato, letti dagli estratti in PDF. Ricaricare un estratto che si sovrappone a uno già caricato aggiunge solo i movimenti
 nuovi; i movimenti «da contabilizzare» vengono confermati dall'estratto successivo. I PDF si
 copiano in `allegati/carta/<anno>`.
 

@@ -327,7 +327,9 @@
     const verifiche = [];
     if (info.totale != null) verifiche.push({ cosa: 'Totale movimenti', atteso: info.totale, ok: Math.abs(info.totale - somma) < 0.005 });
     if (saldoIniziale != null && saldoFinale != null) verifiche.push({ cosa: 'Saldo iniziale + movimenti = saldo finale', atteso: r2(saldoFinale - saldoIniziale), ok: Math.abs(saldoIniziale + somma - saldoFinale) < 0.005 });
-    return { dal: date[0], al: date[date.length - 1], somma, saldoIniziale, saldoFinale, verifiche };
+    const dataSaldoIniziale = saldoIniziale != null ? (preferiti[0].data || date[0]) : '';
+    const dataSaldoFinale = saldoFinale != null ? (preferiti[preferiti.length - 1].data || date[date.length - 1]) : '';
+    return { dal: date[0], al: date[date.length - 1], somma, saldoIniziale, saldoFinale, dataSaldoIniziale, dataSaldoFinale, verifiche };
   }
 
   async function leggiFile(listaFile) {

@@ -28,6 +28,24 @@
     </div>
   </div>
 
+  <!-- Spostare una fattura in un altro tab (menu del tasto destro) -->
+  <div id="sposta-modal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-6 shadow-2xl border border-slate-200" role="dialog" aria-modal="true" aria-labelledby="sposta-titolo">
+      <h3 id="sposta-titolo" class="text-lg font-bold text-slate-900 mb-1">Spostare la fattura?</h3>
+      <p id="sposta-desc" class="text-sm text-slate-600 break-words"></p>
+      <div id="sposta-campi" class="mt-4 space-y-3"></div>
+      <p id="sposta-nota" class="mt-4 text-xs text-slate-600 p-2.5 rounded-lg bg-slate-50 border border-slate-200"></p>
+      <label id="sposta-regola-box" class="mt-4 flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-sm text-slate-800 cursor-pointer">
+        <input id="sposta-regola" type="checkbox" class="mt-0.5 w-4 h-4 accent-amber-600 shrink-0" />
+        <span id="sposta-regola-testo"></span>
+      </label>
+      <div class="mt-6 flex justify-end gap-3">
+        <button type="button" data-action="close-sposta" class="px-4 py-2 rounded-xl text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition">Annulla</button>
+        <button type="button" id="sposta-ok" data-action="conferma-sposta" class="px-5 py-2 rounded-xl text-sm font-semibold text-slate-950 bg-amber-500 hover:bg-amber-400 transition">Sposta</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modale impostazioni (dati della società: restano solo su questo computer) -->
   <div id="settings-modal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs items-center justify-center p-4">
     <form id="form-settings" class="bg-white rounded-2xl max-w-3xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-200" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -119,6 +137,12 @@
             </label>
           </div>
         </details>
+
+        <section>
+          <h4 class="text-sm font-bold text-slate-900">Dove vanno le fatture di un cliente o fornitore</h4>
+          <p class="text-xs text-slate-500 mt-0.5 mb-3">Regole create spostando una fattura col tasto destro: le fatture di queste ditte, quando le importi, vengono proposte direttamente nel tab indicato.</p>
+          <div id="regole-lista"></div>
+        </section>
       </div>
 
       <div class="sticky bottom-0 bg-white border-t border-slate-200 px-6 py-4 flex flex-wrap justify-end gap-3">

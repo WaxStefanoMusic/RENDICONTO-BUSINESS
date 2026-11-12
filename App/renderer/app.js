@@ -60,11 +60,13 @@ const STATO_VUOTO = () => ({
   acquisti: [],                // sezione 'fornitori' → Fatture ricevute, 'estero' → Autofatture/Fatture estere, 'spese' → Abbonamenti/Acquisti/Spese
   parcelle: [],                // fatture del commercialista, con la ritenuta d'acconto
   registroRiepiloghi: {},      // anno -> totali del PDF riepilogativo del Registro Corrispettivi
+  regole: [],                  // controparte -> tab dove vanno sempre le sue fatture
 });
 
 /* Le spese registrate prima della divisione in due tab non sapevano dove
    stare: la merce va ai fornitori, il resto ad abbonamenti e spese. */
 const sezioneDi = (a) => {
+  if (a.sezioneManuale && a.sezione) return a.sezione;
   const s = a.sezione || (a.categoria === 'merce_100_100' && !/bollett|affitt|utenz|cancell|energia|luce|gas\b/i.test(a.desc || '') ? 'fornitori' : 'spese');
   // gli acquisti dall'estero hanno un tab tutto loro
   return s === 'fornitori' && a.provenienza && a.provenienza !== 'IT' ? 'estero' : s;
@@ -115,6 +117,7 @@ function normalizza(s) {
   st.entrate = Array.isArray(st.entrate) ? st.entrate : [];
   st.acquisti = (Array.isArray(st.acquisti) ? st.acquisti : []).map((a) => ({ ...a, sezione: sezioneDi(a) }));
   st.parcelle = Array.isArray(st.parcelle) ? st.parcelle : [];
+  st.regole = Array.isArray(st.regole) ? st.regole.filter((r) => r && r.dest && (r.piva || r.nome)) : [];
   if (typeof st.registroRiepiloghi !== 'object' || st.registroRiepiloghi === null || Array.isArray(st.registroRiepiloghi)) st.registroRiepiloghi = {};
   // il credito IVA prima era un numero unico: diventa per anno
   if (typeof st.creditoIvaPrec !== 'object' || st.creditoIvaPrec === null) {
@@ -212,6 +215,8 @@ $('confirm-ok').addEventListener('click', () => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  if (chiudiMenuVoce()) return;
+  if (!$('sposta-modal').classList.contains('hidden')) { chiudi($('sposta-modal')); spostamento = null; return; }
   if (!$('confirm-modal').classList.contains('hidden')) { chiudi($('confirm-modal')); confirmCallback = null; }
   else if (!$('import-modal').classList.contains('hidden')) { chiudi($('import-modal')); importazione = null; }
   else if (!$('pdfc-modal').classList.contains('hidden')) { chiudi($('pdfc-modal')); caricamentoPdf = null; }
@@ -318,6 +323,7 @@ $('set-s1-quota').addEventListener('input', aggiornaQuotaS2Form);
 function openSettings() {
   for (const [id, k] of CAMPI_IMP) $(id).value = imp()[k] ?? '';
   aggiornaQuotaS2Form();
+  disegnaRegole();
   // al primo avvio non si può chiudere senza salvare: servono i dati veri
   document.querySelectorAll('[data-action="close-settings"]').forEach((b) => b.classList.toggle('hidden', !imp().configurate));
   apri($('settings-modal'));
@@ -379,6 +385,12 @@ document.addEventListener('click', (e) => {
     case 'close-pdfc': chiudi($('pdfc-modal')); caricamentoPdf = null; break;
     case 'conferma-pdfc': confermaPdfCorrispettivi(); break;
     case 'apri-allegato': apriAllegato(a.dataset.rel); break;
+    case 'menu-sposta': chiudiMenuVoce(); chiediSpostamento(a.dataset.voce, a.dataset.dest); break;
+    case 'menu-elimina': chiudiMenuVoce(); eliminaVoce(a.dataset.voce); break;
+    case 'close-sposta': chiudi($('sposta-modal')); spostamento = null; break;
+    case 'conferma-sposta': confermaSpostamento(); break;
+    case 'del-regola': eliminaRegola(+a.dataset.indice); break;
+    case 'cerca-anno': cambiaAnnoRicerca(+a.dataset.anno); break;
   }
 });
 
@@ -822,11 +834,16 @@ async function apriImport(lista, contesto) {
   const righe = r.fatture.map((f, i) => {
     const chiave = chiaveFattura(f);
     let p = proponiDestinazione(f, contesto, presunta);
+    const cp = controparteFattura(f, p.dest);
+    const regola = p.dest !== 'salta' ? regolaPer(cp) : null;
+    if (regola) p = { dest: regola.dest, motivo: 'Regola: sempre in ' + DESTINAZIONI[regola.dest], regola };
     if (presenti.has(chiave)) p = { dest: 'salta', motivo: 'Già importata' };
     else if (visti.has(chiave)) p = { dest: 'salta', motivo: 'Doppione nello stesso import' };
     visti.add(chiave);
-    const provenienza = f.tipoDoc === 'TD18' ? 'UE_MERCE' : (f.tipoDoc === 'TD17' || f.tipoDoc === 'TD19') ? 'CH_SERVIZI' : 'IT';
-    return { i, f, chiave, dest: p.dest, motivo: p.motivo || '', categoria: categoriaDa(f), provenienza };
+    let provenienza = f.tipoDoc === 'TD18' ? 'UE_MERCE' : (f.tipoDoc === 'TD17' || f.tipoDoc === 'TD19') ? 'CH_SERVIZI' : 'IT';
+    if (p.regola && p.regola.dest === 'estero' && provenienza === 'IT' && p.regola.provenienza) provenienza = p.regola.provenienza;
+    if (p.regola && p.regola.dest === 'fornitori') provenienza = 'IT';
+    return { i, f, chiave, dest: p.dest, motivo: p.motivo || '', categoria: (p.regola && p.regola.categoria) || categoriaDa(f), provenienza };
   });
   importazione = { righe, errori: r.errori, contesto, presunta };
   if (!righe.length) {
@@ -899,12 +916,13 @@ function confermaImport() {
     const f = r.f;
     const s = NOTE_CREDITO.has(f.tipoDoc) ? -1 : 1;
     const nc = s < 0 ? 'Nota di credito ' : 'Fatt. ';
+    const cp = controparteFattura(f, r.dest);
     if (r.dest === 'fatture') {
       const nature = f.riepiloghi.map((x) => x.natura);
       const regime = nature.some((n) => n === 'N3.1') ? 'CH_ART8' : nature.some((n) => n === 'N3.2') ? 'UE_ART41' : 'IT_22';
       appState.entrate.push({
         id: id++, data: f.data, tipo: 'Fattura', desc: `${nc}n. ${f.numero} - ${f.cessionario.nome}`, regime,
-        totale: s * f.totale, imponibile: s * f.imponibile, iva: s * f.iva, xml: r.chiave,
+        totale: s * f.totale, imponibile: s * f.imponibile, iva: s * f.iva, xml: r.chiave, cp,
       });
     } else if (r.dest === 'commercialista') {
       /* nell'XML l'imponibile dei riepiloghi comprende già la cassa:
@@ -916,7 +934,7 @@ function confermaImport() {
         id: id++, data: f.data, desc: `${f.cedente.nome} - ${nc}n. ${f.numero}`,
         regime: f.cedente.regime === 'RF19' ? 'forfettario' : 'ordinario',
         onorario: s * Math.max(0, imponibileIva - cassa), cassaPct: f.cassa ? f.cassa.aliquota : 0, esenti: s * esenti,
-        pagamento: '', ritenutaVersata: false, xml: r.chiave,
+        pagamento: '', ritenutaVersata: false, xml: r.chiave, cp,
       });
     } else {
       const rc = r.provenienza !== 'IT';
@@ -924,7 +942,10 @@ function confermaImport() {
         id: id++, data: f.data, desc: `${f.cedente.nome} - ${nc}n. ${f.numero}`,
         provenienza: r.provenienza, categoria: r.categoria,
         imponibile: s * f.imponibile, iva: rc ? 0 : s * f.iva,
-        sezione: r.dest, xml: r.chiave,
+        sezione: r.dest, xml: r.chiave, cp,
+        ...(r.dest === 'fornitori' && r.provenienza !== 'IT' ? { sezioneManuale: true } : {}),
+        // se un giorno la si sposta tra le parcelle, servono cassa e spese esenti
+        ...(f.ritenuta > 0 || f.cassa ? { prof: { regime: f.cedente.regime === 'RF19' ? 'forfettario' : 'ordinario', cassaPct: f.cassa ? f.cassa.aliquota : 0, esenti: s * f.riepiloghi.filter((x) => (x.natura || '').startsWith('N1')).reduce((t, x) => t + x.imponibile, 0) } } : {}),
       });
     }
     conta[r.dest]++;
@@ -1327,7 +1348,7 @@ function renderAll() {
     const p = item.tipo === 'Fattura' ? 'fe' : 'co';
     totRicaviImp += b.imponibile; ivaTrim[q].debito += b.iva;
     tot[p].imp += b.imponibile; tot[p].iva += b.iva; tot[p].lordo += b.totale; tot[p].n++;
-    htmlEnt[p] += `<tr class="hover:bg-slate-50/80 transition">
+    htmlEnt[p] += `<tr data-voce="entrata:${item.id}" class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
       <td class="py-3 px-4 font-medium text-slate-900 min-w-[200px]">${esc(item.desc)}${item.xml ? XML_BADGE : ''}${item.registro ? badgeRegistro(item) : ''}</td>
@@ -1365,7 +1386,7 @@ function renderAll() {
     totCostiDeducibili += b.costoDeducibile;
     ivaTrim[q].debito += b.ivaDebitoRC; ivaTrim[q].credito += b.ivaDetraibile;
     totSp[p].det += b.ivaDetraibile; totSp[p].ded += b.costoDeducibile;
-    htmlSp[p] += `<tr class="hover:bg-slate-50/80 transition">
+    htmlSp[p] += `<tr data-voce="acquisto:${item.id}" class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
       <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}${item.xml ? XML_BADGE : ''}</div>${PROV[item.provenienza] || ''}${termineAutofattura(item)}</td>
@@ -1416,7 +1437,7 @@ function renderAll() {
           <input type="checkbox" data-id="${item.id}" data-campo="versata" ${item.ritenutaVersata ? 'checked' : ''} class="accent-emerald-600" /> Versata</label>
       </div>`;
     }
-    html += `<tr class="hover:bg-slate-50/80 transition align-top">
+    html += `<tr data-voce="parcella:${item.id}" class="hover:bg-slate-50/80 transition align-top">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-medium text-slate-900 min-w-[220px]">${esc(item.desc)}${item.xml ? XML_BADGE : ''}${item.regime === 'forfettario' ? '<div class="text-[10px] font-bold text-slate-500 mt-1">FORFETTARIO</div>' : ''}</td>
       <td class="py-3 px-4 text-right whitespace-nowrap">${fmtEuro(b.imponibileIva)}</td>
@@ -1561,6 +1582,7 @@ function renderAll() {
       </div>
       <p class="text-[11px] text-slate-500 mt-1">Nessun compenso. I contributi INPS si attivano nella scheda 8.</p>
     </div>`;
+  applicaRicerche();
 }
 
 // ---------------------------------------------------------------------------
@@ -1574,6 +1596,410 @@ if (DESKTOP && window.gestionale.onMenu) {
     else if (cmd === 'stampa') window.print();
   });
 }
+
+// ---------------------------------------------------------------------------
+// Ricerca nelle tabelle
+// ---------------------------------------------------------------------------
+/* Ogni tab con un elenco ha la sua barra di ricerca: filtra le righe dell'anno
+   aperto per descrizione, cliente o fornitore, Partita IVA, data o importo
+   (più parole: devono esserci tutte) e conta i risultati negli altri anni.
+   Ctrl+F porta alla barra del tab aperto, Esc la svuota. */
+const RICERCHE = [
+  { tbody: 'tbody-fatture', tipo: 'entrata', voci: () => appState.entrate.filter((x) => x.tipo === 'Fattura'), ph: 'Cerca cliente, numero, data o importo…' },
+  { tbody: 'tbody-corrispettivi', tipo: 'entrata', voci: () => appState.entrate.filter((x) => x.tipo !== 'Fattura'), ph: 'Cerca mese, data o importo…' },
+  { tbody: 'tbody-fornitori', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'fornitori'), ph: 'Cerca fornitore, numero, data o importo…' },
+  { tbody: 'tbody-estero', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'estero'), ph: 'Cerca fornitore, numero, data o importo…' },
+  { tbody: 'tbody-acquisti', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione !== 'fornitori' && x.sezione !== 'estero'), ph: 'Cerca spesa, fornitore, categoria, data o importo…' },
+  { tbody: 'tbody-parcelle', tipo: 'parcella', voci: () => appState.parcelle, ph: 'Cerca professionista, numero, data o importo…' },
+];
+const normTesto = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').toLowerCase();
+const importoTesti = (n) => {
+  const v = Math.round((+n || 0) * 100) / 100;
+  return [fmtEuro(v), v.toFixed(2).replace('.', ','), String(v).replace('.', ',')];
+};
+const NOMI_REGIME = { IT_22: 'IVA 22%', IT_10: 'IVA 10%', IT_4: 'IVA 4%', ESENTE: 'esente', CH_ART8: 'Svizzera art. 8', UE_ART41: 'UE art. 41' };
+
+function testoVoce(tipo, x) {
+  const parti = [x.desc, fmtData(x.data), x.data];
+  const cp = controparteDi(tipo, x);
+  if (cp) parti.push(cp.nome, cp.piva);
+  if (tipo === 'entrata') {
+    const b = calcEntrataBreakdown(x);
+    parti.push(...importoTesti(b.imponibile), ...importoTesti(b.iva), ...importoTesti(b.totale), NOMI_REGIME[x.regime]);
+  } else if (tipo === 'acquisto') {
+    const b = calcAcquistoBreakdown(x);
+    parti.push(...importoTesti(b.imponibile), ...importoTesti(b.ivaDocumento), ...importoTesti(b.imponibile + b.ivaDocumento),
+      ...importoTesti(b.ivaDetraibile), ...importoTesti(b.costoDeducibile), b.rule.label, b.notaEstero);
+  } else {
+    const b = calcParcella(x);
+    parti.push(...importoTesti(b.imponibileIva), ...importoTesti(b.iva), ...importoTesti(b.totale), ...importoTesti(b.ritenuta), ...importoTesti(b.netto), x.regime);
+  }
+  if (x.xml) parti.push('xml');
+  return normTesto(parti.filter(Boolean).join(' | '));
+}
+const trovata = (testo, parole) => parole.every((p) => testo.includes(p));
+
+function installaRicerche() {
+  const lente = '<svg aria-hidden="true" viewBox="0 0 20 20" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4.5 4.5" stroke-linecap="round"/></svg>';
+  for (const r of RICERCHE) {
+    const card = $(r.tbody).closest('.rounded-2xl');
+    if (!card || card.querySelector('[data-cerca]')) continue;
+    const barra = document.createElement('div');
+    barra.className = 'px-5 py-3 border-b border-slate-200 bg-slate-50/60 flex flex-wrap items-center gap-x-3 gap-y-1.5 no-print';
+    barra.innerHTML = `<label class="relative flex-1 min-w-[200px] max-w-md">
+        <span class="sr-only">Cerca</span>${lente}
+        <input type="search" data-cerca="${r.tbody}" placeholder="${esc(r.ph)}" autocomplete="off" spellcheck="false"
+          class="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 bg-white text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+      </label>
+      <span data-cerca-esito="${r.tbody}" class="text-xs text-slate-500" aria-live="polite"></span>`;
+    card.firstElementChild.after(barra);
+  }
+}
+
+function applicaRicerche() {
+  for (const r of RICERCHE) {
+    const input = document.querySelector(`[data-cerca="${r.tbody}"]`);
+    if (!input) continue;
+    const esito = document.querySelector(`[data-cerca-esito="${r.tbody}"]`);
+    const tb = $(r.tbody);
+    tb.querySelectorAll('[data-nessuno]').forEach((el) => el.remove());
+    const parole = normTesto(input.value).split(' ').filter(Boolean);
+    const righe = [...tb.querySelectorAll('tr[data-voce]')];
+    // la riga «nessun movimento» resta solo senza ricerca
+    tb.querySelectorAll('tr:not([data-voce])').forEach((tr) => tr.classList.toggle('hidden', parole.length > 0));
+    if (!parole.length) { righe.forEach((tr) => tr.classList.remove('hidden')); esito.textContent = ''; continue; }
+    const voci = r.voci();
+    const perRif = new Map(voci.map((x) => [`${r.tipo}:${x.id}`, x]));
+    let n = 0;
+    for (const tr of righe) {
+      const x = perRif.get(tr.dataset.voce);
+      const ok = !!x && trovata(testoVoce(r.tipo, x), parole);
+      tr.classList.toggle('hidden', !ok);
+      if (ok) n++;
+    }
+    const altri = new Map();
+    for (const x of voci) {
+      const a = annoDi(x.data);
+      if (a && a !== appState.anno && trovata(testoVoce(r.tipo, x), parole)) altri.set(a, (altri.get(a) || 0) + 1);
+    }
+    let html = `<strong class="text-slate-800">${n}</strong> ${n === 1 ? 'risultato' : 'risultati'} su ${righe.length} nel ${appState.anno}`;
+    if (altri.size) html += ' · anche ' + [...altri].sort((a, b) => b[0] - a[0])
+      .map(([a, k]) => `<button type="button" data-action="cerca-anno" data-anno="${a}" class="text-amber-700 font-semibold hover:underline">${k} nel ${a}</button>`).join(', ');
+    esito.innerHTML = html;
+    if (!n) {
+      const col = tb.closest('table').querySelectorAll('thead th').length;
+      tb.insertAdjacentHTML('beforeend', `<tr data-nessuno><td colspan="${col}" class="py-8 text-center text-slate-400 text-xs">Nessun risultato per «${esc(input.value.trim())}» nel ${appState.anno}.</td></tr>`);
+    }
+  }
+}
+
+function cambiaAnnoRicerca(anno) {
+  if (!anno) return;
+  $('sel-anno').value = anno;
+  $('sel-anno').dispatchEvent(new Event('change'));
+}
+
+document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.cerca) applicaRicerche(); });
+document.addEventListener('keydown', (e) => {
+  if (e.target.dataset && e.target.dataset.cerca && e.key === 'Escape' && e.target.value) {
+    e.target.value = ''; applicaRicerche(); e.stopImmediatePropagation(); return;
+  }
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f') {
+    if ([...document.querySelectorAll('.fixed.inset-0')].some((m) => !m.classList.contains('hidden'))) return;
+    const tab = document.querySelector('.tab-content:not(.hidden)');
+    const input = tab && tab.querySelector('[data-cerca]');
+    if (input) { e.preventDefault(); input.focus(); input.select(); }
+  }
+}, true);
+
+// ---------------------------------------------------------------------------
+// Spostare una fattura in un altro tab (tasto destro) e regole per controparte
+// ---------------------------------------------------------------------------
+/* Una fattura finita nel tab sbagliato si sposta col tasto destro: l'app
+   converte la voce (fattura emessa, acquisto di una delle tre sezioni o
+   parcella) tenendo data, descrizione, importi e collegamento all'XML.
+   Per le fatture di cui si conosce il cliente o il fornitore si può creare
+   una regola: le altre già registrate si spostano subito e quelle importate
+   in futuro vengono proposte direttamente in quel tab. */
+const SPOSTABILI = ['fatture', 'fornitori', 'estero', 'spese', 'commercialista'];
+const NOMI_TAB = {
+  fatture: '2. Fatture emesse', fornitori: '4. Fatture ricevute fornitori', estero: '5. Autofatture/Fatture estere',
+  spese: '6. Abbonamenti/Acquisti/Spese', commercialista: '7. Commercialista',
+};
+const TAB_DI_DEST = { fatture: 'fatture', fornitori: 'fornitori', estero: 'estero', spese: 'acquisti', commercialista: 'commercialista' };
+const COLLEZIONE = { entrata: 'entrate', acquisto: 'acquisti', parcella: 'parcelle' };
+const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+const normNome = (s) => normTesto(s).replace(/[^a-z0-9]/g, '');
+
+function trovaVoce(rif) {
+  const [tipo, id] = String(rif || '').split(':');
+  const lista = appState[COLLEZIONE[tipo]];
+  const x = lista && lista.find((v) => String(v.id) === id);
+  return x ? { tipo, x } : null;
+}
+const destDi = (tipo, x) => (tipo === 'entrata' ? 'fatture' : tipo === 'parcella' ? 'commercialista' : x.sezione || 'spese');
+const tutteLeVoci = () => [
+  ...appState.entrate.filter((x) => x.tipo === 'Fattura').map((x) => ({ tipo: 'entrata', x })),
+  ...appState.acquisti.map((x) => ({ tipo: 'acquisto', x })),
+  ...appState.parcelle.map((x) => ({ tipo: 'parcella', x })),
+];
+
+/* Cliente o fornitore della fattura elettronica, secondo dove va registrata */
+function controparteFattura(f, dest) {
+  const c = dest === 'fatture' ? f.cessionario : f.cedente;
+  return { nome: String(c.nome || '').trim(), piva: pulisciPiva(c.piva || c.cf) };
+}
+/* Le fatture importate prima della 2.5 non hanno la controparte salvata: si
+   ricava dalla descrizione e, per le ricevute, dalla chiave dell'XML. */
+function controparteDi(tipo, x) {
+  if (x.cp && (x.cp.nome || x.cp.piva)) return x.cp;
+  if (!x.xml) return null;
+  const d = String(x.desc || '');
+  let m = d.match(/^(?:Nota di credito |Fatt\. )n\. \S+ - (.+)$/);
+  let nome = m ? m[1] : '';
+  if (!nome) { m = d.match(/^(.+?) - (?:Nota di credito |Fatt\. )n\. /); nome = m ? m[1] : ''; }
+  const seg = String(x.xml).split('|')[0];
+  const piva = tipo === 'entrata' || seg === pulisciPiva(imp().piva) ? '' : seg;
+  return nome || piva ? { nome: nome.trim(), piva } : null;
+}
+function stessaControparte(a, b) {
+  if (!a || !b) return false;
+  if (a.piva && b.piva) return a.piva === b.piva;
+  const na = normNome(a.nome);
+  return !!na && na === normNome(b.nome);
+}
+function regolaPer(cp) {
+  if (!cp || (cp.piva && cp.piva === pulisciPiva(imp().piva))) return null;
+  return appState.regole.find((r) => stessaControparte(r, cp)) || null;
+}
+
+function importiDi(tipo, x) {
+  if (tipo === 'entrata') { const b = calcEntrataBreakdown(x); return { imponibile: b.imponibile, iva: b.iva }; }
+  if (tipo === 'parcella') { const b = calcParcella(x); return { imponibile: b.imponibileIva + b.esenti + b.bollo, iva: b.iva }; }
+  return { imponibile: parseFloat(x.imponibile) || 0, iva: parseFloat(x.iva) || 0 };
+}
+
+/* Converte una voce nel tipo del tab di destinazione */
+function convertiVoce(tipo, x, dest, opz = {}) {
+  const cp = controparteDi(tipo, x);
+  const base = { id: x.id, data: x.data, desc: x.desc };
+  for (const k of ['xml', 'allegato', 'prof']) if (x[k] != null) base[k] = x[k];
+  if (cp) base.cp = cp;
+  // i dati del professionista restano da parte, per un eventuale ritorno
+  if (tipo === 'parcella') {
+    base.prof = { regime: x.regime, cassaPct: +x.cassaPct || 0, esenti: +x.esenti || 0, bollo: calcParcella(x).bollo, pagamento: x.pagamento || '', ritenutaVersata: !!x.ritenutaVersata };
+  }
+  const { imponibile, iva } = importiDi(tipo, x);
+
+  if (dest === 'fatture') {
+    return { tipo: 'entrata', voce: { ...base, tipo: 'Fattura', regime: iva ? 'IT_22' : 'ESENTE', totale: r2(imponibile + iva), imponibile: r2(imponibile), iva: r2(iva) } };
+  }
+  if (dest === 'commercialista') {
+    const pr = base.prof || {};
+    delete base.prof;
+    const cassaPct = +pr.cassaPct || 0, esenti = +pr.esenti || 0, bollo = +pr.bollo || 0;
+    const forf = pr.regime ? pr.regime === 'forfettario' : !iva;
+    return {
+      tipo: 'parcella',
+      voce: {
+        ...base, regime: forf ? 'forfettario' : 'ordinario',
+        onorario: r2((imponibile - esenti - bollo) / (1 + cassaPct / 100)), cassaPct, esenti,
+        pagamento: pr.pagamento || '', ritenutaVersata: !!pr.ritenutaVersata,
+      },
+    };
+  }
+  // una delle tre sezioni degli acquisti
+  const prima = tipo === 'acquisto' ? x : {};
+  const voce = tipo === 'acquisto' ? { ...x } : { ...base, imponibile: r2(imponibile), iva: r2(iva) };
+  let provenienza = opz.provenienza || prima.provenienza || 'IT';
+  if (dest === 'fornitori') provenienza = 'IT';
+  Object.assign(voce, { sezione: dest, sezioneManuale: true, provenienza, categoria: opz.categoria || prima.categoria || 'merce_100_100' });
+  if (cp) voce.cp = cp;
+  return { tipo: 'acquisto', voce };
+}
+
+function applicaSpostamento(tipo, x, dest, opz) {
+  const { tipo: nuovoTipo, voce } = convertiVoce(tipo, x, dest, opz);
+  appState[COLLEZIONE[tipo]] = appState[COLLEZIONE[tipo]].filter((v) => v !== x);
+  const arrivo = appState[COLLEZIONE[nuovoTipo]];
+  while (arrivo.some((v) => v.id === voce.id)) voce.id = Date.now() + Math.floor(Math.random() * 100000);
+  arrivo.push(voce);
+}
+
+// --- menu col tasto destro ---
+let menuVoce = null;
+function chiudiMenuVoce() {
+  if (!menuVoce) return false;
+  menuVoce.remove(); menuVoce = null;
+  return true;
+}
+
+document.addEventListener('contextmenu', (e) => {
+  chiudiMenuVoce();
+  const tr = e.target.closest('tr[data-voce]');
+  if (!tr || e.target.closest('input, select, textarea')) return;
+  const v = trovaVoce(tr.dataset.voce);
+  if (!v || (v.tipo === 'entrata' && v.x.tipo !== 'Fattura')) return;
+  e.preventDefault();
+  const qui = destDi(v.tipo, v.x);
+  const cp = controparteDi(v.tipo, v.x);
+  const regola = regolaPer(cp);
+  const m = document.createElement('div');
+  m.setAttribute('role', 'menu');
+  m.className = 'fixed z-[60] w-72 max-w-[calc(100vw-16px)] bg-white rounded-xl shadow-2xl border border-slate-200 py-1.5 text-sm';
+  m.innerHTML = `<div class="px-3.5 pt-1 pb-2 border-b border-slate-100">
+      <div class="font-semibold text-slate-900 truncate">${esc(cp && cp.nome ? cp.nome : v.x.desc)}</div>
+      <div class="text-[11px] text-slate-500 truncate">${esc(fmtData(v.x.data))} · ora in ${esc(NOMI_TAB[qui])}</div>
+      ${regola ? `<div class="text-[11px] text-amber-700 font-semibold mt-0.5 truncate">Regola: sempre in ${esc(NOMI_TAB[regola.dest])}</div>` : ''}
+    </div>
+    <div class="px-3.5 pt-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">Sposta in</div>
+    ${SPOSTABILI.filter((d) => d !== qui).map((d) => `<button type="button" role="menuitem" data-action="menu-sposta" data-voce="${esc(tr.dataset.voce)}" data-dest="${d}"
+      class="w-full text-left px-3.5 py-2 hover:bg-amber-50 focus:bg-amber-50 outline-none text-slate-800">${esc(NOMI_TAB[d])}</button>`).join('')}
+    <div class="my-1 border-t border-slate-100"></div>
+    <button type="button" role="menuitem" data-action="menu-elimina" data-voce="${esc(tr.dataset.voce)}" class="w-full text-left px-3.5 py-2 hover:bg-rose-50 focus:bg-rose-50 outline-none text-rose-600">Elimina…</button>`;
+  document.body.appendChild(m);
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(8, Math.min(e.clientX, innerWidth - w - 8)) + 'px';
+  m.style.top = Math.max(8, Math.min(e.clientY, innerHeight - h - 8)) + 'px';
+  menuVoce = m;
+  m.querySelector('button').focus({ preventScroll: true });
+});
+document.addEventListener('mousedown', (e) => { if (menuVoce && !menuVoce.contains(e.target)) chiudiMenuVoce(); });
+window.addEventListener('resize', chiudiMenuVoce);
+window.addEventListener('blur', chiudiMenuVoce);
+document.addEventListener('scroll', (e) => { if (menuVoce && !menuVoce.contains(e.target)) chiudiMenuVoce(); }, true);
+document.addEventListener('keydown', (e) => {
+  if (!menuVoce || !['ArrowDown', 'ArrowUp', 'Tab'].includes(e.key)) return;
+  e.preventDefault();
+  const voci = [...menuVoce.querySelectorAll('button')];
+  const i = voci.indexOf(document.activeElement);
+  const su = e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey);
+  voci[(i + (su ? -1 : 1) + voci.length) % voci.length].focus();
+});
+
+function eliminaVoce(rif) {
+  const v = trovaVoce(rif);
+  if (!v) return;
+  ({ entrata: deleteEntrata, acquisto: deleteAcquisto, parcella: deleteParcella })[v.tipo](v.x.id);
+}
+
+// --- finestra di conferma dello spostamento ---
+let spostamento = null;
+
+function chiediSpostamento(rif, dest) {
+  const v = trovaVoce(rif);
+  if (!v || !SPOSTABILI.includes(dest)) return;
+  const cp = controparteDi(v.tipo, v.x);
+  const mia = pulisciPiva(imp().piva);
+  const conRegola = !!cp && !(cp.piva && cp.piva === mia) && !!(cp.piva || normNome(cp.nome));
+  const altre = conRegola ? tutteLeVoci().filter((w) => w.x !== v.x && stessaControparte(controparteDi(w.tipo, w.x), cp)) : [];
+  const daSpostare = altre.filter((w) => destDi(w.tipo, w.x) !== dest).length;
+  const regola = conRegola ? regolaPer(cp) : null;
+  spostamento = { rif, v, dest, cp, conRegola };
+
+  $('sposta-titolo').textContent = `Spostare in «${NOMI_TAB[dest]}»?`;
+  $('sposta-desc').textContent = `${fmtData(v.x.data)} — ${v.x.desc}`;
+
+  // categoria e provenienza servono solo agli acquisti
+  const campi = [];
+  if (dest === 'estero') {
+    const attuale = v.tipo === 'acquisto' && v.x.provenienza !== 'IT' ? v.x.provenienza : (regola && regola.provenienza) || 'CH_SERVIZI';
+    campi.push(`<label class="block text-xs font-semibold text-slate-700">Che acquisto dall'estero è
+      <select id="sposta-provenienza" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+        ${[['UE_MERCE', 'Merce da fornitore UE (reverse charge TD18)'], ['CH_BOLLA', 'Svizzera / extra-UE (merce + bolla doganale)'], ['CH_SERVIZI', 'Servizi da fornitore UE o extra-UE (reverse charge TD17)']]
+          .map(([k, l]) => `<option value="${k}" ${k === attuale ? 'selected' : ''}>${l}</option>`).join('')}
+      </select></label>`);
+  }
+  if (dest === 'fornitori' || dest === 'estero' || dest === 'spese') {
+    const attuale = (v.tipo === 'acquisto' && v.x.categoria) || (regola && regola.categoria) || 'merce_100_100';
+    campi.push(`<label class="block text-xs font-semibold text-slate-700">Categoria fiscale
+      <select id="sposta-categoria" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+        ${Object.entries(CATEGORIE_SPESA).map(([k, r]) => `<option value="${k}" ${k === attuale ? 'selected' : ''}>${esc(r.label)} (${esc(r.badge)})</option>`).join('')}
+      </select></label>`);
+  }
+  $('sposta-campi').innerHTML = campi.join('');
+  $('sposta-campi').classList.toggle('hidden', !campi.length);
+
+  const note = [];
+  if (dest === 'fatture') note.push('Diventa una fattura emessa: conta tra i ricavi e la sua IVA è a debito.');
+  else if (v.tipo === 'entrata') note.push('Non sarà più un ricavo: diventa un costo.');
+  if (dest === 'commercialista') note.push('Diventa una parcella: se il professionista non è forfettario l\'app calcola la ritenuta d\'acconto del 20% sull\'onorario, da versare con F24.');
+  $('sposta-nota').textContent = note.join(' ');
+  $('sposta-nota').classList.toggle('hidden', !note.length);
+
+  $('sposta-regola-box').classList.toggle('hidden', !conRegola);
+  $('sposta-regola').checked = false;
+  if (conRegola) {
+    const chi = `<strong>${esc(cp.nome || 'P.IVA ' + cp.piva)}</strong>`;
+    let testo = daSpostare
+      ? `Sposta qui anche ${daSpostare === 1 ? 'l\'altra fattura' : `le altre ${daSpostare} fatture`} di ${chi} già registrate (tutti gli anni) e metti qui anche quelle che importerai in futuro.`
+      : `Metti qui in automatico anche le fatture di ${chi} che importerai in futuro.`;
+    if (regola && regola.dest !== dest) testo += ` <span class="text-amber-700">Sostituisce la regola attuale (sempre in ${esc(NOMI_TAB[regola.dest])}).</span>`;
+    $('sposta-regola-testo').innerHTML = testo;
+  }
+  $('sposta-ok').textContent = 'Sposta';
+  apri($('sposta-modal'));
+  $('sposta-ok').focus();
+}
+
+function confermaSpostamento() {
+  if (!spostamento) return;
+  const { v, dest, cp, conRegola } = spostamento;
+  const opz = {
+    categoria: $('sposta-categoria') ? $('sposta-categoria').value : '',
+    provenienza: $('sposta-provenienza') ? $('sposta-provenienza').value : '',
+  };
+  if (!trovaVoce(spostamento.rif)) { chiudi($('sposta-modal')); spostamento = null; return; }
+  applicaSpostamento(v.tipo, v.x, dest, opz);
+  let n = 1;
+  const conTutte = conRegola && $('sposta-regola').checked;
+  if (conTutte) {
+    appState.regole = appState.regole.filter((r) => !stessaControparte(r, cp));
+    const regola = { nome: cp.nome, piva: cp.piva, dest, creata: oggi() };
+    if (opz.categoria) regola.categoria = opz.categoria;
+    if (dest === 'estero' && opz.provenienza) regola.provenienza = opz.provenienza;
+    appState.regole.push(regola);
+    for (const w of tutteLeVoci()) {
+      if (!stessaControparte(controparteDi(w.tipo, w.x), cp)) continue;
+      if (destDi(w.tipo, w.x) !== dest) { applicaSpostamento(w.tipo, w.x, dest, opz); n++; }
+      else if (w.tipo === 'acquisto' && opz.categoria) w.x.categoria = opz.categoria;
+    }
+  }
+  for (const k of ['entrate', 'acquisti', 'parcelle']) appState[k].sort((a, b) => a.data.localeCompare(b.data));
+  saveState();
+  chiudi($('sposta-modal'));
+  spostamento = null;
+  renderAll();
+  const dove = NOMI_TAB[dest];
+  showToast(conTutte
+    ? `${n === 1 ? 'Spostata 1 fattura' : `Spostate ${n} fatture`} di ${cp.nome || cp.piva} in ${dove}. Le prossime che importi andranno lì da sole.`
+    : `Spostata in ${dove}.`);
+}
+
+// --- regole salvate (elenco nelle impostazioni) ---
+function disegnaRegole() {
+  const el = $('regole-lista');
+  if (!el) return;
+  const R = appState.regole;
+  el.innerHTML = R.length
+    ? `<ul class="divide-y divide-slate-100 rounded-xl border border-slate-200">${R.map((r, i) => `<li class="flex items-center justify-between gap-3 px-3 py-2">
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-slate-900 truncate">${esc(r.nome || 'P.IVA ' + r.piva)}</div>
+          <div class="text-[11px] text-slate-500">${r.piva ? 'P.IVA ' + esc(r.piva) + ' · ' : ''}sempre in <strong>${esc(NOMI_TAB[r.dest] || r.dest)}</strong>${r.categoria && CATEGORIE_SPESA[r.categoria] ? ' · ' + esc(CATEGORIE_SPESA[r.categoria].badge) : ''}</div>
+        </div>
+        <button type="button" data-action="del-regola" data-indice="${i}" class="shrink-0 text-rose-500 hover:text-rose-700 text-xs font-semibold px-2 py-1 rounded-lg hover:bg-rose-50">Elimina</button>
+      </li>`).join('')}</ul>`
+    : '<p class="text-xs text-slate-400">Nessuna regola. Fai clic col tasto destro su una fattura importata, scegli «Sposta in» e spunta la casella per le altre fatture della stessa ditta.</p>';
+}
+function eliminaRegola(i) {
+  const r = appState.regole[i];
+  if (!r) return;
+  appState.regole.splice(i, 1);
+  saveState(); disegnaRegole();
+  showToast(`Regola tolta: le prossime fatture di ${r.nome || r.piva} saranno proposte come prima. Quelle già spostate restano dove sono.`);
+}
+
+installaRicerche();
 
 // ---------------------------------------------------------------------------
 // Avvio

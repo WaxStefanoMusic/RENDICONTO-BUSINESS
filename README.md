@@ -34,6 +34,17 @@ Commercialista, autofatture TD17/TD18/TD19 e fornitori esteri nel tab Autofattur
 spese) e chiede conferma. Note di credito in negativo, doppioni e file di metadati dello SDI
 vengono riconosciuti. Tutto avviene sul computer: nessun file viene inviato.
 
+### Ricerca e spostamento delle fatture
+Ogni tab con un elenco ha una **barra di ricerca** (Ctrl+F): filtra per descrizione, cliente o
+fornitore, Partita IVA, data o importo e segnala i risultati negli altri anni.
+
+Con il **tasto destro** su una fattura si apre un menu per spostarla in un altro tab (fatture
+emesse, fornitori, autofatture/estere, spese, commercialista): la voce viene convertita tenendo
+importi e collegamento all'XML. Per le fatture importate si può spuntare «anche le altre»:
+l'app sposta subito tutte quelle della stessa ditta e crea una **regola**, così le prossime
+fatture importate di quel cliente o fornitore vengono proposte direttamente in quel tab. Le
+regole si vedono e si tolgono nelle Impostazioni.
+
 ### PDF del Registro Corrispettivi
 Nel tab Corrispettivi il pulsante **Carica PDF corrispettivi** (o il trascinamento) legge i PDF
 prodotti dall'app Registro Corrispettivi:

@@ -59,6 +59,7 @@ const STATO_VUOTO = () => ({
   entrate: [],                 // tipo 'Fattura' → Fatture emesse, 'Corrispettivi' → Corrispettivi
   acquisti: [],                // sezione 'fornitori' → Fatture ricevute, 'estero' → Autofatture/Fatture estere, 'spese' → Abbonamenti/Acquisti/Spese
   parcelle: [],                // fatture del commercialista, con la ritenuta d'acconto
+  registroRiepiloghi: {},      // anno -> totali del PDF riepilogativo del Registro Corrispettivi
 });
 
 /* Le spese registrate prima della divisione in due tab non sapevano dove
@@ -114,6 +115,7 @@ function normalizza(s) {
   st.entrate = Array.isArray(st.entrate) ? st.entrate : [];
   st.acquisti = (Array.isArray(st.acquisti) ? st.acquisti : []).map((a) => ({ ...a, sezione: sezioneDi(a) }));
   st.parcelle = Array.isArray(st.parcelle) ? st.parcelle : [];
+  if (typeof st.registroRiepiloghi !== 'object' || st.registroRiepiloghi === null || Array.isArray(st.registroRiepiloghi)) st.registroRiepiloghi = {};
   // il credito IVA prima era un numero unico: diventa per anno
   if (typeof st.creditoIvaPrec !== 'object' || st.creditoIvaPrec === null) {
     const v = +st.creditoIvaPrec || 0;
@@ -212,6 +214,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!$('confirm-modal').classList.contains('hidden')) { chiudi($('confirm-modal')); confirmCallback = null; }
   else if (!$('import-modal').classList.contains('hidden')) { chiudi($('import-modal')); importazione = null; }
+  else if (!$('pdfc-modal').classList.contains('hidden')) { chiudi($('pdfc-modal')); caricamentoPdf = null; }
   else if (!$('settings-modal').classList.contains('hidden') && imp().configurate) chiudi($('settings-modal'));
 });
 
@@ -241,6 +244,7 @@ function askClearAll() {
       appState.entrate = appState.entrate.filter((x) => annoDi(x.data) !== appState.anno);
       appState.acquisti = appState.acquisti.filter((x) => annoDi(x.data) !== appState.anno);
       appState.parcelle = appState.parcelle.filter((x) => annoDi(x.data) !== appState.anno);
+      delete appState.registroRiepiloghi[appState.anno];
       appState.isDemo = false;
       saveState(); renderAll();
       showToast(`Anno ${appState.anno} svuotato: pronto per i tuoi dati reali.`);
@@ -371,6 +375,10 @@ document.addEventListener('click', (e) => {
     case 'import-xml': scegliFileXml(a.dataset.contesto); break;
     case 'close-import': chiudi($('import-modal')); importazione = null; break;
     case 'conferma-import': confermaImport(); break;
+    case 'import-pdf-corr': $('pdf-input').click(); break;
+    case 'close-pdfc': chiudi($('pdfc-modal')); caricamentoPdf = null; break;
+    case 'conferma-pdfc': confermaPdfCorrispettivi(); break;
+    case 'apri-allegato': apriAllegato(a.dataset.rel); break;
   }
 });
 
@@ -672,7 +680,7 @@ async function exportCsvAnno() {
   const anno = appState.anno;
   const num = (n) => (Math.round((n || 0) * 100) / 100).toFixed(2).replace('.', ',');
   const cella = (v) => { const s = String(v ?? ''); return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const REG = { IT_22: 'Italia IVA 22%', CH_ART8: 'Non imponibile art. 8', UE_ART41: 'Non imponibile art. 41' };
+  const REG = { IT_4: 'Italia IVA 4%', IT_10: 'Italia IVA 10%', IT_22: 'Italia IVA 22%', CH_ART8: 'Non imponibile art. 8', UE_ART41: 'Non imponibile art. 41' };
   const PROV = { IT: 'Italia', UE_MERCE: 'UE reverse charge TD18', CH_BOLLA: 'Extra-UE bolla doganale', CH_SERVIZI: 'Servizi esteri reverse charge TD17' };
   const righe = [['Sezione', 'Data', 'Trimestre', 'Descrizione', 'Regime / provenienza', 'Categoria', 'Imponibile', 'IVA documento', 'IVA a debito', 'IVA detraibile', 'Costo deducibile', 'Totale', 'Ritenuta', 'Note']];
   const delAnno = (x) => annoDi(x.data) === anno;
@@ -946,11 +954,225 @@ window.addEventListener('dragleave', () => { if (--trascinamenti <= 0) { trascin
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   trascinamenti = 0; chiudi($('drop-overlay'));
-  const lista = [...(e.dataTransfer?.files || [])].filter((f) => /\.(xml|p7m|zip)$/i.test(f.name));
-  if (!lista.length) { showToast('Trascina file .xml, .p7m o .zip di fatture elettroniche.', true); return; }
+  const tutti = [...(e.dataTransfer?.files || [])];
+  const pdf = tutti.filter((f) => /\.pdf$/i.test(f.name));
+  const lista = tutti.filter((f) => /\.(xml|p7m|zip)$/i.test(f.name));
+  if (pdf.length && !lista.length) { apriPdfCorrispettivi(pdf); return; }
+  if (!lista.length) { showToast('Trascina fatture elettroniche (.xml, .p7m, .zip) o i PDF del Registro Corrispettivi.', true); return; }
+  if (pdf.length) showToast('Prima le fatture: i PDF dei corrispettivi caricali dopo, a parte.');
   const attivo = document.querySelector('.tab-content:not(.hidden)')?.id.replace('tab-', '');
   apriImport(lista, attivo);
 });
+
+// ---------------------------------------------------------------------------
+// PDF del Registro Corrispettivi
+// ---------------------------------------------------------------------------
+/* Il mensile diventa un corrispettivo per aliquota, datato all'ultimo giorno
+   del mese e marcato con «registro: AAAA-MM»: ricaricare lo stesso mese
+   (magari aggiornato) sostituisce quelli di prima invece di sommarli.
+   Il riepilogativo non registra niente: serve a controllare i totali. */
+let caricamentoPdf = null;
+const NOMI_MESI = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+const nomeMese = (m) => NOMI_MESI[m - 1].charAt(0).toUpperCase() + NOMI_MESI[m - 1].slice(1);
+const chiaveMese = (anno, mese) => `${anno}-${String(mese).padStart(2, '0')}`;
+const ultimoGiorno = (anno, mese) => `${chiaveMese(anno, mese)}-${String(new Date(anno, mese, 0).getDate()).padStart(2, '0')}`;
+const delMese = (x, anno, mese) => x.tipo === 'Corrispettivi' && x.data.startsWith(chiaveMese(anno, mese) + '-');
+
+function badgeRegistro(item) {
+  const att = item.allegato && DESKTOP
+    ? ` <button type="button" data-action="apri-allegato" data-rel="${esc(item.allegato)}" class="ml-1 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold hover:bg-emerald-100" title="Apri il PDF">📎 PDF</button>`
+    : '';
+  return ` <span class="ml-1 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold align-middle">Registro</span>${att}`;
+}
+
+async function apriAllegato(rel) {
+  if (!DESKTOP || !rel) return;
+  const r = await window.gestionale.apriAllegato(rel);
+  if (!r.ok) showToast(r.errore || 'PDF non apribile.', true);
+}
+
+$('pdf-input').addEventListener('change', (e) => {
+  const lista = [...e.target.files]; e.target.value = '';
+  if (lista.length) apriPdfCorrispettivi(lista);
+});
+
+async function apriPdfCorrispettivi(lista) {
+  showToast(`Lettura di ${lista.length} PDF…`);
+  let r;
+  try { r = await window.CorrispettiviPDF.leggiFile(lista); }
+  catch (e) { showToast('Lettura non riuscita: ' + e.message, true); return; }
+  if (!r.documenti.length) {
+    showToast(r.errori.length ? `${r.errori[0].file}: ${r.errori[0].errore}` : 'Nessun PDF leggibile.', true);
+    return;
+  }
+  // un solo PDF per mese o per anno: se ce ne sono due, vale l'ultimo scelto
+  const unici = new Map();
+  for (const d of r.documenti) unici.set(d.tipo === 'mensile' ? chiaveMese(d.anno, d.mese) : 'anno-' + d.anno, d);
+  const documenti = [...unici.values()].sort((a, b) => (a.anno - b.anno) || (a.mese - b.mese));
+  caricamentoPdf = {
+    documenti: documenti.map((d) => ({ d, togliManuali: false })),
+    errori: r.errori,
+  };
+  disegnaPdfCorrispettivi();
+  apri($('pdfc-modal'));
+}
+
+/* Lordo/imponibile/IVA per aliquota già in app per un mese o un anno */
+function corrispettiviInApp(filtro, entrate = appState.entrate) {
+  const per = {}, tot = { lordo: 0, imponibile: 0, iva: 0 };
+  for (const x of entrate.filter((v) => v.tipo === 'Corrispettivi' && filtro(v))) {
+    const b = calcEntrataBreakdown(x);
+    const al = b.imponibile ? Math.round((b.iva / b.imponibile) * 100) : 0;
+    per[al] = per[al] || { lordo: 0, imponibile: 0, iva: 0 };
+    for (const [k, v] of [['lordo', b.totale], ['imponibile', b.imponibile], ['iva', b.iva]]) { per[al][k] += v; tot[k] += v; }
+  }
+  return { per, tot };
+}
+
+function tabellaAliquote(righe, extra = null) {
+  return `<table class="w-full border-collapse mt-2">
+    <thead><tr class="text-[10px] uppercase text-slate-500 border-b border-slate-200">
+      <th class="py-1.5 text-left">Aliquota</th><th class="py-1.5 text-right">Lordo</th><th class="py-1.5 text-right">Imponibile</th><th class="py-1.5 text-right">IVA</th>${extra ? `<th class="py-1.5 text-right">${extra.titolo}</th>` : ''}
+    </tr></thead>
+    <tbody class="divide-y divide-slate-100">${righe.map((a) => `<tr class="${a.totale ? 'font-bold text-slate-900' : ''}">
+      <td class="py-1.5">${a.totale ? 'Totale' : a.aliquota + '%'}</td><td class="py-1.5 text-right">${fmtEuro(a.lordo)}</td>
+      <td class="py-1.5 text-right">${fmtEuro(a.imponibile)}</td><td class="py-1.5 text-right">${fmtEuro(a.iva)}</td>
+      ${extra ? `<td class="py-1.5 text-right">${extra.cella(a)}</td>` : ''}</tr>`).join('')}</tbody></table>`;
+}
+
+const cellaDifferenza = (inApp) => (a) => {
+  const app = a.totale ? inApp.tot.lordo : (inApp.per[a.aliquota]?.lordo || 0);
+  const diff = Math.round((a.lordo - app) * 100) / 100;
+  return Math.abs(diff) < 0.01
+    ? '<span class="text-emerald-700 font-semibold">✓ uguale</span>'
+    : `<span class="text-amber-700 font-semibold" title="Nell'app: ${fmtEuro(app)}">${diff > 0 ? 'mancano' : 'in più'} ${fmtEuro(Math.abs(diff))}</span>`;
+};
+
+/* Le entrate come diventerebbero confermando: serve al confronto col riepilogativo */
+function entrateDopo(documenti) {
+  let lista = appState.entrate;
+  for (const { d, togliManuali } of documenti) {
+    if (d.tipo !== 'mensile') continue;
+    const chiave = chiaveMese(d.anno, d.mese);
+    lista = lista.filter((v) => v.registro !== chiave && !(togliManuali && !v.registro && delMese(v, d.anno, d.mese)));
+    lista = lista.concat(d.aliquote.filter((a) => a.lordo).map((a) => ({ tipo: 'Corrispettivi', data: ultimoGiorno(d.anno, d.mese), totale: a.lordo, imponibile: a.imponibile, iva: a.iva })));
+  }
+  return lista;
+}
+
+function disegnaPdfCorrispettivi() {
+  const { documenti, errori } = caricamentoPdf;
+  const blocchi = documenti.map((x, i) => {
+    const d = x.d;
+    const righe = [...d.aliquote.filter((a) => a.lordo), { totale: true, ...d.totale }];
+    if (d.tipo === 'riepilogo') {
+      const inApp = corrispettiviInApp((v) => annoDi(v.data) === d.anno, entrateDopo(documenti));
+      return `<div class="rounded-xl border border-slate-200 p-4">
+        <div class="flex flex-wrap items-baseline justify-between gap-2"><p class="text-sm font-bold text-slate-900">Riepilogativo ${d.anno}${d.aggiornatoFino ? ` · aggiornato fino a ${nomeMese(d.aggiornatoFino).toLowerCase()}` : ''}</p><span class="text-[11px] text-slate-500">${esc(d.file)}</span></div>
+        <p class="text-slate-600 mt-1">Non registra niente: lo confronto con i corrispettivi del ${d.anno} come saranno dopo questo caricamento, e lo tengo come controllo nel tab.</p>
+        ${tabellaAliquote(righe, { titolo: 'Rispetto all\'app', cella: cellaDifferenza(inApp) })}
+      </div>`;
+    }
+    const chiave = chiaveMese(d.anno, d.mese);
+    const prima = appState.entrate.filter((v) => v.registro === chiave);
+    const manuali = appState.entrate.filter((v) => !v.registro && delMese(v, d.anno, d.mese));
+    const lordoPrima = prima.reduce((t, v) => t + calcEntrataBreakdown(v).totale, 0);
+    const lordoManuali = manuali.reduce((t, v) => t + calcEntrataBreakdown(v).totale, 0);
+    const uguale = prima.length && Math.abs(lordoPrima - d.totale.lordo) < 0.01;
+    const stato = !prima.length ? '<span class="text-emerald-700 font-semibold">Nuovo</span>'
+      : uguale ? '<span class="text-slate-500 font-semibold">Già caricato, uguale: si aggiorna solo l\'allegato</span>'
+      : `<span class="text-indigo-700 font-semibold">Sostituisce il caricamento precedente (${fmtEuro(lordoPrima)})</span>`;
+    return `<div class="rounded-xl border border-slate-200 p-4">
+      <div class="flex flex-wrap items-baseline justify-between gap-2"><p class="text-sm font-bold text-slate-900">${nomeMese(d.mese)} ${d.anno} · ${stato}</p><span class="text-[11px] text-slate-500">${esc(d.file)}</span></div>
+      ${d.totale.lordo ? tabellaAliquote(righe) : '<p class="mt-2 text-slate-600">Nessun incasso nel mese: non c\'è niente da registrare.</p>'}
+      ${d.anno !== appState.anno ? `<p class="mt-2 text-slate-500">Va nel ${d.anno}: cambia anno in alto per vederlo.</p>` : ''}
+      ${manuali.length ? `<label class="mt-3 flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">
+        <input type="checkbox" data-pdfc="${i}" class="mt-0.5 w-4 h-4 accent-amber-600" ${x.togliManuali ? 'checked' : ''} />
+        <span>In ${NOMI_MESI[d.mese - 1]} ${manuali.length === 1 ? 'c’è già <strong>1 corrispettivo inserito' : `ci sono già <strong>${manuali.length} corrispettivi inseriti`} a mano</strong> (${fmtEuro(lordoManuali)}). Se sono gli stessi incassi, spunta qui per toglierli: altrimenti conterebbero due volte.</span>
+      </label>` : ''}
+    </div>`;
+  });
+  if (errori.length) blocchi.push(`<div class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900"><strong>${errori.length} PDF non letti:</strong> ${errori.map((e) => `${esc(e.file)} (${esc(e.errore)})`).join('; ')}</div>`);
+  $('pdfc-corpo').innerHTML = blocchi.join('');
+  const mensili = documenti.filter((x) => x.d.tipo === 'mensile').length;
+  const riep = documenti.length - mensili;
+  $('pdfc-riepilogo').textContent = [mensili ? `${mensili} mesi da registrare` : '', riep ? `${riep} riepilogativo da tenere come controllo` : ''].filter(Boolean).join(', ') + '.';
+}
+
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  if (!caricamentoPdf || el.dataset.pdfc == null) return;
+  const x = caricamentoPdf.documenti[+el.dataset.pdfc];
+  if (x) { x.togliManuali = el.checked; disegnaPdfCorrispettivi(); }
+});
+
+async function salvaPdf(d) {
+  if (!DESKTOP) return '';
+  const nome = d.tipo === 'mensile' ? `Corrispettivi ${nomeMese(d.mese)} ${d.anno}` : `Riepilogo Corrispettivi ${d.anno}`;
+  try {
+    const r = await window.gestionale.salvaAllegato(`corrispettivi/${d.anno}`, nome, d.bytes);
+    return r.ok ? r.rel : '';
+  } catch (_) { return ''; }
+}
+
+async function confermaPdfCorrispettivi() {
+  if (!caricamentoPdf) return;
+  const lavoro = caricamentoPdf; caricamentoPdf = null;
+  chiudi($('pdfc-modal'));
+  let mesi = 0, riep = 0, tolti = 0, allegatiPersi = 0;
+  let id = Date.now();
+  for (const { d, togliManuali } of lavoro.documenti) {
+    const allegato = await salvaPdf(d);
+    if (DESKTOP && !allegato) allegatiPersi++;
+    if (d.tipo === 'riepilogo') {
+      appState.registroRiepiloghi[d.anno] = { aggiornatoFino: d.aggiornatoFino, aliquote: d.aliquote, totale: d.totale, allegato, caricato: oggi() };
+      riep++;
+      continue;
+    }
+    const chiave = chiaveMese(d.anno, d.mese);
+    const manuale = (v) => togliManuali && !v.registro && delMese(v, d.anno, d.mese);
+    tolti += appState.entrate.filter(manuale).length;
+    appState.entrate = appState.entrate.filter((v) => v.registro !== chiave && !manuale(v));
+    for (const a of d.aliquote.filter((v) => v.lordo)) {
+      appState.entrate.push({
+        id: id++, data: ultimoGiorno(d.anno, d.mese), tipo: 'Corrispettivi',
+        desc: `Corrispettivi ${NOMI_MESI[d.mese - 1]} ${d.anno} - IVA ${a.aliquota}%`,
+        regime: `IT_${a.aliquota}`, totale: a.lordo, imponibile: a.imponibile, iva: a.iva,
+        registro: chiave, allegato,
+      });
+    }
+    mesi++;
+  }
+  appState.entrate.sort((a, b) => a.data.localeCompare(b.data));
+  appState.isDemo = false;
+  saveState();
+  popolaAnni(); renderAll(); switchTab('corrispettivi');
+  const parti = [mesi ? `${mesi} mesi registrati` : '', riep ? 'riepilogativo salvato per il controllo' : '', tolti ? `${tolti} ${tolti === 1 ? 'voce inserita a mano tolta' : 'voci inserite a mano tolte'}` : ''].filter(Boolean);
+  showToast(parti.join(', ') + '.' + (allegatiPersi ? ' Alcuni PDF non sono stati allegati.' : ''), allegatiPersi > 0);
+}
+
+/* Riquadro di controllo nel tab: il riepilogativo contro quello che c'è nell'app */
+function disegnaControlloRegistro(anno) {
+  const box = $('co-controllo');
+  const r = appState.registroRiepiloghi[anno];
+  if (!r) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const inApp = corrispettiviInApp((v) => annoDi(v.data) === anno);
+  const fino = r.aggiornatoFino || 12;
+  const senzaPdf = [];
+  for (let m = 1; m <= fino; m++) if (!appState.entrate.some((v) => v.registro === chiaveMese(anno, m))) senzaPdf.push(NOMI_MESI[m - 1]);
+  const ok = Math.abs(r.totale.lordo - inApp.tot.lordo) < 0.01;
+  const att = r.allegato && DESKTOP ? `<button type="button" data-action="apri-allegato" data-rel="${esc(r.allegato)}" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold">📎 Apri riepilogativo</button>` : '';
+  box.innerHTML = `<div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+      <div>
+        <h3 class="text-base font-bold text-slate-900">Controllo con il Registro Corrispettivi ${anno}</h3>
+        <p class="text-xs text-slate-500">Riepilogativo${r.aggiornatoFino ? ` aggiornato fino a ${NOMI_MESI[r.aggiornatoFino - 1]}` : ''}, caricato il ${fmtData(r.caricato)}.
+          ${ok ? '<strong class="text-emerald-700">I totali coincidono.</strong>' : '<strong class="text-amber-700">I totali non coincidono: controlla i mesi qui sotto.</strong>'}</p>
+      </div>${att}
+    </div>
+    <div class="text-xs overflow-x-auto">${tabellaAliquote([...r.aliquote.filter((a) => a.lordo), { totale: true, ...r.totale }], { titolo: 'Rispetto all\'app', cella: cellaDifferenza(inApp) })}</div>
+    ${senzaPdf.length ? `<p class="mt-3 text-xs text-slate-600">Mesi senza PDF mensile caricato: <strong>${senzaPdf.join(', ')}</strong>${inApp.tot.lordo ? ' (se li hai inseriti a mano, contano lo stesso nel confronto)' : ''}.</p>` : ''}`;
+  box.classList.remove('hidden');
+}
 
 // ---------------------------------------------------------------------------
 // Controlli collegati allo stato
@@ -1059,7 +1281,7 @@ function renderAll() {
     htmlEnt[p] += `<tr class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
-      <td class="py-3 px-4 font-medium text-slate-900 min-w-[200px]">${esc(item.desc)}${item.xml ? XML_BADGE : ''}</td>
+      <td class="py-3 px-4 font-medium text-slate-900 min-w-[200px]">${esc(item.desc)}${item.xml ? XML_BADGE : ''}${item.registro ? badgeRegistro(item) : ''}</td>
       ${p === 'fe' ? `<td class="py-3 px-4">${REGIME[item.regime] || esc(item.regime)}</td>` : ''}
       <td class="py-3 px-4 text-right font-semibold text-slate-900 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
       <td class="py-3 px-4 text-right text-rose-600 whitespace-nowrap">${fmtEuro(b.iva)}</td>
@@ -1071,6 +1293,7 @@ function renderAll() {
   $('count-fe').textContent = tot.fe.n;
   $('tot-fe-imp').textContent = fmtEuro(tot.fe.imp);
   $('tot-fe-iva').textContent = fmtEuro(tot.fe.iva);
+  disegnaControlloRegistro(anno);
   $('tbody-corrispettivi').innerHTML = htmlEnt.co || vuota(7, `Nessun corrispettivo nel ${anno}. Registra gli incassi del registratore telematico.`);
   $('tot-co-lordo').textContent = fmtEuro(tot.co.lordo);
   $('tot-co-imp').textContent = fmtEuro(tot.co.imp);

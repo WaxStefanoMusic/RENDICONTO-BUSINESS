@@ -101,6 +101,33 @@ ipcMain.handle('backup:importa', async () => {
   catch (err) { return { ok: false, errore: 'File non leggibile: ' + err.message }; }
 });
 
+/* Allegati (PDF dei corrispettivi): una copia nella cartella dei dati, così
+   restano apribili anche se l'originale viene spostato o cancellato.
+   Si accettano solo PDF e solo percorsi dentro la cartella degli allegati. */
+const ALLEGATI_DIR = path.join(USER, 'allegati');
+const dentroAllegati = (rel) => {
+  const p = path.resolve(ALLEGATI_DIR, String(rel || ''));
+  return p.startsWith(ALLEGATI_DIR + path.sep) ? p : null;
+};
+ipcMain.handle('allegato:salva', async (_e, { cartella, nome, bytes }) => {
+  const dati = Buffer.from(bytes || []);
+  if (dati.subarray(0, 5).toString('latin1') !== '%PDF-') return { ok: false, errore: 'non è un PDF' };
+  const pulito = (s) => String(s || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^\.+/, '').trim().slice(0, 120);
+  const sotto = String(cartella || '').split(/[\\/]+/).map(pulito).filter(Boolean);
+  const rel = path.join(...(sotto.length ? sotto : ['varie']), (pulito(nome) || 'documento').replace(/(\.pdf)?$/i, '.pdf'));
+  const dest = dentroAllegati(rel);
+  if (!dest) return { ok: false, errore: 'nome non valido' };
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, dati);
+  return { ok: true, rel: rel.split(path.sep).join('/') };
+});
+ipcMain.handle('allegato:apri', async (_e, rel) => {
+  const p = dentroAllegati(rel);
+  if (!p || !/\.pdf$/i.test(p) || !fs.existsSync(p)) return { ok: false, errore: 'Il PDF allegato non si trova più nella cartella dei dati.' };
+  const err = await shell.openPath(p);
+  return err ? { ok: false, errore: err } : { ok: true };
+});
+
 /* -------------------------------------------------------------------------
    Adattamento allo schermo: dimensione finestra, zoom, cambi di DPI
    ------------------------------------------------------------------------- */

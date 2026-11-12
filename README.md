@@ -7,7 +7,8 @@ S.N.C.:
    tra i soci.
 2. **Fatture Emesse**: scorporo IVA 22% e regimi non imponibili (art. 8 Svizzera/extra-UE,
    art. 41 UE).
-3. **Corrispettivi**: incassi del registratore telematico, con scorporo IVA.
+3. **Corrispettivi**: incassi del registratore telematico, con scorporo IVA; caricamento dei PDF
+   del Registro Corrispettivi (vedi sotto).
 4. **Fatture Ricevute Fornitori**: merce e servizi comprati in Italia per la rivendita.
 5. **Autofatture/Fatture Estere**: acquisti da fornitori UE ed extra-UE: reverse charge TD18
    (merce UE) e TD17 (servizi esteri) con il termine di invio dell'autofattura allo SDI, bolle
@@ -33,6 +34,19 @@ Commercialista, autofatture TD17/TD18/TD19 e fornitori esteri nel tab Autofattur
 spese) e chiede conferma. Note di credito in negativo, doppioni e file di metadati dello SDI
 vengono riconosciuti. Tutto avviene sul computer: nessun file viene inviato.
 
+### PDF del Registro Corrispettivi
+Nel tab Corrispettivi il pulsante **Carica PDF corrispettivi** (o il trascinamento) legge i PDF
+prodotti dall'app Registro Corrispettivi:
+- il **mensile** registra il mese, un corrispettivo per aliquota (4%, 10%, 22%) con lordo,
+  imponibile e IVA presi dal riquadro «Calcolo IVA»; ricaricare lo stesso mese aggiornato
+  sostituisce il precedente, e i corrispettivi del mese inseriti a mano si possono togliere per
+  non contarli due volte;
+- il **riepilogativo** non registra niente: resta nel tab come controllo e confronta i totali
+  dell'anno, aliquota per aliquota, con quelli registrati, indicando i mesi senza PDF.
+
+I PDF vengono copiati in `allegati/corrispettivi/<anno>` nella cartella dei dati e si riaprono
+dal pulsante 📎. La lettura avviene con pdf.js incluso nell'app (`App/renderer/lib`).
+
 Le cifre sono **stime di controllo**: non sostituiscono le dichiarazioni ufficiali. Aliquote e
 soglie si modificano nelle impostazioni e vanno verificate ogni anno.
 
@@ -46,7 +60,8 @@ copia di sicurezza al giorno (le ultime 30) in `copie-di-sicurezza`. Dal menu **
 esporta e si ripristina un backup.
 
 ## Struttura
-- `App/renderer/` — interfaccia (`index.html`, `app.js`, `fatturapa.js` lettore delle fatture elettroniche, `app.css` generato).
+- `App/renderer/` — interfaccia (`index.html`, `app.js`, `fatturapa.js` lettore delle fatture elettroniche,
+  `corrispettivi-pdf.js` lettore dei PDF del Registro Corrispettivi, `lib/` pdf.js, `app.css` generato).
 - `App/src/tailwind.css` — sorgente degli stili: `npm run css` rigenera `renderer/app.css`
   (Tailwind gira in locale, niente CDN: l'app funziona senza rete).
 - `App/main.js`, `App/preload.js` — finestra, salvataggio, menu, aggiornamenti.

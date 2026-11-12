@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('gestionale', {
   esportaBackup: (nome, json) => ipcRenderer.invoke('backup:esporta', { nome, json }),
   importaBackup: ()           => ipcRenderer.invoke('backup:importa'),
   esportaFile:   (nome, contenuto, tipo) => ipcRenderer.invoke('file:esporta', { nome, contenuto, tipo }),
+  salvaAllegato: (cartella, nome, bytes) => ipcRenderer.invoke('allegato:salva', { cartella, nome, bytes }),
+  apriAllegato:  (rel)          => ipcRenderer.invoke('allegato:apri', rel),
 
   onMenu: (cb) => {
     const h = (_e, cmd) => cb(cmd);

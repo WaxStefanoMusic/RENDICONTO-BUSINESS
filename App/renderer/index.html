@@ -209,10 +209,11 @@
         <button data-tab="estero" class="tab-btn">5. Autofatture/Fatture Estere</button>
         <button data-tab="acquisti" class="tab-btn">6. Abbonamenti/Acquisti/Spese</button>
         <button data-tab="polizze" class="tab-btn">7. Polizze/Assicurazioni</button>
-        <button data-tab="commercialista" class="tab-btn">8. Commercialista</button>
-        <button data-tab="iva" class="tab-btn">9. Liquidazione IVA (LIPE)</button>
-        <button data-tab="imposte" class="tab-btn">10. Imposte Soci &amp; INPS</button>
-        <button data-tab="guida" class="tab-btn">11. Guida &amp; Adempimenti</button>
+        <button data-tab="carta" class="tab-btn">8. Carta Business</button>
+        <button data-tab="commercialista" class="tab-btn">9. Commercialista</button>
+        <button data-tab="iva" class="tab-btn">10. Liquidazione IVA (LIPE)</button>
+        <button data-tab="imposte" class="tab-btn">11. Imposte Soci &amp; INPS</button>
+        <button data-tab="guida" class="tab-btn">12. Guida &amp; Adempimenti</button>
       </nav>
     </div>
   </header>
@@ -668,7 +669,64 @@
       </div>
     </section>
 
-    <!-- TAB 8: COMMERCIALISTA -->
+    <!-- TAB 8: CARTA BUSINESS -->
+    <section id="tab-carta" class="tab-content hidden space-y-6">
+      <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <p class="text-xs sm:text-sm text-amber-900"><strong>Carica l'estratto conto della carta aziendale</strong> in PDF, anche dentro uno ZIP, in Excel o in CSV: ogni pagamento diventa una spesa col tipo proposto, divisa per mese. Ricaricando un estratto che si sovrappone a uno già caricato, entrano solo i movimenti nuovi. Puoi anche trascinare i file qui sopra.</p>
+        <button data-action="import-carta" class="shrink-0 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-semibold transition">📄 Carica estratto conto</button>
+      </div>
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">Registra un pagamento con la carta</h2>
+          <p class="text-xs text-slate-500">Per i pagamenti con solo lo scontrino o la ricevuta: senza fattura l'IVA non si detrae, quindi l'importo pagato va tutto a costo, deducibile secondo il tipo di spesa. Se per un pagamento hai anche la fattura e l'hai registrata in un altro tab, scegli «Già fatturata» così non conta due volte.</p>
+        </div>
+        <form id="form-carta" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <label class="block text-xs font-semibold text-slate-700">Data
+            <input type="date" id="ca-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Esercente / descrizione
+            <input type="text" id="ca-desc" placeholder="Es. Ferramenta, distributore, hotel in trasferta" required autocomplete="off" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Importo pagato (€)
+            <input type="number" step="0.01" min="0" id="ca-importo" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block sm:col-span-2 lg:col-span-4 text-xs font-semibold text-slate-700">Tipo di spesa
+            <select id="ca-categoria" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none"></select>
+          </label>
+          <div class="sm:col-span-2 lg:col-span-4 p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div id="ca-preview" class="text-xs text-slate-700 space-y-1"></div>
+            <button type="submit" class="shrink-0 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition">+ Registra pagamento</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="carta-estratti" class="hidden flex flex-wrap items-center gap-2"></div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Movimenti della carta <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">Divisi per mese. Il tipo di spesa si cambia dalla riga: vale anche per le altre spese dello stesso esercente e per i prossimi estratti.</p>
+          </div>
+          <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+            Spese: <span id="tot-ca-spese" class="text-slate-900">0,00 €</span> | Costo deducibile: <span id="tot-ca-ded" class="text-slate-900">0,00 €</span>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Descrizione</th><th class="py-3 px-4">Tipo di spesa</th>
+                <th class="py-3 px-4 text-right">Importo</th><th class="py-3 px-4 text-right">Costo deducibile</th><th class="py-3 px-4 text-center">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-carta" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 9: COMMERCIALISTA -->
     <section id="tab-commercialista" class="tab-content hidden space-y-6">
       <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <p class="text-xs sm:text-sm text-amber-900"><strong>Hai i file delle fatture elettroniche?</strong> Importando l'XML della parcella, cassa e ritenuta d'acconto vengono lette direttamente dalla fattura. Puoi anche trascinarli qui sopra.</p>
@@ -966,20 +1024,42 @@
     </div>
   </div>
 
+  <div id="carta-modal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs items-center justify-center p-2 sm:p-4">
+    <div class="bg-white rounded-2xl max-w-5xl w-full max-h-[94vh] flex flex-col shadow-2xl border border-slate-200" role="dialog" aria-modal="true" aria-labelledby="carta-title">
+      <div class="px-5 sm:px-6 py-4 border-b border-slate-200 flex items-start justify-between gap-3">
+        <div>
+          <h3 id="carta-title" class="text-lg font-bold text-slate-900">Estratto conto della carta</h3>
+          <p class="text-xs text-slate-500">Controlla il tipo di ogni movimento, togli quelli che non vuoi registrare, poi conferma.</p>
+        </div>
+        <button type="button" data-action="close-carta" class="shrink-0 w-9 h-9 rounded-xl text-slate-500 hover:bg-slate-100" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="carta-corpo" class="flex-1 overflow-auto px-3 sm:px-6 py-4 space-y-4 text-xs"></div>
+      <div class="px-5 sm:px-6 py-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <p id="carta-riepilogo" class="text-xs text-slate-600"></p>
+        <div class="flex justify-end gap-3">
+          <button type="button" data-action="close-carta" class="px-4 py-2 rounded-xl text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition">Annulla</button>
+          <button type="button" data-action="conferma-carta" id="carta-ok" class="px-5 py-2 rounded-xl text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition disabled:opacity-50">Registra</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="drop-overlay" class="fixed inset-0 z-[60] hidden bg-amber-500/20 backdrop-blur-xs items-center justify-center p-6 pointer-events-none">
     <div class="rounded-3xl border-4 border-dashed border-amber-500 bg-white/90 px-8 py-10 text-center shadow-2xl">
       <p class="text-2xl font-extrabold text-slate-900">Rilascia qui i file</p>
-      <p class="text-sm text-slate-600 mt-1">Fatture XML, P7M firmati, lo ZIP dell'Agenzia delle Entrate, i PDF del Registro Corrispettivi o, nel tab Polizze, ricevute e quietanze</p>
+      <p class="text-sm text-slate-600 mt-1">Fatture XML, P7M firmati, lo ZIP dell'Agenzia delle Entrate, i PDF del Registro Corrispettivi , nel tab Polizze ricevute e quietanze, nel tab Carta Business gli estratti conto</p>
     </div>
   </div>
 
   <input type="file" id="xml-input" accept=".xml,.p7m,.zip,application/xml,text/xml,application/zip" multiple hidden />
   <input type="file" id="restore-input" accept="application/json,.json" hidden />
   <input type="file" id="pdf-input" accept=".pdf,application/pdf" multiple hidden />
+  <input type="file" id="carta-input" accept=".pdf,.zip,.xlsx,.xlsm,.xls,.csv,.txt,application/pdf,application/zip,text/csv" multiple hidden />
   <input type="file" id="po-pdf-input" accept=".pdf,.zip,application/pdf,application/zip" multiple hidden />
   <script src="fatturapa.js"></script>
   <script src="corrispettivi-pdf.js"></script>
   <script src="polizze-pdf.js"></script>
+  <script src="carta-estratto.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

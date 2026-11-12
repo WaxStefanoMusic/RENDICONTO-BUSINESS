@@ -25,10 +25,15 @@ const CATEGORIE_SPESA = {
   tel_fisso_100_80: { label: 'Telefonia fissa & internet negozio',                        ivaDetPct: 1.0, costoDedPct: 0.8,  badge: 'IVA 100% | Costo 80%' },
   auto_40_20:       { label: 'Auto promiscua soci & carburante / manutenzione',           ivaDetPct: 0.4, costoDedPct: 0.2,  badge: 'IVA 40% | Costo 20%' },
   esente_0_100:     { label: 'Spese bancarie / commissioni / altre esenti art. 10',       ivaDetPct: 0.0, costoDedPct: 1.0,  badge: 'Esente IVA | Costo 100%' },
+  trasferta_0_75:   { label: 'Vitto e alloggio in trasferta (ristoranti, hotel)',       ivaDetPct: 1.0, costoDedPct: 0.75, badge: 'IVA 100% con fattura | Costo 75%' },
   // polizze (tab Polizze/Assicurazioni): premi esenti IVA art. 10
   polizza_100:         { label: 'Polizza dell\'attività (RC, incendio/furto negozio, merce, furgone N1)', ivaDetPct: 0.0, costoDedPct: 1.0, badge: 'Esente IVA | Costo 100%', breve: 'Attività' },
   polizza_auto_20:     { label: 'Polizza auto usata anche privatamente dai soci (RCA, furto/incendio)', ivaDetPct: 0.0, costoDedPct: 0.2, badge: 'Esente IVA | Costo 20%', breve: 'Auto promiscua' },
   polizza_personale_0: { label: 'Polizza personale dei soci (vita, infortuni, malattia)',            ivaDetPct: 0.0, costoDedPct: 0.0, badge: 'Esente IVA | Non è un costo della società', breve: 'Personale soci' },
+  // solo nel tab Carta Business: movimenti che non sono costi da contare qui
+  carta_fatturata:  { label: 'Già fatturata: la fattura è registrata in un altro tab',  ivaDetPct: 0.0, costoDedPct: 0.0, badge: 'Non conta qui (la conta la fattura)' },
+  carta_personale:  { label: 'Spesa personale dei soci, non dell\'attività',             ivaDetPct: 0.0, costoDedPct: 0.0, badge: 'Non è un costo della società' },
+  carta_movimento:  { label: 'Ricarica, accredito o rimborso della carta',              ivaDetPct: 0.0, costoDedPct: 0.0, badge: 'Non è una spesa' },
 };
 
 // ---------------------------------------------------------------------------
@@ -65,6 +70,8 @@ const STATO_VUOTO = () => ({
   parcelle: [],                // fatture del commercialista, con la ritenuta d'acconto
   registroRiepiloghi: {},      // anno -> totali del PDF riepilogativo del Registro Corrispettivi
   regole: [],                  // controparte -> tab dove vanno sempre le sue fatture
+  cartaEstratti: [],           // estratti conto della carta caricati: periodo, saldi, PDF
+  cartaCategorie: {},          // esercente -> tipo di spesa scelto a mano, per i prossimi estratti
 });
 
 /* Le spese registrate prima della divisione in due tab non sapevano dove
@@ -102,6 +109,10 @@ function datiEsempio(anno) {
       { id: 109, data: d('09-10'), desc: 'Fornitura divani e poltrone autunno - Salotti Gamma', provenienza: 'IT', categoria: 'merce_100_100', imponibile: 22000, iva: 4840 },
       { id: 110, data: d('01-05'), desc: 'Abbonamento annuale software fatturazione elettronica', provenienza: 'IT', categoria: 'merce_100_100', imponibile: 82, iva: 18.04, sezione: 'spese' },
       { id: 111, data: d('03-01'), desc: 'RC terzi, incendio e furto negozio', compagnia: 'Assicurazioni Esempio Spa', numero: 'NEG-1001', dal: d('03-01'), al: `${anno + 1}-02-28`, provenienza: 'IT', categoria: 'polizza_100', imponibile: 1250, iva: 0, sezione: 'polizze' },
+      { id: 113, data: d('02-03'), desc: 'Ricarica carta conto', provenienza: 'IT', categoria: 'carta_movimento', imponibile: 300, iva: 0, sezione: 'carta', carta: { importo: 300 } },
+      { id: 114, data: d('02-10'), desc: 'FERRAMENTA ESEMPIO - CITTA ITA', provenienza: 'IT', categoria: 'merce_100_100', imponibile: 38.4, iva: 0, sezione: 'carta', carta: { importo: -38.4 } },
+      { id: 115, data: d('02-21'), desc: 'HOTEL INVENTATO - FIERA DEL MOBILE', provenienza: 'IT', categoria: 'trasferta_0_75', imponibile: 95, iva: 0, sezione: 'carta', carta: { importo: -95 } },
+      { id: 116, data: d('03-05'), desc: 'Addebito canone mensile carta', provenienza: 'IT', categoria: 'esente_0_100', imponibile: 0.5, iva: 0, sezione: 'carta', carta: { importo: -0.5 } },
       { id: 112, data: d('11-20'), desc: 'RCA furgone consegne (autocarro N1)', compagnia: 'Mutua Inventata', numero: 'AUTO-77', dal: d('11-20'), al: `${anno + 1}-11-19`, provenienza: 'IT', categoria: 'polizza_100', imponibile: 980, iva: 0, sezione: 'polizze' },
     ].map((a) => ({ ...a, sezione: sezioneDi(a) })),
     parcelle: [
@@ -125,6 +136,8 @@ function normalizza(s) {
   st.parcelle = Array.isArray(st.parcelle) ? st.parcelle : [];
   st.regole = Array.isArray(st.regole) ? st.regole.filter((r) => r && r.dest && (r.piva || r.nome)) : [];
   if (typeof st.registroRiepiloghi !== 'object' || st.registroRiepiloghi === null || Array.isArray(st.registroRiepiloghi)) st.registroRiepiloghi = {};
+  st.cartaEstratti = Array.isArray(st.cartaEstratti) ? st.cartaEstratti : [];
+  if (typeof st.cartaCategorie !== 'object' || st.cartaCategorie === null || Array.isArray(st.cartaCategorie)) st.cartaCategorie = {};
   // il credito IVA prima era un numero unico: diventa per anno
   if (typeof st.creditoIvaPrec !== 'object' || st.creditoIvaPrec === null) {
     const v = +st.creditoIvaPrec || 0;
@@ -228,6 +241,7 @@ document.addEventListener('keydown', (e) => {
   else if (!$('import-modal').classList.contains('hidden')) { chiudi($('import-modal')); importazione = null; }
   else if (!$('pdfc-modal').classList.contains('hidden')) { chiudi($('pdfc-modal')); caricamentoPdf = null; }
   else if (!$('popdf-modal').classList.contains('hidden')) chiudiPdfPolizze();
+  else if (!$('carta-modal').classList.contains('hidden')) chiudiEstrattoCarta();
   else if (!$('settings-modal').classList.contains('hidden') && imp().configurate) chiudi($('settings-modal'));
 });
 
@@ -395,6 +409,9 @@ document.addEventListener('click', (e) => {
     case 'apri-allegato-xml': apriAllegatoFattura(+a.dataset.i); break;
     case 'import-pdf-corr': $('pdf-input').click(); break;
     case 'import-pdf-polizze': $('po-pdf-input').click(); break;
+    case 'import-carta': $('carta-input').click(); break;
+    case 'close-carta': chiudiEstrattoCarta(); break;
+    case 'conferma-carta': confermaEstrattoCarta(); break;
     case 'close-popdf': chiudiPdfPolizze(); break;
     case 'conferma-popdf': confermaPdfPolizze(); break;
     case 'close-pdfc': chiudi($('pdfc-modal')); caricamentoPdf = null; break;
@@ -519,7 +536,7 @@ function updateAcquistoPreview(p) {
   $(`${p}-preview`).innerHTML = html;
 }
 
-const OPZIONI_CATEGORIA = Object.entries(CATEGORIE_SPESA).filter(([k]) => !k.startsWith('polizza_'))
+const OPZIONI_CATEGORIA = Object.entries(CATEGORIE_SPESA).filter(([k]) => !k.startsWith('polizza_') && !k.startsWith('carta_'))
   .map(([k, r]) => `<option value="${k}">${esc(r.label)} (${esc(r.badge)})</option>`).join('');
 for (const p of Object.keys(MODULI_SPESA)) $(`${p}-categoria`).innerHTML = OPZIONI_CATEGORIA;
 
@@ -528,7 +545,7 @@ function dataDefault() {
   const t = oggi();
   return annoDi(t) === appState.anno ? t : `${appState.anno}-01-01`;
 }
-const CAMPI_DATA = ['fe-data', 'co-data', 'fo-data', 'es-data', 'acq-data', 'po-data', 'pa-data'];
+const CAMPI_DATA = ['fe-data', 'co-data', 'fo-data', 'es-data', 'acq-data', 'po-data', 'ca-data', 'pa-data'];
 
 function confermaRegistrazione(data, msg, focus) {
   if (annoDi(data) === appState.anno) showToast(msg);
@@ -701,7 +718,7 @@ function deleteParcella(id) {
 // ---------------------------------------------------------------------------
 // Riepilogo dell'anno per il commercialista (CSV che Excel apre da solo)
 // ---------------------------------------------------------------------------
-const NOMI_SEZIONE = { fornitori: 'Fatture fornitori', estero: 'Autofatture/fatture estere', spese: 'Abbonamenti/acquisti/spese', polizze: 'Polizze/assicurazioni' };
+const NOMI_SEZIONE = { fornitori: 'Fatture fornitori', estero: 'Autofatture/fatture estere', spese: 'Abbonamenti/acquisti/spese', polizze: 'Polizze/assicurazioni', carta: 'Carta business' };
 
 async function exportCsvAnno() {
   const anno = appState.anno;
@@ -718,7 +735,7 @@ async function exportCsvAnno() {
   }
   for (const x of appState.acquisti.filter(delAnno)) {
     const b = calcAcquistoBreakdown(x);
-    righe.push([NOMI_SEZIONE[x.sezione] || 'Abbonamenti/acquisti/spese', fmtData(x.data), 'Q' + getTrimestre(x.data), x.desc, PROV[x.provenienza] || x.provenienza, b.rule.label, num(b.imponibile), num(b.ivaDocumento), num(b.ivaDebitoRC), num(b.ivaDetraibile), num(b.costoDeducibile), num(b.imponibile + b.ivaDocumento), '', x.sezione === 'polizze' ? notaPolizza(x) : b.notaEstero]);
+    righe.push([NOMI_SEZIONE[x.sezione] || 'Abbonamenti/acquisti/spese', fmtData(x.data), 'Q' + getTrimestre(x.data), x.desc, PROV[x.provenienza] || x.provenienza, b.rule.label, num(b.imponibile), num(b.ivaDocumento), num(b.ivaDebitoRC), num(b.ivaDetraibile), num(b.costoDeducibile), num(b.imponibile + b.ivaDocumento), '', x.sezione === 'polizze' ? notaPolizza(x) : x.sezione === 'carta' ? 'Pagata con la carta, senza fattura' : b.notaEstero]);
   }
   for (const x of appState.parcelle.filter(delAnno)) {
     const b = calcParcella(x);
@@ -1014,6 +1031,8 @@ window.addEventListener('drop', (e) => {
   trascinamenti = 0; chiudi($('drop-overlay'));
   const tutti = [...(e.dataTransfer?.files || [])];
   const attivo = document.querySelector('.tab-content:not(.hidden)')?.id.replace('tab-', '');
+  // nel tab Carta Business ogni file è un estratto conto
+  if (attivo === 'carta') { if (tutti.length) apriEstrattoCarta(tutti); return; }
   // nel tab Polizze i PDF (anche dentro gli ZIP) sono ricevute e quietanze
   if (attivo === 'polizze') {
     const daLeggere = tutti.filter((f) => /\.(pdf|zip)$/i.test(f.name));
@@ -1419,16 +1438,18 @@ function renderAll() {
     CH_BOLLA: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold">Svizzera • Bolla doganale</span>',
     CH_SERVIZI: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold">Servizi esteri • Autofattura TD17</span>',
   };
-  const totSp = { fo: { det: 0, ded: 0 }, es: { det: 0, ded: 0 }, acq: { det: 0, ded: 0 }, po: { det: 0, ded: 0, premi: 0 } };
+  const totSp = { fo: { det: 0, ded: 0 }, es: { det: 0, ded: 0 }, acq: { det: 0, ded: 0 }, po: { det: 0, ded: 0, premi: 0 }, ca: { det: 0, ded: 0 } };
+  const vociCarta = [];
   const htmlSp = { fo: '', es: '', acq: '', po: '' };
   for (const item of acquisti) {
     const b = calcAcquistoBreakdown(item);
     const q = getTrimestre(item.data);
-    const p = item.sezione === 'fornitori' ? 'fo' : item.sezione === 'estero' ? 'es' : item.sezione === 'polizze' ? 'po' : 'acq';
+    const p = item.sezione === 'fornitori' ? 'fo' : item.sezione === 'estero' ? 'es' : item.sezione === 'polizze' ? 'po' : item.sezione === 'carta' ? 'ca' : 'acq';
     totCostiDeducibili += b.costoDeducibile;
     ivaTrim[q].debito += b.ivaDebitoRC; ivaTrim[q].credito += b.ivaDetraibile;
     totSp[p].det += b.ivaDetraibile; totSp[p].ded += b.costoDeducibile;
     if (p === 'po') { totSp.po.premi += b.imponibile + b.ivaDocumento; htmlSp.po += rigaPolizza(item, b); continue; }
+    if (p === 'ca') { vociCarta.push({ item, b }); continue; }
     htmlSp[p] += `<tr data-voce="acquisto:${item.id}" class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
@@ -1454,6 +1475,7 @@ function renderAll() {
   $('tbody-polizze').innerHTML = htmlSp.po || vuota(7, `Nessuna polizza pagata nel ${anno}. Registra qui RC, incendio e furto del negozio, la polizza del furgone e le altre assicurazioni.`);
   $('tot-po-premi').textContent = fmtEuro(totSp.po.premi);
   $('tot-po-ded').textContent = fmtEuro(totSp.po.ded);
+  disegnaCarta(vociCarta);
 
   // 3. Commercialista: le parcelle sono costi come gli altri, con in più la ritenuta
   let paSpeso = 0, paNetto = 0, paCosto = 0, ritDaVersare = 0;
@@ -1657,8 +1679,9 @@ const RICERCHE = [
   { tbody: 'tbody-corrispettivi', tipo: 'entrata', voci: () => appState.entrate.filter((x) => x.tipo !== 'Fattura'), ph: 'Cerca mese, data o importo…' },
   { tbody: 'tbody-fornitori', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'fornitori'), ph: 'Cerca fornitore, numero, data o importo…' },
   { tbody: 'tbody-estero', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'estero'), ph: 'Cerca fornitore, numero, data o importo…' },
-  { tbody: 'tbody-acquisti', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => !['fornitori', 'estero', 'polizze'].includes(x.sezione)), ph: 'Cerca spesa, fornitore, categoria, data o importo…' },
+  { tbody: 'tbody-acquisti', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => !['fornitori', 'estero', 'polizze', 'carta'].includes(x.sezione)), ph: 'Cerca spesa, fornitore, categoria, data o importo…' },
   { tbody: 'tbody-polizze', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'polizze'), ph: 'Cerca compagnia, polizza, data o importo…', riquadri: (lista, filtrata) => riquadriPolizze(lista, filtrata) },
+  { tbody: 'tbody-carta', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'carta'), ph: 'Cerca esercente, data o importo…', riquadri: (lista, filtrata) => riquadriCarta(lista, filtrata) },
   { tbody: 'tbody-parcelle', tipo: 'parcella', voci: () => appState.parcelle, ph: 'Cerca professionista, numero, data o importo…' },
 ];
 const normTesto = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').toLowerCase();
@@ -1832,7 +1855,7 @@ document.addEventListener('keydown', (e) => {
 const SPOSTABILI = ['fatture', 'fornitori', 'estero', 'spese', 'polizze', 'commercialista'];
 const NOMI_TAB = {
   fatture: '2. Fatture emesse', fornitori: '4. Fatture ricevute fornitori', estero: '5. Autofatture/Fatture estere',
-  spese: '6. Abbonamenti/Acquisti/Spese', polizze: '7. Polizze/Assicurazioni', commercialista: '8. Commercialista',
+  spese: '6. Abbonamenti/Acquisti/Spese', polizze: '7. Polizze/Assicurazioni', commercialista: '9. Commercialista',
 };
 const TAB_DI_DEST = { fatture: 'fatture', fornitori: 'fornitori', estero: 'estero', spese: 'acquisti', polizze: 'polizze', commercialista: 'commercialista' };
 const COLLEZIONE = { entrata: 'entrate', acquisto: 'acquisti', parcella: 'parcelle' };
@@ -1951,6 +1974,7 @@ document.addEventListener('contextmenu', (e) => {
   if (!tr || e.target.closest('input, select, textarea')) return;
   const v = trovaVoce(tr.dataset.voce);
   if (!v || (v.tipo === 'entrata' && v.x.tipo !== 'Fattura')) return;
+  if (v.x.sezione === 'carta') return;          // i movimenti della carta si gestiscono dalla riga
   e.preventDefault();
   const qui = destDi(v.tipo, v.x);
   const cp = controparteDi(v.tipo, v.x);
@@ -2649,6 +2673,324 @@ $('po-pdf-input').addEventListener('change', (e) => {
   const lista = [...e.target.files]; e.target.value = '';
   if (lista.length) apriPdfPolizze(lista);
 });
+
+// ---------------------------------------------------------------------------
+// Carta Business
+// ---------------------------------------------------------------------------
+/* I pagamenti fatti con la carta aziendale: spesso c'è solo lo scontrino o
+   la ricevuta, non la fattura. Sono acquisti della sezione «carta» con
+   l'importo pagato tutto a costo (senza fattura l'IVA non si detrae),
+   deducibile secondo il tipo di spesa. Ricariche, accrediti e rimborsi
+   della carta restano nel tab come movimenti, ma non sono spese; i
+   pagamenti che hanno anche la fattura, già registrata in un altro tab, si
+   segnano «Già fatturata» e non contano due volte. Ogni movimento ha una
+   chiave (data, importo, descrizione): ricaricare un estratto che si
+   sovrappone a uno già caricato aggiunge solo i movimenti nuovi. */
+const cartaVoci = () => appState.acquisti.filter((x) => x.sezione === 'carta');
+const NON_SPESA_CARTA = ['carta_movimento'];
+const importoCarta = (x) => (x.carta && Number.isFinite(+x.carta.importo) ? +x.carta.importo : -(parseFloat(x.imponibile) || 0));
+const chiaveMovCarta = (m) => `${m.data}|${Math.round(m.importo * 100)}|${normNome(m.desc)}`;
+const chiaveCarta = (x) => (x.carta && x.carta.k) || chiaveMovCarta({ data: x.data, importo: importoCarta(x), desc: x.desc });
+/* l'esercente: le prime due parole della descrizione, senza numeri */
+const chiaveEsercente = (desc) => normTesto(desc).replace(/[^a-z ]/g, ' ').split(' ').filter((p) => p.length >= 2).slice(0, 2).join(' ');
+
+const OPZIONI_CARTA = Object.keys(CATEGORIE_SPESA).filter((k) => !k.startsWith('polizza_'));
+const opzioniCarta = (scelta) => OPZIONI_CARTA.map((k) => `<option value="${k}" ${k === scelta ? 'selected' : ''} title="${esc(CATEGORIE_SPESA[k].badge)}">${esc(CATEGORIE_SPESA[k].label)}</option>`).join('');
+
+function categoriaCarta(desc, importo) {
+  const t = normTesto(desc);
+  if (importo > 0) return 'carta_movimento';
+  // le commissioni (anche «per ricarica») sono spese bancarie, non movimenti
+  if (/commission|canone|\bsms\b|allert|alert|imposta di bollo|spese (tenuta|gestione)|interessi|quota (annuale|associativa) carta/.test(t)) return 'esente_0_100';
+  if (/ricarica|primo caricamento|accredito|rimborso totale|giroconto|ric\.? ?prep|trasferimento (da|verso)|storno/.test(t)) return 'carta_movimento';
+  const ricordata = appState.cartaCategorie[chiaveEsercente(desc)];
+  if (ricordata && CATEGORIE_SPESA[ricordata]) return ricordata;
+  if (/infocamere|camera di commercio|pagopa|agenzia (delle )?entrate|diritto annuale|inps|comune di/.test(t)) return 'esente_0_100';
+  if (/distribut|carburant|benzin|gasolio|\bagip\b|\beni(station)?\b|\bq8\b|tamoil|\besso\b|\bip\b|stazione di servizio|autostrad|telepass|parcheggi|autolavaggio/.test(t)) return 'furgone_100_100';
+  if (/hotel|albergo|\bb ?& ?b\b|ostello|agriturismo|locanda|\brist|ristorant|pizzeria|trattoria|osteria|autogrill|mcdonald|burger|sushi|tavola calda|panific|pasticceri/.test(t)) return 'trasferta_0_75';
+  if (/\bbar\b|caff[eè]/.test(t)) return 'caffe_0_75';
+  if (/\b(tim|vodafone|wind|windtre|iliad|very mobile|kena)\b|ricarica telefon/.test(t)) return 'tel_mob_50_80';
+  return 'merce_100_100';
+}
+
+function badgeCarta(x) {
+  const c = [];
+  if (x.carta && x.carta.provvisorio) c.push('<span class="ml-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 text-[10px] font-bold align-middle" title="Sull\'estratto risultava ancora da contabilizzare">Da contabilizzare</span>');
+  if (x.categoria === 'carta_movimento') c.push('<span class="ml-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold align-middle">Non è una spesa</span>');
+  if (x.categoria === 'carta_fatturata') c.push('<span class="ml-1 px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 text-[10px] font-bold align-middle">Fattura in un altro tab</span>');
+  return c.join('');
+}
+
+function disegnaCarta(voci) {
+  const ordinate = voci.slice().sort((a, b) => a.item.data.localeCompare(b.item.data) || a.item.id - b.item.id);
+  const mesi = new Map();
+  for (const v of ordinate) {
+    const k = v.item.data.slice(0, 7);
+    if (!mesi.has(k)) mesi.set(k, []);
+    mesi.get(k).push(v);
+  }
+  let html = '', spese = 0, ded = 0;
+  for (const [k, lista] of mesi) {
+    const [a, m] = k.split('-').map(Number);
+    let sp = 0, dd = 0, ent = 0;
+    for (const { item, b } of lista) {
+      const imp = importoCarta(item);
+      if (NON_SPESA_CARTA.includes(item.categoria)) { if (imp > 0) ent += imp; continue; }
+      if (item.categoria !== 'carta_fatturata') sp += -imp;
+      dd += b.costoDeducibile;
+    }
+    spese += sp; ded += dd;
+    html += `<tr class="bg-slate-50 border-t-2 border-slate-200"><td colspan="6" class="py-2 px-4 text-xs">
+        <span class="font-bold text-slate-900">${esc(nomeMese(m))} ${a}</span>
+        <span class="text-slate-500"> · spese <strong class="text-slate-800">${fmtEuro(sp)}</strong> · costo deducibile <strong class="text-slate-800">${fmtEuro(dd)}</strong>${ent ? ` · ricariche e accrediti ${fmtEuro(ent)}` : ''} · ${lista.length} ${lista.length === 1 ? 'movimento' : 'movimenti'}</span>
+      </td></tr>`;
+    for (const { item, b } of lista) {
+      const imp = importoCarta(item);
+      const nonSpesa = NON_SPESA_CARTA.includes(item.categoria) || item.categoria === 'carta_fatturata' || item.categoria === 'carta_personale';
+      html += `<tr data-voce="acquisto:${item.id}" class="hover:bg-slate-50/80 transition ${nonSpesa ? 'text-slate-400' : ''}">
+        <td class="py-2.5 px-4 whitespace-nowrap ${nonSpesa ? '' : 'text-slate-600'}">${fmtData(item.data)}</td>
+        <td class="py-2.5 px-4 min-w-[220px]"><span class="font-medium ${nonSpesa ? '' : 'text-slate-900'}">${esc(item.desc)}</span>${badgeCarta(item)}</td>
+        <td class="py-2.5 px-4"><select data-carta-cat="${item.id}" aria-label="Tipo di spesa" title="${esc(b.rule.badge)}" class="w-full min-w-[200px] max-w-[300px] px-2 py-1 rounded-lg border border-slate-200 bg-white text-xs text-slate-700 focus:ring-2 focus:ring-amber-500 outline-none">${opzioniCarta(item.categoria)}</select></td>
+        <td class="py-2.5 px-4 text-right font-bold whitespace-nowrap ${imp > 0 ? 'text-emerald-700' : nonSpesa ? '' : 'text-slate-900'}">${imp > 0 ? '+' : ''}${fmtEuro(imp)}</td>
+        <td class="py-2.5 px-4 text-right font-semibold whitespace-nowrap ${b.costoDeducibile ? 'text-slate-900' : ''}">${fmtEuro(b.costoDeducibile)}</td>
+        <td class="py-2.5 px-4 text-center"><button data-action="del-acquisto" data-id="${item.id}" class="text-rose-500 hover:text-rose-700 text-xs font-semibold px-2 py-1 rounded-lg hover:bg-rose-50">Elimina</button></td>
+      </tr>`;
+    }
+  }
+  $('tbody-carta').innerHTML = html || `<tr><td colspan="6" class="py-8 text-center text-slate-400 text-xs">Nessun pagamento con la carta nel ${appState.anno}. Carica l'estratto conto (PDF, ZIP, Excel o CSV) o registra un pagamento qui sopra.</td></tr>`;
+  $('tot-ca-spese').textContent = fmtEuro(spese);
+  $('tot-ca-ded').textContent = fmtEuro(ded);
+  disegnaEstrattiCarta();
+}
+
+function disegnaEstrattiCarta() {
+  const lista = appState.cartaEstratti.filter((e) => annoDi(e.al) === appState.anno || annoDi(e.dal) === appState.anno)
+    .sort((a, b) => String(a.dal).localeCompare(String(b.dal)));
+  const el = $('carta-estratti');
+  el.classList.toggle('hidden', !lista.length);
+  el.innerHTML = lista.length ? `<span class="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">Estratti caricati</span>` + lista.map((e) => `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-xs text-slate-700">
+      ${esc(fmtData(e.dal))} – ${esc(fmtData(e.al))}${e.saldoFinale != null ? ` · saldo ${esc(fmtEuro(e.saldoFinale))}` : ''}
+      ${e.allegato && DESKTOP ? `<button type="button" data-action="apri-allegato" data-rel="${esc(e.allegato)}" class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold hover:bg-emerald-100" title="Apri ${esc(e.file)}">📎 PDF</button>` : `<span class="text-slate-400 text-[10px]" title="${esc(e.file)}">${esc(String(e.file).split('.').pop().toUpperCase())}</span>`}
+    </span>`).join('') : '';
+}
+
+function riquadriCarta(lista, filtrata) {
+  let spese = 0, n = 0, fatturate = 0, ded = 0, entrate = 0;
+  for (const x of lista) {
+    const imp = importoCarta(x);
+    if (NON_SPESA_CARTA.includes(x.categoria)) { if (imp > 0) entrate += imp; continue; }
+    ded += calcAcquistoBreakdown(x).costoDeducibile;
+    if (x.categoria === 'carta_fatturata') { fatturate += -imp; continue; }
+    spese += -imp; n++;
+  }
+  const ultimo = appState.cartaEstratti.filter((e) => e.saldoFinale != null && annoDi(e.al) === appState.anno).sort((a, b) => String(b.al).localeCompare(String(a.al)))[0];
+  const bordo = filtrata ? 'border-amber-300' : 'border-slate-200';
+  const cella = (titolo, valore, sub, colore = 'text-slate-900', forte = false) => `<div class="bg-white rounded-2xl border ${bordo} shadow-xs p-4">
+      <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500">${titolo}</div>
+      <div class="mt-1 ${forte ? 'text-2xl' : 'text-xl'} font-bold ${colore} whitespace-nowrap">${valore}</div>
+      <div class="mt-1 text-[11px] text-slate-500">${sub}</div>
+    </div>`;
+  const dove = filtrata ? ' · solo i risultati della ricerca' : ` nel ${appState.anno}`;
+  return cella('Spese con la carta', fmtEuro(spese), `${n} ${n === 1 ? 'pagamento' : 'pagamenti'}${dove}${fatturate ? ` · più ${fmtEuro(fatturate)} già fatturate` : ''}`, 'text-slate-900', true)
+    + cella('Costo deducibile', fmtEuro(ded), 'Senza fattura l\'IVA non si detrae: va tutta a costo')
+    + cella('Ricariche e accrediti', fmtEuro(entrate), ultimo ? `Saldo al ${esc(fmtData(ultimo.al))}: <strong class="text-slate-800">${fmtEuro(ultimo.saldoFinale)}</strong>` : 'Soldi messi sulla carta: non sono ricavi', 'text-emerald-700');
+}
+
+// cambio del tipo di spesa direttamente nella riga: vale anche per le altre
+// spese dello stesso esercente e per i prossimi estratti
+document.addEventListener('change', (e) => {
+  const sel = e.target.closest('[data-carta-cat]');
+  if (!sel) return;
+  const x = appState.acquisti.find((v) => String(v.id) === sel.dataset.cartaCat);
+  if (!x || !CATEGORIE_SPESA[sel.value]) return;
+  const cat = sel.value;
+  x.categoria = cat;
+  let altre = 0;
+  const es = chiaveEsercente(x.desc);
+  if (es && !NON_SPESA_CARTA.includes(cat) && cat !== 'carta_fatturata') {
+    appState.cartaCategorie[es] = cat;
+    for (const v of cartaVoci()) {
+      if (v !== x && chiaveEsercente(v.desc) === es && v.categoria !== cat && !NON_SPESA_CARTA.includes(v.categoria) && v.categoria !== 'carta_fatturata' && importoCarta(v) < 0) { v.categoria = cat; altre++; }
+    }
+  }
+  saveState(); renderAll();
+  showToast(altre ? `Tipo cambiato anche per le altre ${altre === 1 ? 'spesa' : `${altre} spese`} dello stesso esercente: verrà proposto così anche nei prossimi estratti.` : 'Tipo di spesa aggiornato.');
+});
+
+// --- caricamento dell'estratto conto ---
+let caricamentoCarta = null;
+
+async function apriEstrattoCarta(lista) {
+  showToast(`Lettura di ${lista.length === 1 ? '1 file' : `${lista.length} file`}…`);
+  let r;
+  try { r = await window.CartaEstratto.leggiFile(lista); }
+  catch (e) { showToast('Lettura non riuscita: ' + e.message, true); return; }
+  if (!r.estratti.length) {
+    showToast(r.errori.length ? `${r.errori[0].file}: ${r.errori[0].errore}` : 'Nessun movimento trovato.', true);
+    return;
+  }
+  // movimenti già registrati: stessa data, importo e descrizione (contando i doppi dello stesso giorno)
+  const visti = new Map();
+  for (const x of cartaVoci()) { const k = chiaveCarta(x); visti.set(k, (visti.get(k) || 0) + 1); }
+  const estratti = r.estratti.sort((a, b) => String(a.dal).localeCompare(String(b.dal))).map((e) => {
+    const qui = new Map();
+    const movimenti = e.movimenti.map((m) => {
+      const k = chiaveMovCarta(m);
+      const occ = (qui.get(k) || 0) + 1; qui.set(k, occ);
+      const doppio = occ <= (visti.get(k) || 0);
+      const proposta = categoriaCarta(m.desc, m.importo);
+      return { m, k, doppio, incluso: !doppio, categoria: proposta, proposta };
+    });
+    for (const [k, n] of qui) visti.set(k, Math.max(visti.get(k) || 0, n));
+    return { e, movimenti };
+  });
+  caricamentoCarta = { estratti, errori: r.errori };
+  disegnaEstrattoCarta();
+  apri($('carta-modal'));
+}
+
+function disegnaEstrattoCarta() {
+  const { estratti, errori } = caricamentoCarta;
+  const blocchi = estratti.map(({ e, movimenti }, i) => {
+    const nuovi = movimenti.filter((x) => !x.doppio).length;
+    const verifiche = e.verifiche.map((v) => v.ok
+      ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] font-semibold">✓ ${esc(v.cosa)}: ${fmtEuro(v.atteso)}</span>`
+      : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-50 text-rose-700 text-[11px] font-semibold">✗ ${esc(v.cosa)}: l'estratto dice ${fmtEuro(v.atteso)}, letti ${fmtEuro(e.somma)}</span>`).join(' ');
+    const righe = movimenti.map((x, j) => `<tr class="${x.incluso ? '' : 'opacity-50'}">
+        <td class="py-1.5 px-2"><input type="checkbox" data-carta-mov="${i}:${j}" data-campo="incluso" ${x.incluso ? 'checked' : ''} class="w-4 h-4 accent-emerald-600" aria-label="Registra" /></td>
+        <td class="py-1.5 px-2 whitespace-nowrap text-slate-600">${esc(fmtData(x.m.data))}</td>
+        <td class="py-1.5 px-2 text-slate-900">${esc(x.m.desc)}${x.m.provvisorio ? ' <span class="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 text-[10px] font-bold">Da contabilizzare</span>' : ''}${x.doppio ? ' <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold">Già registrato</span>' : ''}</td>
+        <td class="py-1.5 px-2 text-right font-semibold whitespace-nowrap ${x.m.importo > 0 ? 'text-emerald-700' : 'text-slate-900'}">${x.m.importo > 0 ? '+' : ''}${fmtEuro(x.m.importo)}</td>
+        <td class="py-1.5 px-2"><select data-carta-mov="${i}:${j}" data-campo="categoria" class="w-full min-w-[180px] px-2 py-1 rounded-lg border border-slate-200 bg-white text-[11px]">${opzioniCarta(x.categoria)}</select></td>
+      </tr>`).join('');
+    return `<div class="rounded-xl border border-slate-200 overflow-hidden">
+      <div class="px-3 sm:px-4 py-3 bg-slate-50 border-b border-slate-200 space-y-1.5">
+        <div class="flex flex-wrap items-baseline justify-between gap-2">
+          <div class="font-bold text-slate-900">${esc(e.file)}</div>
+          <div class="text-[11px] text-slate-500">${esc(fmtData(e.dal))} – ${esc(fmtData(e.al))} · ${movimenti.length} movimenti, ${nuovi === movimenti.length ? 'tutti nuovi' : `${nuovi} nuovi`}</div>
+        </div>
+        ${verifiche ? `<div class="flex flex-wrap gap-1.5">${verifiche}</div>` : `<div class="text-[11px] text-slate-500">Il file non riporta totali o saldi: controlla che i movimenti ci siano tutti.</div>`}
+      </div>
+      <div class="overflow-x-auto"><table class="w-full text-left text-xs">
+        <thead><tr class="text-[10px] font-bold uppercase text-slate-500 border-b border-slate-100"><th class="py-1.5 px-2"></th><th class="py-1.5 px-2">Data</th><th class="py-1.5 px-2">Descrizione</th><th class="py-1.5 px-2 text-right">Importo</th><th class="py-1.5 px-2">Tipo di spesa</th></tr></thead>
+        <tbody class="divide-y divide-slate-100">${righe}</tbody>
+      </table></div>
+    </div>`;
+  });
+  if (errori.length) blocchi.push(`<div class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900"><strong>${errori.length === 1 ? 'Un file non letto' : `${errori.length} file non letti`}:</strong> ${errori.map((x) => `${esc(x.file)} (${esc(x.errore)})`).join('; ')}</div>`);
+  $('carta-corpo').innerHTML = blocchi.join('');
+  aggiornaRiepilogoCarta();
+}
+
+function aggiornaRiepilogoCarta() {
+  let n = 0, spese = 0;
+  for (const { movimenti } of caricamentoCarta.estratti) for (const x of movimenti) {
+    if (!x.incluso) continue;
+    n++;
+    if (x.m.importo < 0 && !NON_SPESA_CARTA.includes(x.categoria) && x.categoria !== 'carta_fatturata') spese += -x.m.importo;
+  }
+  $('carta-riepilogo').textContent = n ? `${n} ${n === 1 ? 'movimento' : 'movimenti'} da registrare, spese ${fmtEuro(spese)}.` : 'Nessun movimento nuovo da registrare.';
+  $('carta-ok').textContent = n ? `Registra ${n}` : 'Chiudi';
+}
+
+const aggiornaMovCarta = (e) => {
+  const el = e.target;
+  if (!caricamentoCarta || !el.dataset || el.dataset.cartaMov == null) return;
+  const [i, j] = el.dataset.cartaMov.split(':').map(Number);
+  const x = caricamentoCarta.estratti[i]?.movimenti[j];
+  if (!x) return;
+  if (el.dataset.campo === 'incluso') { x.incluso = el.checked; el.closest('tr').classList.toggle('opacity-50', !el.checked); }
+  else x.categoria = el.value;
+  aggiornaRiepilogoCarta();
+};
+document.addEventListener('change', aggiornaMovCarta);
+
+function chiudiEstrattoCarta() { caricamentoCarta = null; chiudi($('carta-modal')); }
+
+async function confermaEstrattoCarta() {
+  if (!caricamentoCarta) return;
+  const lavoro = caricamentoCarta;
+  $('carta-ok').disabled = true;
+  let id = Date.now(), aggiornati = 0, persi = 0;
+  const nuove = [];
+  try {
+    for (const { e, movimenti } of lavoro.estratti) {
+      for (const x of movimenti) {
+        if (x.doppio && !x.m.provvisorio) {
+          // il movimento era «da contabilizzare» e ora è definitivo
+          const gia = cartaVoci().find((v) => chiaveCarta(v) === x.k && v.carta && v.carta.provvisorio);
+          if (gia) { gia.carta.provvisorio = false; aggiornati++; }
+        }
+        if (!x.incluso) continue;
+        const cat = CATEGORIE_SPESA[x.categoria] ? x.categoria : 'merce_100_100';
+        nuove.push({
+          id: id++, data: x.m.data, desc: x.m.desc, provenienza: 'IT', categoria: cat,
+          imponibile: Math.abs(x.m.importo), iva: 0, sezione: 'carta', sezioneManuale: true,
+          carta: { k: x.k, importo: x.m.importo, ...(x.m.provvisorio ? { provvisorio: true } : {}) },
+        });
+        // il tipo scelto a mano si ricorda per l'esercente
+        const es = chiaveEsercente(x.m.desc);
+        if (cat !== x.proposta && es && !NON_SPESA_CARTA.includes(cat) && cat !== 'carta_fatturata') appState.cartaCategorie[es] = cat;
+      }
+      let allegato = '';
+      if (DESKTOP && e.bytes) {
+        try { const r = await window.gestionale.salvaAllegato(`carta/${annoDi(e.al) || 'senza-data'}`, `Estratto carta ${e.dal} ${e.al}`, e.bytes); allegato = r.ok ? r.rel : ''; } catch (_) { allegato = ''; }
+        if (!allegato) persi++;
+      }
+      appState.cartaEstratti = appState.cartaEstratti.filter((v) => !(v.dal === e.dal && v.al === e.al));
+      appState.cartaEstratti.push({ file: e.file, dal: e.dal, al: e.al, saldoIniziale: e.saldoIniziale, saldoFinale: e.saldoFinale, allegato, caricato: oggi() });
+    }
+  } finally { $('carta-ok').disabled = false; }
+  appState.acquisti.push(...nuove);
+  appState.acquisti.sort((a, b) => a.data.localeCompare(b.data));
+  saveState();
+  chiudiEstrattoCarta();
+  const anni = [...new Set(nuove.map((x) => annoDi(x.data)))];
+  popolaAnni();
+  if (anni.length === 1 && anni[0] && anni[0] !== appState.anno) cambiaAnnoRicerca(anni[0]);
+  else renderAll();
+  switchTab('carta');
+  const testo = nuove.length ? `${nuove.length === 1 ? 'Registrato 1 movimento' : `Registrati ${nuove.length} movimenti`} della carta.` : 'Nessun movimento nuovo: l\'estratto era già caricato.';
+  showToast(testo + (aggiornati ? ` ${aggiornati} da contabilizzare ora confermati.` : '') + (persi ? ` Non è stato possibile copiare ${persi} PDF nella cartella dei dati.` : ''), !!persi);
+}
+
+$('carta-input').addEventListener('change', (e) => {
+  const lista = [...e.target.files]; e.target.value = '';
+  if (lista.length) apriEstrattoCarta(lista);
+});
+
+// --- modulo: un pagamento con la carta inserito a mano ---
+$('ca-categoria').innerHTML = opzioniCarta('merce_100_100');
+let caCategoriaToccata = false;
+$('ca-categoria').addEventListener('change', () => { caCategoriaToccata = true; updateCartaPreview(); });
+$('ca-desc').addEventListener('change', () => {
+  if (caCategoriaToccata || !$('ca-desc').value.trim()) return;
+  $('ca-categoria').value = categoriaCarta($('ca-desc').value, -1);
+  updateCartaPreview();
+});
+function updateCartaPreview() {
+  const b = calcAcquistoBreakdown({ imponibile: $('ca-importo').value, iva: 0, provenienza: 'IT', categoria: $('ca-categoria').value });
+  $('ca-preview').innerHTML = `${esc(b.rule.badge)} → costo deducibile: <strong class="text-slate-900">${fmtEuro(b.costoDeducibile)}</strong> <span class="text-slate-500">· senza fattura l'IVA non si detrae</span>`;
+}
+$('ca-importo').addEventListener('input', updateCartaPreview);
+$('form-carta').addEventListener('submit', function (e) {
+  e.preventDefault();
+  const importo = Math.round((parseFloat($('ca-importo').value) || 0) * 100) / 100;
+  if (!(importo > 0)) { showToast('Inserisci l\'importo pagato.', true); return; }
+  const desc = $('ca-desc').value.trim();
+  const nuovo = {
+    id: Date.now(), data: $('ca-data').value, desc, provenienza: 'IT', categoria: $('ca-categoria').value,
+    imponibile: importo, iva: 0, sezione: 'carta', sezioneManuale: true, carta: { importo: -importo },
+  };
+  nuovo.carta.k = chiaveMovCarta({ data: nuovo.data, importo: -importo, desc });
+  appState.acquisti.push(nuovo);
+  appState.acquisti.sort((a, b) => a.data.localeCompare(b.data));
+  saveState(); this.reset(); caCategoriaToccata = false;
+  $('ca-data').value = nuovo.data; $('ca-categoria').value = 'merce_100_100';
+  updateCartaPreview(); renderAll();
+  confermaRegistrazione(nuovo.data, 'Pagamento con carta registrato.', 'ca-desc');
+});
+updateCartaPreview();
 
 // ---------------------------------------------------------------------------
 // Avvio

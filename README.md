@@ -19,13 +19,15 @@ S.N.C.:
    costo deducibile per intero (attività, negozio, furgone), al 20% (auto usata anche
    privatamente) o per niente (polizze personali dei soci). Avvisi di rinnovo nel tab e nella
    dashboard quando una polizza scade entro 45 giorni.
-8. **Commercialista**: parcelle con cassa, IVA e ritenuta d'acconto 20%, scadenze F24 codice
+8. **Carta Business**: i pagamenti con la carta aziendale che hanno solo scontrino o ricevuta,
+   dall'estratto conto (PDF, ZIP, Excel o CSV), divisi per mese con il riepilogo in alto.
+9. **Commercialista**: parcelle con cassa, IVA e ritenuta d'acconto 20%, scadenze F24 codice
    1040 da spuntare, riepilogo dell'anno in CSV per Excel.
-9. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
+10. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
    del credito, scadenze F24.
-10. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
+11. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
     INPS commercianti, IRAP.
-11. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
+12. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
 
 ### Importazione delle fatture elettroniche
 Nei tab Fatture Emesse, Fornitori, Autofatture/Fatture Estere, Abbonamenti/Acquisti/Spese, Polizze e
@@ -70,6 +72,27 @@ registrata (stessa polizza e stesso periodo) viene riconosciuta e saltata. Il PD
 `allegati/polizze/<anno>` e si riapre dal pulsante 📎 della riga. Le fatture XML trovate negli
 ZIP passano all'importazione delle fatture elettroniche.
 
+### Estratto conto della Carta Business
+Molti pagamenti con la carta aziendale non hanno la fattura ma solo lo scontrino o la ricevuta.
+Nel tab Carta Business il pulsante **Carica estratto conto** (o il trascinamento) legge i
+movimenti da:
+- **PDF** della banca: righe con data, descrizione e importo, anche su due colonne
+  addebiti/accrediti; saldo iniziale, saldo finale e «Totale movimenti» servono a verificare che
+  la lettura sia completa;
+- **Excel .xlsx**, **CSV** e i «.xls» in HTML esportati dall'home banking (colonne Data,
+  Descrizione/Causale e Importo, oppure Addebiti e Accrediti);
+- **ZIP** con dentro questi file, anche annidati.
+
+Ogni pagamento diventa una spesa con il tipo proposto dalla descrizione: carburante, hotel e
+ristoranti in trasferta (costo al 75%), commissioni e canoni, merce e servizi. Senza fattura l'IVA
+non si detrae: l'importo pagato va tutto a costo, deducibile secondo il tipo. Ricariche, accrediti
+e rimborsi della carta restano nell'elenco ma non sono spese; un pagamento che ha anche la fattura,
+già registrata in un altro tab, si segna «Già fatturata» e non conta due volte. Il tipo cambiato
+dalla riga vale anche per le altre spese dello stesso esercente e viene ricordato per i prossimi
+estratti. Ricaricare un estratto che si sovrappone a uno già caricato aggiunge solo i movimenti
+nuovi; i movimenti «da contabilizzare» vengono confermati dall'estratto successivo. I PDF si
+copiano in `allegati/carta/<anno>`.
+
 ### PDF del Registro Corrispettivi
 Nel tab Corrispettivi il pulsante **Carica PDF corrispettivi** (o il trascinamento) legge i PDF
 prodotti dall'app Registro Corrispettivi:
@@ -104,7 +127,7 @@ esporta e si ripristina un backup.
 ## Struttura
 - `App/renderer/` — interfaccia (`index.html`, `app.js`, `fatturapa.js` lettore delle fatture elettroniche,
   `corrispettivi-pdf.js` lettore dei PDF del Registro Corrispettivi, `polizze-pdf.js` lettore delle
-  ricevute e quietanze delle polizze, `lib/` pdf.js, `app.css` generato).
+  ricevute e quietanze delle polizze, `carta-estratto.js` lettore degli estratti conto della carta, `lib/` pdf.js, `app.css` generato).
 - `App/src/tailwind.css` — sorgente degli stili: `npm run css` rigenera `renderer/app.css`
   (Tailwind gira in locale, niente CDN: l'app funziona senza rete).
 - `App/main.js`, `App/preload.js` — finestra, salvataggio, menu, aggiornamenti.

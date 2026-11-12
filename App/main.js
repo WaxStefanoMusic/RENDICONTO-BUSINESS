@@ -77,6 +77,20 @@ ipcMain.handle('backup:esporta', async (_e, { nome, json }) => {
   return { ok: true, percorso: r.filePath };
 });
 
+/* riepiloghi per il commercialista: solo CSV, il contenuto lo prepara la pagina */
+ipcMain.handle('file:esporta', async (_e, { nome, contenuto, tipo }) => {
+  if (tipo !== 'csv') return { ok: false };
+  const r = await dialog.showSaveDialog(win, {
+    title: 'Salva riepilogo per il commercialista',
+    defaultPath: path.join(app.getPath('documents'), path.basename(String(nome || 'riepilogo.csv'))),
+    filters: [{ name: 'Foglio Excel (CSV)', extensions: ['csv'] }],
+  });
+  if (r.canceled || !r.filePath) return { ok: false };
+  fs.writeFileSync(r.filePath, String(contenuto), 'utf8');
+  shell.showItemInFolder(r.filePath);
+  return { ok: true, percorso: r.filePath };
+});
+
 ipcMain.handle('backup:importa', async () => {
   const r = await dialog.showOpenDialog(win, {
     title: 'Ripristina backup', defaultPath: app.getPath('documents'), properties: ['openFile'],

@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('gestionale', {
 
   esportaBackup: (nome, json) => ipcRenderer.invoke('backup:esporta', { nome, json }),
   importaBackup: ()           => ipcRenderer.invoke('backup:importa'),
+  esportaFile:   (nome, contenuto, tipo) => ipcRenderer.invoke('file:esporta', { nome, contenuto, tipo }),
 
   onMenu: (cb) => {
     const h = (_e, cmd) => cb(cmd);

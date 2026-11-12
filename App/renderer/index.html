@@ -154,11 +154,14 @@
     <div class="tabs-scroll max-w-7xl 2xl:max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 overflow-x-auto">
       <nav class="flex gap-1 sm:gap-2 border-t border-slate-800/80 pt-2" aria-label="Sezioni">
         <button data-tab="dashboard" class="tab-btn">1. Dashboard &amp; Riepilogo</button>
-        <button data-tab="entrate" class="tab-btn">2. Entrate (Corrispettivi &amp; Fatture)</button>
-        <button data-tab="acquisti" class="tab-btn">3. Acquisti &amp; Spese</button>
-        <button data-tab="iva" class="tab-btn">4. Liquidazione IVA (LIPE)</button>
-        <button data-tab="imposte" class="tab-btn">5. Imposte Soci &amp; INPS</button>
-        <button data-tab="guida" class="tab-btn">6. Guida &amp; Adempimenti</button>
+        <button data-tab="fatture" class="tab-btn">2. Fatture Emesse</button>
+        <button data-tab="corrispettivi" class="tab-btn">3. Corrispettivi</button>
+        <button data-tab="fornitori" class="tab-btn">4. Fatture Ricevute Fornitori</button>
+        <button data-tab="acquisti" class="tab-btn">5. Abbonamenti/Acquisti/Spese</button>
+        <button data-tab="commercialista" class="tab-btn">6. Commercialista</button>
+        <button data-tab="iva" class="tab-btn">7. Liquidazione IVA (LIPE)</button>
+        <button data-tab="imposte" class="tab-btn">8. Imposte Soci &amp; INPS</button>
+        <button data-tab="guida" class="tab-btn">9. Guida &amp; Adempimenti</button>
       </nav>
     </div>
   </header>
@@ -230,39 +233,33 @@
       </div>
     </section>
 
-    <!-- TAB 2: ENTRATE -->
-    <section id="tab-entrate" class="tab-content hidden space-y-6">
+    <!-- TAB 2: FATTURE EMESSE -->
+    <section id="tab-fatture" class="tab-content hidden space-y-6">
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
         <div class="mb-5">
-          <h2 class="text-lg font-bold text-slate-900">Registra entrata (corrispettivi o fattura emessa)</h2>
-          <p class="text-xs text-slate-500">Inserisci il totale incassato: per i corrispettivi con IVA l'app scorpora il 22% da sola. Per le fatture all'estero l'operazione è non imponibile.</p>
+          <h2 class="text-lg font-bold text-slate-900">Registra fattura emessa</h2>
+          <p class="text-xs text-slate-500">Inserisci il totale della fattura IVA inclusa: per l'Italia l'app scorpora il 22%; per Svizzera/extra-UE (art. 8) e imprese UE (art. 41) l'operazione è non imponibile.</p>
         </div>
-        <form id="form-entrata" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
-          <label class="block text-xs font-semibold text-slate-700">Data
-            <input type="date" id="ent-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+        <form id="form-fatture" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
+          <label class="block text-xs font-semibold text-slate-700">Data fattura
+            <input type="date" id="fe-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
           </label>
-          <label class="block text-xs font-semibold text-slate-700">Tipo documento
-            <select id="ent-tipo" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
-              <option value="Corrispettivi">Corrispettivi negozio</option>
-              <option value="Fattura">Fattura emessa</option>
-            </select>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Numero e cliente
+            <input type="text" id="fe-desc" placeholder="Es. Fatt. n. 12 - Rossi Mario" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
           </label>
-          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Descrizione / cliente
-            <input type="text" id="ent-desc" placeholder="Es. Corrispettivi gennaio / Fatt. n. 12 Rossi" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
-          </label>
-          <label class="block text-xs font-semibold text-slate-700">Regime IVA / destinazione
-            <select id="ent-regime" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Regime IVA / destinazione
+            <select id="fe-regime" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
               <option value="IT_22">Italia / privato UE (IVA 22%)</option>
               <option value="CH_ART8">Esportazione Svizzera / extra-UE (art. 8 - 0%)</option>
               <option value="UE_ART41">Cessione a impresa UE VIES (art. 41 - 0%)</option>
             </select>
           </label>
-          <label class="block text-xs font-semibold text-slate-700">Totale documento (€ IVA incl.)
-            <input type="number" step="0.01" min="0" id="ent-totale" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          <label class="block text-xs font-semibold text-slate-700">Totale fattura (€ IVA incl.)
+            <input type="number" step="0.01" min="0" id="fe-totale" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
           </label>
           <div class="sm:col-span-2 lg:col-span-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
-            <div id="ent-preview" class="text-xs text-slate-600"></div>
-            <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-xs transition">+ Aggiungi entrata</button>
+            <div id="fe-preview" class="text-xs text-slate-600"></div>
+            <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-xs transition">+ Aggiungi fattura</button>
           </div>
         </form>
       </div>
@@ -270,42 +267,155 @@
       <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <h3 class="text-base font-bold text-slate-900">Corrispettivi e fatture attive <span data-anno></span></h3>
-            <p class="text-xs text-slate-500">Fatture emesse nell'anno: <strong id="count-fatture-attive">0</strong></p>
+            <h3 class="text-base font-bold text-slate-900">Fatture emesse <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">Fatture nell'anno: <strong id="count-fe">0</strong></p>
           </div>
           <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
-            Imponibile: <span id="tot-entrate-imp" class="text-slate-900">0,00 €</span> | IVA a debito: <span id="tot-entrate-iva" class="text-rose-600">0,00 €</span>
+            Imponibile: <span id="tot-fe-imp" class="text-slate-900">0,00 €</span> | IVA a debito: <span id="tot-fe-iva" class="text-rose-600">0,00 €</span>
           </div>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full text-left border-collapse">
             <thead>
               <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
-                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Trim.</th><th class="py-3 px-4">Tipo</th>
-                <th class="py-3 px-4">Descrizione</th><th class="py-3 px-4">Regime</th>
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Trim.</th>
+                <th class="py-3 px-4">Numero e cliente</th><th class="py-3 px-4">Regime</th>
                 <th class="py-3 px-4 text-right">Imponibile</th><th class="py-3 px-4 text-right">IVA debito</th>
                 <th class="py-3 px-4 text-right">Totale</th><th class="py-3 px-4 text-center">Azioni</th>
               </tr>
             </thead>
-            <tbody id="tbody-entrate" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+            <tbody id="tbody-fatture" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
           </table>
         </div>
       </div>
     </section>
 
-    <!-- TAB 3: ACQUISTI -->
+    <!-- TAB 3: CORRISPETTIVI -->
+    <section id="tab-corrispettivi" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">Registra corrispettivi del negozio</h2>
+          <p class="text-xs text-slate-500">Inserisci il totale incassato al registratore telematico (giornaliero o del mese, IVA inclusa): l'app scorpora l'IVA al 22% da sola.</p>
+        </div>
+        <form id="form-corrispettivi" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
+          <label class="block text-xs font-semibold text-slate-700">Data
+            <input type="date" id="co-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-4 text-xs font-semibold text-slate-700">Descrizione
+            <input type="text" id="co-desc" placeholder="Es. Corrispettivi gennaio / Incasso del 14/03" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Totale incassato (€ IVA incl.)
+            <input type="number" step="0.01" min="0" id="co-totale" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <div class="sm:col-span-2 lg:col-span-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
+            <div id="co-preview" class="text-xs text-slate-600"></div>
+            <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-xs transition">+ Aggiungi corrispettivi</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Corrispettivi <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">Incassato lordo nell'anno: <strong id="tot-co-lordo">0,00 €</strong></p>
+          </div>
+          <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+            Imponibile: <span id="tot-co-imp" class="text-slate-900">0,00 €</span> | IVA a debito: <span id="tot-co-iva" class="text-rose-600">0,00 €</span>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Trim.</th><th class="py-3 px-4">Descrizione</th>
+                <th class="py-3 px-4 text-right">Imponibile</th><th class="py-3 px-4 text-right">IVA debito</th>
+                <th class="py-3 px-4 text-right">Incassato</th><th class="py-3 px-4 text-center">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-corrispettivi" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- FATTURE RICEVUTE DAI FORNITORI -->
+    <section id="tab-fornitori" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">Registra fattura ricevuta da fornitore</h2>
+          <p class="text-xs text-slate-500">Fatture di chi ti vende la merce o i servizi principali: mobilifici, grossisti, fornitori esteri. L'app applica le regole fiscali (reverse charge UE TD18, bolle doganali Svizzera, IVA indetraibile portata a costo).</p>
+        </div>
+        <form id="form-fornitori" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <label class="block text-xs font-semibold text-slate-700">Data documento
+            <input type="date" id="fo-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Fornitore e numero fattura
+            <input type="text" id="fo-desc" placeholder="Es. Mobilificio Alfa Srl - Fatt. n. 245" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Provenienza fornitore
+            <select id="fo-provenienza" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+              <option value="IT">Italia (fattura SDI con IVA)</option>
+              <option value="UE_MERCE">Fornitore UE (reverse charge TD18)</option>
+              <option value="CH_BOLLA">Svizzera / extra-UE (merce + bolla doganale)</option>
+              <option value="CH_SERVIZI">Svizzera / extra-UE servizi (reverse charge TD17)</option>
+            </select>
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Categoria fiscale (regole TUIR / IVA)
+            <select id="fo-categoria" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none"></select>
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Imponibile (€)
+            <input type="number" step="0.01" min="0" id="fo-imponibile" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700"><span id="lbl-fo-iva">IVA in fattura (€)</span>
+            <input type="number" step="0.01" min="0" id="fo-iva" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <div class="sm:col-span-2 lg:col-span-4 p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div id="fo-preview" class="text-xs text-slate-700 space-y-1"></div>
+            <button type="submit" class="shrink-0 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition">+ Registra fattura fornitore</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Fatture ricevute dai fornitori <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">L'IVA indetraibile (es. caffè o 60% dell'auto) si somma al costo prima di applicare la % di deducibilità.</p>
+          </div>
+          <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+            IVA detraibile: <span id="tot-fo-iva-det" class="text-emerald-700">0,00 €</span> | Costo deducibile: <span id="tot-fo-costo-ded" class="text-slate-900">0,00 €</span>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Trim.</th><th class="py-3 px-4">Descrizione &amp; origine</th>
+                <th class="py-3 px-4">Regola fiscale</th><th class="py-3 px-4 text-right">Imponibile</th>
+                <th class="py-3 px-4 text-right">IVA tot.</th><th class="py-3 px-4 text-right">IVA detraibile</th>
+                <th class="py-3 px-4 text-right">Costo deducibile</th><th class="py-3 px-4 text-center">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-fornitori" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ABBONAMENTI, ACQUISTI & SPESE -->
     <section id="tab-acquisti" class="tab-content hidden space-y-6">
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
         <div class="mb-5">
-          <h2 class="text-lg font-bold text-slate-900">Registra acquisto o spesa aziendale</h2>
-          <p class="text-xs text-slate-500">Scegli categoria e provenienza del fornitore: l'app applica le regole fiscali (IVA indetraibile portata a costo, limiti auto e telefonia, reverse charge UE TD18, bolle doganali Svizzera).</p>
+          <h2 class="text-lg font-bold text-slate-900">Registra abbonamento, acquisto o spesa</h2>
+          <p class="text-xs text-slate-500">Tutto ciò che non è merce da rivendere: abbonamenti (software, telefonia, internet), bollette, affitto, carburante, caffè, assicurazioni, spese bancarie. Scegli la categoria e l'app applica i limiti di detraibilità e deducibilità.</p>
         </div>
-        <form id="form-acquisto" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <form id="form-acquisti" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <label class="block text-xs font-semibold text-slate-700">Data documento
             <input type="date" id="acq-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
           </label>
-          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Fornitore e descrizione spesa
-            <input type="text" id="acq-desc" placeholder="Es. Capsule caffè ufficio / Fornitore mobili / Bolla doganale CH" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Descrizione spesa
+            <input type="text" id="acq-desc" placeholder="Es. Abbonamento telefonia / Bolletta luce / Gasolio furgone" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
           </label>
           <label class="block text-xs font-semibold text-slate-700">Provenienza fornitore
             <select id="acq-provenienza" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
@@ -334,7 +444,7 @@
       <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <h3 class="text-base font-bold text-slate-900">Acquisti &amp; spese deducibili <span data-anno></span></h3>
+            <h3 class="text-base font-bold text-slate-900">Abbonamenti, acquisti &amp; spese <span data-anno></span></h3>
             <p class="text-xs text-slate-500">L'IVA indetraibile (es. caffè o 60% dell'auto) si somma al costo prima di applicare la % di deducibilità.</p>
           </div>
           <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
@@ -357,7 +467,96 @@
       </div>
     </section>
 
-    <!-- TAB 4: LIPE -->
+    <!-- TAB 6: COMMERCIALISTA -->
+    <section id="tab-commercialista" class="tab-content hidden space-y-6">
+      <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Speso nel <span data-anno></span></p>
+          <p id="kpi-pa-speso" class="text-2xl font-extrabold text-slate-900 mt-1">0,00 €</p>
+          <p id="kpi-pa-speso-sub" class="text-xs text-slate-500 mt-1">Totale delle parcelle</p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Pagato al commercialista</p>
+          <p id="kpi-pa-netto" class="text-2xl font-extrabold text-slate-900 mt-1">0,00 €</p>
+          <p class="text-xs text-slate-500 mt-1">Al netto della ritenuta d'acconto</p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Ritenute da versare</p>
+          <p id="kpi-pa-rit" class="text-2xl font-extrabold text-rose-600 mt-1">0,00 €</p>
+          <p id="kpi-pa-rit-sub" class="text-xs text-slate-500 mt-1">F24 codice 1040</p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Costo deducibile</p>
+          <p id="kpi-pa-costo" class="text-2xl font-extrabold text-emerald-600 mt-1">0,00 €</p>
+          <p class="text-xs text-slate-500 mt-1">Già incluso nei costi della SNC</p>
+        </div>
+      </div>
+
+      <div id="pa-avviso" class="hidden p-4 rounded-2xl bg-rose-50 border border-rose-200 text-xs sm:text-sm text-rose-900"></div>
+
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">Registra parcella del commercialista</h2>
+          <p class="text-xs text-slate-500">La SNC è sostituto d'imposta: quando paghi la parcella di un professionista in regime ordinario trattieni il 20% dell'onorario e lo versi tu con F24 (codice 1040) entro il 16 del mese dopo il pagamento.</p>
+        </div>
+        <form id="form-parcella" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
+          <label class="block text-xs font-semibold text-slate-700">Data fattura
+            <input type="date" id="pa-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-3 text-xs font-semibold text-slate-700">Descrizione
+            <input type="text" id="pa-desc" placeholder="Es. Studio Verdi - Fatt. n. 31 tenuta contabilità 1° trim." required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Regime del professionista
+            <select id="pa-regime" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+              <option value="ordinario">Ordinario (IVA 22% + ritenuta 20%)</option>
+              <option value="forfettario">Forfettario (niente IVA né ritenuta)</option>
+            </select>
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Onorario (€, senza cassa e IVA)
+            <input type="number" step="0.01" min="0" id="pa-onorario" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Cassa previdenza (%)
+            <input type="number" step="0.01" min="0" max="10" id="pa-cassa" value="4" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Spese esenti (€)
+            <input type="number" step="0.01" min="0" id="pa-esenti" value="0" title="Es. diritti camerali o bolli anticipati per conto della società" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Data pagamento (se già pagata)
+            <input type="date" id="pa-pagamento" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <div class="sm:col-span-2 lg:col-span-6 p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div id="pa-preview" class="text-xs text-slate-700 space-y-1"></div>
+            <button type="submit" class="shrink-0 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition">+ Registra parcella</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Parcelle <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">Segna «Versata» quando hai pagato l'F24 della ritenuta: così non te ne scordi nessuna.</p>
+          </div>
+          <button data-action="export-csv" class="shrink-0 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-semibold transition">⇩ Riepilogo anno per il commercialista (Excel)</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Descrizione</th>
+                <th class="py-3 px-4 text-right">Onorario + cassa</th><th class="py-3 px-4 text-right">IVA</th>
+                <th class="py-3 px-4 text-right">Totale fattura</th><th class="py-3 px-4 text-right">Ritenuta 20%</th>
+                <th class="py-3 px-4 text-right">Da pagare a lui</th><th class="py-3 px-4">F24 ritenuta</th>
+                <th class="py-3 px-4 text-center">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-parcelle" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 7: LIPE -->
     <section id="tab-iva" class="tab-content hidden space-y-6">
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
@@ -377,7 +576,7 @@
       </div>
     </section>
 
-    <!-- TAB 5: IMPOSTE -->
+    <!-- TAB 8: IMPOSTE -->
     <section id="tab-imposte" class="tab-content hidden space-y-6">
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
         <h2 class="text-lg font-bold text-slate-900 mb-1">Posizioni previdenziali (INPS commercianti)</h2>
@@ -448,7 +647,7 @@
       </div>
     </section>
 
-    <!-- TAB 6: GUIDA -->
+    <!-- TAB 9: GUIDA -->
     <section id="tab-guida" class="tab-content hidden space-y-6">
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-6">
         <div>

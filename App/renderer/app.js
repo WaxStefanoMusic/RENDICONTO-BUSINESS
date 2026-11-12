@@ -55,9 +55,14 @@ const STATO_VUOTO = () => ({
   socio2Inps: true,
   collabInps: false,
   impostazioni: IMPOSTAZIONI_BASE(),
-  entrate: [],
-  acquisti: [],
+  entrate: [],                 // tipo 'Fattura' → Fatture emesse, 'Corrispettivi' → Corrispettivi
+  acquisti: [],                // sezione 'fornitori' → Fatture ricevute, 'spese' → Abbonamenti/Acquisti/Spese
+  parcelle: [],                // fatture del commercialista, con la ritenuta d'acconto
 });
+
+/* Le spese registrate prima della divisione in due tab non sapevano dove
+   stare: la merce va ai fornitori, il resto ad abbonamenti e spese. */
+const sezioneDi = (a) => a.sezione || (a.categoria === 'merce_100_100' && !/bollett|affitt|utenz|cancell|energia|luce|gas\b/i.test(a.desc || '') ? 'fornitori' : 'spese');
 
 // Esempio dimostrativo: nomi inventati, date nell'anno scelto
 function datiEsempio(anno) {
@@ -83,6 +88,11 @@ function datiEsempio(anno) {
       { id: 107, data: d('06-10'), desc: 'Bollette energia elettrica e riscaldamento showroom', provenienza: 'IT', categoria: 'merce_100_100', imponibile: 2400, iva: 528 },
       { id: 108, data: d('07-15'), desc: 'Abbonamento telefonia mobile aziendale', provenienza: 'IT', categoria: 'tel_mob_50_80', imponibile: 400, iva: 88 },
       { id: 109, data: d('09-10'), desc: 'Fornitura divani e poltrone autunno - Salotti Gamma', provenienza: 'IT', categoria: 'merce_100_100', imponibile: 22000, iva: 4840 },
+      { id: 110, data: d('01-05'), desc: 'Abbonamento annuale software fatturazione elettronica', provenienza: 'IT', categoria: 'merce_100_100', imponibile: 82, iva: 18.04, sezione: 'spese' },
+    ].map((a) => ({ ...a, sezione: sezioneDi(a) })),
+    parcelle: [
+      { id: 201, data: d('04-20'), desc: 'Studio Verdi - Fatt. n. 31 contabilità 1° trimestre', regime: 'ordinario', onorario: 600, cassaPct: 4, esenti: 0, pagamento: d('04-28'), ritenutaVersata: true },
+      { id: 202, data: d('07-18'), desc: 'Studio Verdi - Fatt. n. 58 dichiarazioni e contabilità 2° trim.', regime: 'ordinario', onorario: 1400, cassaPct: 4, esenti: 0, pagamento: d('07-25'), ritenutaVersata: false },
     ],
   };
 }
@@ -97,7 +107,8 @@ function normalizza(s) {
   const st = Object.assign(base, s || {});
   st.impostazioni = Object.assign(IMPOSTAZIONI_BASE(), (s && s.impostazioni) || {});
   st.entrate = Array.isArray(st.entrate) ? st.entrate : [];
-  st.acquisti = Array.isArray(st.acquisti) ? st.acquisti : [];
+  st.acquisti = (Array.isArray(st.acquisti) ? st.acquisti : []).map((a) => ({ ...a, sezione: sezioneDi(a) }));
+  st.parcelle = Array.isArray(st.parcelle) ? st.parcelle : [];
   // il credito IVA prima era un numero unico: diventa per anno
   if (typeof st.creditoIvaPrec !== 'object' || st.creditoIvaPrec === null) {
     const v = +st.creditoIvaPrec || 0;
@@ -209,6 +220,7 @@ function askResetToDemo() {
       const es = datiEsempio(appState.anno);
       appState.entrate = appState.entrate.filter((x) => annoDi(x.data) !== appState.anno).concat(es.entrate.map((x) => ({ ...x, id: x.id + Date.now() })));
       appState.acquisti = appState.acquisti.filter((x) => annoDi(x.data) !== appState.anno).concat(es.acquisti.map((x) => ({ ...x, id: x.id + Date.now() })));
+      appState.parcelle = appState.parcelle.filter((x) => annoDi(x.data) !== appState.anno).concat(es.parcelle.map((x) => ({ ...x, id: x.id + Date.now() })));
       appState.isDemo = true;
       saveState(); renderAll();
       showToast('Dati di esempio caricati.');
@@ -218,10 +230,11 @@ function askResetToDemo() {
 function askClearAll() {
   openConfirmModal(
     `Svuotare i movimenti del ${appState.anno}?`,
-    `Verranno cancellati corrispettivi, fatture e acquisti del ${appState.anno}. Impostazioni e altri anni restano. Se vuoi conservarli, esporta prima un backup.`,
+    `Verranno cancellati fatture emesse, corrispettivi, fatture dei fornitori, spese e parcelle del ${appState.anno}. Impostazioni e altri anni restano. Se vuoi conservarli, esporta prima un backup.`,
     () => {
       appState.entrate = appState.entrate.filter((x) => annoDi(x.data) !== appState.anno);
       appState.acquisti = appState.acquisti.filter((x) => annoDi(x.data) !== appState.anno);
+      appState.parcelle = appState.parcelle.filter((x) => annoDi(x.data) !== appState.anno);
       appState.isDemo = false;
       saveState(); renderAll();
       showToast(`Anno ${appState.anno} svuotato: pronto per i tuoi dati reali.`);
@@ -250,7 +263,7 @@ function applicaBackup(testo) {
   try { dati = JSON.parse(testo); } catch (_) { showToast('Il file non è un backup valido.', true); return; }
   if (!dati || !Array.isArray(dati.entrate) || !Array.isArray(dati.acquisti)) { showToast('Il file non contiene entrate e acquisti.', true); return; }
   openConfirmModal('Ripristinare questo backup?',
-    `Contiene ${dati.entrate.length} entrate e ${dati.acquisti.length} acquisti. Tutti i dati attuali verranno sostituiti.`,
+    `Contiene ${dati.entrate.length} entrate, ${dati.acquisti.length} acquisti e ${(dati.parcelle || []).length} parcelle. Tutti i dati attuali verranno sostituiti.`,
     () => {
       appState = normalizza(dati);
       if (!dati.impostazioni) appState.impostazioni = { ...imp(), configurate: true };
@@ -347,6 +360,8 @@ document.addEventListener('click', (e) => {
     case 'close-settings': chiudi($('settings-modal')); break;
     case 'del-entrata': deleteEntrata(id); break;
     case 'del-acquisto': deleteAcquisto(id); break;
+    case 'del-parcella': deleteParcella(id); break;
+    case 'export-csv': exportCsvAnno(); break;
   }
 });
 
@@ -408,101 +423,264 @@ function calcolaInpsCommercianti(redditoQuota, attivo) {
 }
 
 // ---------------------------------------------------------------------------
-// Anteprime dei moduli
+// Anteprime e inserimento: un modulo per tab
 // ---------------------------------------------------------------------------
-function updateEntrataPreview() {
-  const b = calcEntrataBreakdown({ totale: $('ent-totale').value, regime: $('ent-regime').value });
-  $('ent-preview').innerHTML = `Anteprima scorporo: imponibile <strong>${fmtEuro(b.imponibile)}</strong> + IVA a debito <strong>${fmtEuro(b.iva)}</strong>`;
-}
-$('ent-totale').addEventListener('input', updateEntrataPreview);
-$('ent-regime').addEventListener('change', updateEntrataPreview);
+/* Fatture emesse e corrispettivi finiscono nello stesso elenco delle entrate
+   (cambia il «tipo»); fornitori e spese in quello degli acquisti (cambia la
+   «sezione»). Così LIPE, utile e imposte restano calcolati come prima. */
+const MODULI_ENTRATA = {
+  fe: { form: 'form-fatture', tipo: 'Fattura', msg: 'Fattura emessa registrata.' },
+  co: { form: 'form-corrispettivi', tipo: 'Corrispettivi', msg: 'Corrispettivi registrati.' },
+};
+const MODULI_SPESA = {
+  fo: { form: 'form-fornitori', sezione: 'fornitori', msg: 'Fattura del fornitore registrata.' },
+  acq: { form: 'form-acquisti', sezione: 'spese', msg: 'Spesa registrata con le regole fiscali applicate.' },
+};
+const regimeEntrata = (p) => (p === 'co' ? 'IT_22' : $(`${p}-regime`).value);
 
-function updateAcquistoPreview() {
-  const prov = $('acq-provenienza').value;
-  const ivaInput = $('acq-iva');
+function updateEntrataPreview(p) {
+  const b = calcEntrataBreakdown({ totale: $(`${p}-totale`).value, regime: regimeEntrata(p) });
+  $(`${p}-preview`).innerHTML = `Anteprima scorporo: imponibile <strong>${fmtEuro(b.imponibile)}</strong> + IVA a debito <strong>${fmtEuro(b.iva)}</strong>`;
+}
+
+function updateAcquistoPreview(p) {
+  const prov = $(`${p}-provenienza`).value;
+  const ivaInput = $(`${p}-iva`);
   if (prov === 'UE_MERCE' || prov === 'CH_SERVIZI') {
     ivaInput.value = '0.00'; ivaInput.disabled = true; ivaInput.classList.add('bg-slate-100');
-    $('lbl-acq-iva').textContent = 'IVA in fattura (0 € - reverse charge)';
+    $(`lbl-${p}-iva`).textContent = 'IVA in fattura (0 € - reverse charge)';
   } else {
     ivaInput.disabled = false; ivaInput.classList.remove('bg-slate-100');
-    $('lbl-acq-iva').textContent = prov === 'CH_BOLLA' ? 'IVA pagata in bolla doganale (€)' : 'IVA in fattura (€)';
+    $(`lbl-${p}-iva`).textContent = prov === 'CH_BOLLA' ? 'IVA pagata in bolla doganale (€)' : 'IVA in fattura (€)';
   }
-  const b = calcAcquistoBreakdown({ imponibile: $('acq-imponibile').value, iva: ivaInput.value, provenienza: prov, categoria: $('acq-categoria').value });
+  const b = calcAcquistoBreakdown({ imponibile: $(`${p}-imponibile`).value, iva: ivaInput.value, provenienza: prov, categoria: $(`${p}-categoria`).value });
   let html = `Regola applicata: <strong>${b.rule.badge}</strong> → IVA detraibile: <strong class="text-emerald-700">${fmtEuro(b.ivaDetraibile)}</strong> | Costo deducibile: <strong class="text-slate-900">${fmtEuro(b.costoDeducibile)}</strong>`;
   if (b.ivaIndetraibile > 0) html += ` <span class="text-amber-700">(include ${fmtEuro(b.ivaIndetraibile)} di IVA indetraibile portata a costo)</span>`;
   if (b.notaEstero) html += `<br><span class="text-indigo-700 font-semibold">Adempimento estero: ${b.notaEstero}</span>`;
-  $('acq-preview').innerHTML = html;
+  $(`${p}-preview`).innerHTML = html;
 }
-['acq-imponibile', 'acq-iva', 'acq-provenienza', 'acq-categoria'].forEach((id) => {
-  $(id).addEventListener('input', updateAcquistoPreview);
-  $(id).addEventListener('change', updateAcquistoPreview);
-});
 
-$('acq-categoria').innerHTML = Object.entries(CATEGORIE_SPESA)
+const OPZIONI_CATEGORIA = Object.entries(CATEGORIE_SPESA)
   .map(([k, r]) => `<option value="${k}">${esc(r.label)} (${esc(r.badge)})</option>`).join('');
+for (const p of Object.keys(MODULI_SPESA)) $(`${p}-categoria`).innerHTML = OPZIONI_CATEGORIA;
 
-// ---------------------------------------------------------------------------
-// Inserimento e cancellazione
-// ---------------------------------------------------------------------------
 function dataDefault() {
   // proponendo una data, si resta nell'anno che si sta guardando
   const t = oggi();
   return annoDi(t) === appState.anno ? t : `${appState.anno}-01-01`;
 }
+const CAMPI_DATA = ['fe-data', 'co-data', 'fo-data', 'acq-data', 'pa-data'];
 
-function avvisaSeAltroAnno(data) {
-  const a = annoDi(data);
-  if (a !== appState.anno) showToast(`Registrato nel ${a}: cambia anno in alto per vederlo.`);
+function confermaRegistrazione(data, msg, focus) {
+  if (annoDi(data) === appState.anno) showToast(msg);
+  else showToast(`Registrato nel ${annoDi(data)}: cambia anno in alto per vederlo.`);
+  $(focus).focus();
 }
 
-$('form-entrata').addEventListener('submit', function (e) {
-  e.preventDefault();
-  const nuovo = {
-    id: Date.now(), data: $('ent-data').value, tipo: $('ent-tipo').value,
-    desc: $('ent-desc').value.trim(), regime: $('ent-regime').value,
-    totale: parseFloat($('ent-totale').value) || 0,
+for (const [p, m] of Object.entries(MODULI_ENTRATA)) {
+  $(`${p}-totale`).addEventListener('input', () => updateEntrataPreview(p));
+  if (p !== 'co') $(`${p}-regime`).addEventListener('change', () => updateEntrataPreview(p));
+  $(m.form).addEventListener('submit', function (e) {
+    e.preventDefault();
+    const nuovo = {
+      id: Date.now(), data: $(`${p}-data`).value, tipo: m.tipo,
+      desc: $(`${p}-desc`).value.trim(), regime: regimeEntrata(p),
+      totale: parseFloat($(`${p}-totale`).value) || 0,
+    };
+    appState.entrate.push(nuovo);
+    appState.entrate.sort((a, b) => a.data.localeCompare(b.data));
+    saveState(); this.reset();
+    $(`${p}-data`).value = nuovo.data;       // spesso si registrano più voci dello stesso giorno
+    updateEntrataPreview(p); renderAll();
+    confermaRegistrazione(nuovo.data, m.msg, `${p}-desc`);
+  });
+}
+
+for (const [p, m] of Object.entries(MODULI_SPESA)) {
+  for (const c of ['imponibile', 'iva', 'provenienza', 'categoria']) {
+    $(`${p}-${c}`).addEventListener('input', () => updateAcquistoPreview(p));
+    $(`${p}-${c}`).addEventListener('change', () => updateAcquistoPreview(p));
+  }
+  $(m.form).addEventListener('submit', function (e) {
+    e.preventDefault();
+    const nuovo = {
+      id: Date.now(), data: $(`${p}-data`).value, desc: $(`${p}-desc`).value.trim(),
+      provenienza: $(`${p}-provenienza`).value, categoria: $(`${p}-categoria`).value,
+      imponibile: parseFloat($(`${p}-imponibile`).value) || 0, iva: parseFloat($(`${p}-iva`).value) || 0,
+      sezione: m.sezione,
+    };
+    const categoria = nuovo.categoria;
+    appState.acquisti.push(nuovo);
+    appState.acquisti.sort((a, b) => a.data.localeCompare(b.data));
+    saveState(); this.reset();
+    $(`${p}-data`).value = nuovo.data;
+    $(`${p}-categoria`).value = categoria;   // la stessa categoria è la più probabile anche per la prossima
+    updateAcquistoPreview(p); renderAll();
+    confermaRegistrazione(nuovo.data, m.msg, `${p}-desc`);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Commercialista: parcelle e ritenuta d'acconto
+// ---------------------------------------------------------------------------
+/* Fattura di un professionista in regime ordinario:
+     onorario + cassa previdenza (4%) = imponibile IVA; IVA 22% su quello;
+     spese esenti (art. 15) si aggiungono senza IVA.
+   La ritenuta del 20% si calcola sul solo onorario (la cassa ne è esclusa):
+   la SNC la trattiene e la versa con F24 codice 1040 entro il 16 del mese
+   successivo al PAGAMENTO. Un forfettario non applica né IVA né ritenuta,
+   ma mette il bollo da 2 € sopra 77,47 €. */
+function calcParcella(p) {
+  const onorario = parseFloat(p.onorario) || 0;
+  const cassa = onorario * ((parseFloat(p.cassaPct) || 0) / 100);
+  const esenti = parseFloat(p.esenti) || 0;
+  const forf = p.regime === 'forfettario';
+  const imponibileIva = onorario + cassa;
+  const iva = forf ? 0 : imponibileIva * 0.22;
+  const bollo = forf && imponibileIva + esenti > 77.47 ? 2 : 0;
+  const totale = imponibileIva + iva + esenti + bollo;
+  const ritenuta = forf ? 0 : onorario * 0.20;
+  return { onorario, cassa, esenti, imponibileIva, iva, bollo, totale, ritenuta, netto: totale - ritenuta, costoDeducibile: imponibileIva + esenti + bollo };
+}
+
+/** 16 del mese dopo il pagamento, spostato al lunedì se cade nel weekend */
+function scadenzaRitenuta(isoPagamento) {
+  if (!isoPagamento) return null;
+  const [y, m] = isoPagamento.split('-').map(Number);
+  const d = new Date(y, m, 16);                       // m è già «il mese dopo» (0-based)
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+  return d;
+}
+const fmtGiorno = (d) => d.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
+
+function leggiParcellaForm() {
+  return {
+    regime: $('pa-regime').value, onorario: $('pa-onorario').value,
+    cassaPct: $('pa-cassa').value, esenti: $('pa-esenti').value, pagamento: $('pa-pagamento').value,
   };
-  appState.entrate.push(nuovo);
-  appState.entrate.sort((a, b) => a.data.localeCompare(b.data));
-  saveState(); this.reset();
-  $('ent-data').value = nuovo.data;          // spesso si registrano più voci dello stesso giorno
-  updateEntrataPreview(); renderAll();
-  if (annoDi(nuovo.data) === appState.anno) showToast('Entrata registrata.'); else avvisaSeAltroAnno(nuovo.data);
-  $('ent-desc').focus();
+}
+
+function updateParcellaPreview() {
+  const p = leggiParcellaForm();
+  const b = calcParcella(p);
+  const forf = p.regime === 'forfettario';
+  let html = `Totale fattura <strong>${fmtEuro(b.totale)}</strong> (onorario ${fmtEuro(b.onorario)} + cassa ${fmtEuro(b.cassa)}${forf ? '' : ` + IVA ${fmtEuro(b.iva)}`}${b.esenti ? ` + esenti ${fmtEuro(b.esenti)}` : ''}${b.bollo ? ' + bollo 2,00 €' : ''})`;
+  if (!forf) {
+    html += `<br>Paghi al commercialista <strong class="text-slate-900">${fmtEuro(b.netto)}</strong> e versi tu la ritenuta di <strong class="text-rose-600">${fmtEuro(b.ritenuta)}</strong> con F24 codice 1040`;
+    const sc = scadenzaRitenuta(p.pagamento);
+    html += sc ? ` entro <strong>${fmtGiorno(sc)}</strong>.` : ' entro il 16 del mese dopo il pagamento.';
+  } else {
+    html += '<br>Regime forfettario: nessuna ritenuta da versare, paghi il totale.';
+  }
+  $('pa-preview').innerHTML = html;
+}
+['pa-regime', 'pa-onorario', 'pa-cassa', 'pa-esenti', 'pa-pagamento'].forEach((id) => {
+  $(id).addEventListener('input', updateParcellaPreview);
+  $(id).addEventListener('change', updateParcellaPreview);
 });
 
-$('form-acquisto').addEventListener('submit', function (e) {
+$('form-parcella').addEventListener('submit', function (e) {
   e.preventDefault();
   const nuovo = {
-    id: Date.now(), data: $('acq-data').value, desc: $('acq-desc').value.trim(),
-    provenienza: $('acq-provenienza').value, categoria: $('acq-categoria').value,
-    imponibile: parseFloat($('acq-imponibile').value) || 0, iva: parseFloat($('acq-iva').value) || 0,
+    id: Date.now(), data: $('pa-data').value, desc: $('pa-desc').value.trim(), ...leggiParcellaForm(),
+    ritenutaVersata: false,
   };
-  appState.acquisti.push(nuovo);
-  appState.acquisti.sort((a, b) => a.data.localeCompare(b.data));
+  for (const k of ['onorario', 'cassaPct', 'esenti']) nuovo[k] = parseFloat(nuovo[k]) || 0;
+  const regime = nuovo.regime;
+  appState.parcelle.push(nuovo);
+  appState.parcelle.sort((a, b) => a.data.localeCompare(b.data));
   saveState(); this.reset();
-  $('acq-data').value = nuovo.data;
-  updateAcquistoPreview(); renderAll();
-  if (annoDi(nuovo.data) === appState.anno) showToast('Spesa registrata con le regole fiscali applicate.'); else avvisaSeAltroAnno(nuovo.data);
-  $('acq-desc').focus();
+  $('pa-data').value = nuovo.data; $('pa-regime').value = regime;
+  updateParcellaPreview(); renderAll();
+  confermaRegistrazione(nuovo.data, 'Parcella registrata.', 'pa-desc');
 });
 
+// pagamento e versamento della ritenuta si segnano direttamente nella tabella
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  const id = +el.dataset.id;
+  const p = appState.parcelle.find((x) => x.id === id);
+  if (!p) return;
+  if (el.dataset.campo === 'pagamento') p.pagamento = el.value;
+  else if (el.dataset.campo === 'versata') p.ritenutaVersata = el.checked;
+  else return;
+  saveState(); renderAll();
+});
+
+// ---------------------------------------------------------------------------
+// Cancellazione
+// ---------------------------------------------------------------------------
 function deleteEntrata(id) {
   const x = appState.entrate.find((v) => v.id === id);
   if (!x) return;
-  openConfirmModal('Eliminare questa entrata?', `${fmtData(x.data)} — ${x.desc} (${fmtEuro(x.totale)})`, () => {
+  const cosa = x.tipo === 'Fattura' ? 'questa fattura' : 'questi corrispettivi';
+  openConfirmModal(`Eliminare ${cosa}?`, `${fmtData(x.data)} — ${x.desc} (${fmtEuro(x.totale)})`, () => {
     appState.entrate = appState.entrate.filter((v) => v.id !== id);
-    saveState(); renderAll(); showToast('Entrata eliminata.');
+    saveState(); renderAll(); showToast('Voce eliminata.');
   }, 'Elimina');
 }
 
 function deleteAcquisto(id) {
   const x = appState.acquisti.find((v) => v.id === id);
   if (!x) return;
-  openConfirmModal('Eliminare questa spesa?', `${fmtData(x.data)} — ${x.desc} (${fmtEuro(x.imponibile)} + IVA)`, () => {
-    appState.acquisti = appState.acquisti.filter((v) => v.id !== id);
-    saveState(); renderAll(); showToast('Spesa eliminata.');
+  openConfirmModal(x.sezione === 'fornitori' ? 'Eliminare questa fattura del fornitore?' : 'Eliminare questa spesa?',
+    `${fmtData(x.data)} — ${x.desc} (${fmtEuro(x.imponibile)} + IVA)`, () => {
+      appState.acquisti = appState.acquisti.filter((v) => v.id !== id);
+      saveState(); renderAll(); showToast('Voce eliminata.');
+    }, 'Elimina');
+}
+
+function deleteParcella(id) {
+  const x = appState.parcelle.find((v) => v.id === id);
+  if (!x) return;
+  openConfirmModal('Eliminare questa parcella?', `${fmtData(x.data)} — ${x.desc} (${fmtEuro(calcParcella(x).totale)})`, () => {
+    appState.parcelle = appState.parcelle.filter((v) => v.id !== id);
+    saveState(); renderAll(); showToast('Parcella eliminata.');
   }, 'Elimina');
+}
+
+// ---------------------------------------------------------------------------
+// Riepilogo dell'anno per il commercialista (CSV che Excel apre da solo)
+// ---------------------------------------------------------------------------
+async function exportCsvAnno() {
+  const anno = appState.anno;
+  const num = (n) => (Math.round((n || 0) * 100) / 100).toFixed(2).replace('.', ',');
+  const cella = (v) => { const s = String(v ?? ''); return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const REG = { IT_22: 'Italia IVA 22%', CH_ART8: 'Non imponibile art. 8', UE_ART41: 'Non imponibile art. 41' };
+  const PROV = { IT: 'Italia', UE_MERCE: 'UE reverse charge TD18', CH_BOLLA: 'Extra-UE bolla doganale', CH_SERVIZI: 'Extra-UE servizi TD17' };
+  const righe = [['Sezione', 'Data', 'Trimestre', 'Descrizione', 'Regime / provenienza', 'Categoria', 'Imponibile', 'IVA documento', 'IVA a debito', 'IVA detraibile', 'Costo deducibile', 'Totale', 'Ritenuta', 'Note']];
+  const delAnno = (x) => annoDi(x.data) === anno;
+
+  for (const x of appState.entrate.filter(delAnno)) {
+    const b = calcEntrataBreakdown(x);
+    righe.push([x.tipo === 'Fattura' ? 'Fatture emesse' : 'Corrispettivi', fmtData(x.data), 'Q' + getTrimestre(x.data), x.desc, REG[x.regime] || x.regime, '', num(b.imponibile), num(b.iva), num(b.iva), '', '', num(b.totale), '', '']);
+  }
+  for (const x of appState.acquisti.filter(delAnno)) {
+    const b = calcAcquistoBreakdown(x);
+    righe.push([x.sezione === 'fornitori' ? 'Fatture fornitori' : 'Abbonamenti/acquisti/spese', fmtData(x.data), 'Q' + getTrimestre(x.data), x.desc, PROV[x.provenienza] || x.provenienza, b.rule.label, num(b.imponibile), num(b.ivaDocumento), num(b.ivaDebitoRC), num(b.ivaDetraibile), num(b.costoDeducibile), num(b.imponibile + b.ivaDocumento), '', b.notaEstero]);
+  }
+  for (const x of appState.parcelle.filter(delAnno)) {
+    const b = calcParcella(x);
+    const sc = scadenzaRitenuta(x.pagamento);
+    const nota = b.ritenuta ? (x.ritenutaVersata ? 'Ritenuta versata' : sc ? 'Ritenuta da versare entro ' + sc.toLocaleDateString('it-IT') : 'Parcella non ancora pagata') : 'Forfettario';
+    righe.push(['Commercialista', fmtData(x.data), 'Q' + getTrimestre(x.data), x.desc, x.regime === 'forfettario' ? 'Professionista forfettario' : 'Professionista ordinario', 'Consulenza', num(b.imponibileIva), num(b.iva), '', num(b.iva), num(b.costoDeducibile), num(b.totale), num(b.ritenuta), nota]);
+  }
+  if (righe.length === 1) { showToast(`Nessun movimento nel ${anno} da esportare.`, true); return; }
+
+  // BOM + punto e virgola: Excel in italiano lo apre con le colonne giuste
+  const csv = '﻿' + righe.map((r) => r.map(cella).join(';')).join('\r\n');
+  const nome = `riepilogo-contabile-${anno}.csv`;
+  if (DESKTOP) {
+    const r = await window.gestionale.esportaFile(nome, csv, 'csv');
+    if (r && r.ok) showToast('Riepilogo salvato: ' + r.percorso);
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = nome;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  showToast('Riepilogo scaricato.');
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +688,7 @@ function deleteAcquisto(id) {
 // ---------------------------------------------------------------------------
 function popolaAnni() {
   const anni = new Set([new Date().getFullYear(), new Date().getFullYear() - 1, appState.anno]);
-  for (const x of [...appState.entrate, ...appState.acquisti]) if (annoDi(x.data)) anni.add(annoDi(x.data));
+  for (const x of [...appState.entrate, ...appState.acquisti, ...appState.parcelle]) if (annoDi(x.data)) anni.add(annoDi(x.data));
   $('sel-anno').innerHTML = [...anni].sort((a, b) => b - a).map((a) => `<option value="${a}">${a}</option>`).join('');
   $('sel-anno').value = appState.anno;
 }
@@ -525,7 +703,7 @@ function syncControlsFromState() {
 $('sel-anno').addEventListener('change', () => {
   appState.anno = +$('sel-anno').value;
   saveState(); syncControlsFromState();
-  $('ent-data').value = dataDefault(); $('acq-data').value = dataDefault();
+  for (const id of CAMPI_DATA) $(id).value = dataDefault();
   renderAll();
 });
 $('iva-credito-prec').addEventListener('change', () => {
@@ -588,53 +766,64 @@ function renderAll() {
 
   const entrate = appState.entrate.filter((x) => annoDi(x.data) === anno);
   const acquisti = appState.acquisti.filter((x) => annoDi(x.data) === anno);
-
-  // 1. Entrate
-  let totRicaviImp = 0, totIvaDebitoVendite = 0, countFatture = 0;
+  const parcelle = appState.parcelle.filter((x) => annoDi(x.data) === anno);
   const ivaTrim = { 1: { debito: 0, credito: 0 }, 2: { debito: 0, credito: 0 }, 3: { debito: 0, credito: 0 }, 4: { debito: 0, credito: 0 } };
+  const vuota = (col, testo) => `<tr><td colspan="${col}" class="py-8 text-center text-slate-400 text-xs">${testo}</td></tr>`;
+  const btnElimina = (azione, id) => `<td class="py-3 px-4 text-center"><button data-action="${azione}" data-id="${id}" class="text-rose-500 hover:text-rose-700 text-xs font-semibold px-2 py-1 rounded-lg hover:bg-rose-50">Elimina</button></td>`;
+
+  // 1. Entrate: fatture emesse e corrispettivi
+  let totRicaviImp = 0;
   const REGIME = {
     IT_22: '<span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[11px] whitespace-nowrap">IT IVA 22%</span>',
     CH_ART8: '<span class="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[11px] font-semibold whitespace-nowrap">Svizzera art. 8 (0%)</span>',
     UE_ART41: '<span class="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-[11px] font-semibold whitespace-nowrap">UE VIES art. 41 (0%)</span>',
   };
-  let html = '';
+  const tot = { fe: { imp: 0, iva: 0, lordo: 0, n: 0 }, co: { imp: 0, iva: 0, lordo: 0, n: 0 } };
+  const htmlEnt = { fe: '', co: '' };
   for (const item of entrate) {
     const b = calcEntrataBreakdown(item);
     const q = getTrimestre(item.data);
-    totRicaviImp += b.imponibile; totIvaDebitoVendite += b.iva; ivaTrim[q].debito += b.iva;
-    if (item.tipo === 'Fattura') countFatture++;
-    html += `<tr class="hover:bg-slate-50/80 transition">
+    const p = item.tipo === 'Fattura' ? 'fe' : 'co';
+    totRicaviImp += b.imponibile; ivaTrim[q].debito += b.iva;
+    tot[p].imp += b.imponibile; tot[p].iva += b.iva; tot[p].lordo += b.totale; tot[p].n++;
+    htmlEnt[p] += `<tr class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
-      <td class="py-3 px-4"><span class="font-semibold ${item.tipo === 'Fattura' ? 'text-amber-700' : 'text-slate-700'}">${esc(item.tipo)}</span></td>
       <td class="py-3 px-4 font-medium text-slate-900 min-w-[200px]">${esc(item.desc)}</td>
-      <td class="py-3 px-4">${REGIME[item.regime] || esc(item.regime)}</td>
+      ${p === 'fe' ? `<td class="py-3 px-4">${REGIME[item.regime] || esc(item.regime)}</td>` : ''}
       <td class="py-3 px-4 text-right font-semibold text-slate-900 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
       <td class="py-3 px-4 text-right text-rose-600 whitespace-nowrap">${fmtEuro(b.iva)}</td>
       <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.totale)}</td>
-      <td class="py-3 px-4 text-center"><button data-action="del-entrata" data-id="${item.id}" class="text-rose-500 hover:text-rose-700 text-xs font-semibold px-2 py-1 rounded-lg hover:bg-rose-50">Elimina</button></td>
+      ${btnElimina('del-entrata', item.id)}
     </tr>`;
   }
-  $('tbody-entrate').innerHTML = html || `<tr><td colspan="9" class="py-8 text-center text-slate-400 text-xs">Nessuna entrata nel ${anno}. Usa il modulo qui sopra per inserire corrispettivi o fatture emesse.</td></tr>`;
-  $('count-fatture-attive').textContent = countFatture;
-  $('tot-entrate-imp').textContent = fmtEuro(totRicaviImp);
-  $('tot-entrate-iva').textContent = fmtEuro(totIvaDebitoVendite);
+  $('tbody-fatture').innerHTML = htmlEnt.fe || vuota(8, `Nessuna fattura emessa nel ${anno}. Usa il modulo qui sopra per registrarne una.`);
+  $('count-fe').textContent = tot.fe.n;
+  $('tot-fe-imp').textContent = fmtEuro(tot.fe.imp);
+  $('tot-fe-iva').textContent = fmtEuro(tot.fe.iva);
+  $('tbody-corrispettivi').innerHTML = htmlEnt.co || vuota(7, `Nessun corrispettivo nel ${anno}. Registra gli incassi del registratore telematico.`);
+  $('tot-co-lordo').textContent = fmtEuro(tot.co.lordo);
+  $('tot-co-imp').textContent = fmtEuro(tot.co.imp);
+  $('tot-co-iva').textContent = fmtEuro(tot.co.iva);
 
-  // 2. Acquisti
-  let totCostiDeducibili = 0, totIvaDetraibile = 0;
+  // 2. Acquisti: fatture dei fornitori e abbonamenti/acquisti/spese
+  let totCostiDeducibili = 0;
   const PROV = {
     IT: '',
     UE_MERCE: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-[10px] font-bold">UE • Autofattura TD18</span>',
     CH_BOLLA: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold">Svizzera • Bolla doganale</span>',
     CH_SERVIZI: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold">Extra-UE • Autofattura TD17</span>',
   };
-  html = '';
+  const totSp = { fo: { det: 0, ded: 0 }, acq: { det: 0, ded: 0 } };
+  const htmlSp = { fo: '', acq: '' };
   for (const item of acquisti) {
     const b = calcAcquistoBreakdown(item);
     const q = getTrimestre(item.data);
-    totCostiDeducibili += b.costoDeducibile; totIvaDetraibile += b.ivaDetraibile;
+    const p = item.sezione === 'fornitori' ? 'fo' : 'acq';
+    totCostiDeducibili += b.costoDeducibile;
     ivaTrim[q].debito += b.ivaDebitoRC; ivaTrim[q].credito += b.ivaDetraibile;
-    html += `<tr class="hover:bg-slate-50/80 transition">
+    totSp[p].det += b.ivaDetraibile; totSp[p].ded += b.costoDeducibile;
+    htmlSp[p] += `<tr class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
       <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}</div>${PROV[item.provenienza] || ''}</td>
@@ -643,14 +832,74 @@ function renderAll() {
       <td class="py-3 px-4 text-right text-slate-500 whitespace-nowrap">${fmtEuro(b.ivaDocumento)}</td>
       <td class="py-3 px-4 text-right font-semibold text-emerald-700 whitespace-nowrap">${fmtEuro(b.ivaDetraibile)}</td>
       <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.costoDeducibile)}</td>
-      <td class="py-3 px-4 text-center"><button data-action="del-acquisto" data-id="${item.id}" class="text-rose-500 hover:text-rose-700 text-xs font-semibold px-2 py-1 rounded-lg hover:bg-rose-50">Elimina</button></td>
+      ${btnElimina('del-acquisto', item.id)}
     </tr>`;
   }
-  $('tbody-acquisti').innerHTML = html || `<tr><td colspan="9" class="py-8 text-center text-slate-400 text-xs">Nessun acquisto nel ${anno}. Inserisci fornitori, spese del negozio o acquisti esteri.</td></tr>`;
-  $('tot-acq-iva-det').textContent = fmtEuro(totIvaDetraibile);
-  $('tot-acq-costo-ded').textContent = fmtEuro(totCostiDeducibili);
+  $('tbody-fornitori').innerHTML = htmlSp.fo || vuota(9, `Nessuna fattura di fornitori nel ${anno}. Registra qui merce e servizi acquistati per la rivendita.`);
+  $('tot-fo-iva-det').textContent = fmtEuro(totSp.fo.det);
+  $('tot-fo-costo-ded').textContent = fmtEuro(totSp.fo.ded);
+  $('tbody-acquisti').innerHTML = htmlSp.acq || vuota(9, `Nessuna spesa nel ${anno}. Registra abbonamenti, bollette, carburante e le altre spese del negozio.`);
+  $('tot-acq-iva-det').textContent = fmtEuro(totSp.acq.det);
+  $('tot-acq-costo-ded').textContent = fmtEuro(totSp.acq.ded);
 
-  // 3. Liquidazione IVA trimestrale
+  // 3. Commercialista: le parcelle sono costi come gli altri, con in più la ritenuta
+  let paSpeso = 0, paNetto = 0, paCosto = 0, ritDaVersare = 0;
+  const ritScadute = [], ritProssime = [];
+  const adesso = new Date(); adesso.setHours(0, 0, 0, 0);
+  let html = '';
+  for (const item of parcelle) {
+    const b = calcParcella(item);
+    const q = getTrimestre(item.data);
+    totCostiDeducibili += b.costoDeducibile;
+    ivaTrim[q].credito += b.iva;
+    paSpeso += b.totale; paNetto += b.netto; paCosto += b.costoDeducibile;
+    const sc = scadenzaRitenuta(item.pagamento);
+    let stato;
+    if (!b.ritenuta) stato = '<span class="text-slate-400 text-xs">Nessuna (forfettario)</span>';
+    else {
+      if (!item.ritenutaVersata) {
+        ritDaVersare += b.ritenuta;
+        if (sc && sc < adesso) ritScadute.push({ item, b, sc });
+        else if (sc) ritProssime.push({ item, b, sc });
+      }
+      const scaduta = !item.ritenutaVersata && sc && sc < adesso;
+      stato = `<div class="flex flex-col gap-1 min-w-[170px]">
+        <label class="text-[11px] text-slate-500">Pagata il
+          <input type="date" data-id="${item.id}" data-campo="pagamento" value="${esc(item.pagamento || '')}" class="ml-1 px-1.5 py-0.5 rounded-md border border-slate-300 text-xs" /></label>
+        <span class="text-[11px] ${scaduta ? 'text-rose-600 font-bold' : 'text-slate-500'}">${sc ? (scaduta ? 'Scaduta il ' : 'Entro ') + sc.toLocaleDateString('it-IT') : 'Scade il 16 del mese dopo il pagamento'}</span>
+        <label class="inline-flex items-center gap-1.5 text-xs font-semibold ${item.ritenutaVersata ? 'text-emerald-700' : 'text-slate-700'}">
+          <input type="checkbox" data-id="${item.id}" data-campo="versata" ${item.ritenutaVersata ? 'checked' : ''} class="accent-emerald-600" /> Versata</label>
+      </div>`;
+    }
+    html += `<tr class="hover:bg-slate-50/80 transition align-top">
+      <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
+      <td class="py-3 px-4 font-medium text-slate-900 min-w-[220px]">${esc(item.desc)}${item.regime === 'forfettario' ? '<div class="text-[10px] font-bold text-slate-500 mt-1">FORFETTARIO</div>' : ''}</td>
+      <td class="py-3 px-4 text-right whitespace-nowrap">${fmtEuro(b.imponibileIva)}</td>
+      <td class="py-3 px-4 text-right text-emerald-700 whitespace-nowrap">${fmtEuro(b.iva)}</td>
+      <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.totale)}</td>
+      <td class="py-3 px-4 text-right text-rose-600 whitespace-nowrap">${b.ritenuta ? fmtEuro(b.ritenuta) : '—'}</td>
+      <td class="py-3 px-4 text-right font-semibold whitespace-nowrap">${fmtEuro(b.netto)}</td>
+      <td class="py-3 px-4">${stato}</td>
+      ${btnElimina('del-parcella', item.id)}
+    </tr>`;
+  }
+  $('tbody-parcelle').innerHTML = html || vuota(9, `Nessuna parcella nel ${anno}. Registra le fatture del commercialista per tenere il conto delle ritenute da versare.`);
+  $('kpi-pa-speso').textContent = fmtEuro(paSpeso);
+  $('kpi-pa-speso-sub').textContent = +s.commLordo > 0 ? `Su ${fmtEuro(s.commLordo)} previsti all'anno (${Math.round(paSpeso / s.commLordo * 100)}%)` : 'Totale delle parcelle';
+  $('kpi-pa-netto').textContent = fmtEuro(paNetto);
+  $('kpi-pa-rit').textContent = fmtEuro(ritDaVersare);
+  $('kpi-pa-costo').textContent = fmtEuro(paCosto);
+  const prossima = ritProssime.sort((a, b) => a.sc - b.sc)[0];
+  $('kpi-pa-rit-sub').textContent = prossima ? `Prossima: ${fmtGiorno(prossima.sc)} (cod. 1040)` : 'F24 codice 1040';
+  const avviso = $('pa-avviso');
+  if (ritScadute.length) {
+    avviso.classList.remove('hidden');
+    avviso.innerHTML = `<strong>Ritenute scadute non segnate come versate:</strong> ` + ritScadute
+      .map((r) => `${esc(r.item.desc)} — ${fmtEuro(r.b.ritenuta)} (scadenza ${r.sc.toLocaleDateString('it-IT')})`).join('; ')
+      + '. Se le hai già pagate spunta «Versata»; altrimenti versale subito con il ravvedimento operoso, che riduce la sanzione.';
+  } else avviso.classList.add('hidden');
+
+  // 4. Liquidazione IVA trimestrale
   let riporto = +appState.creditoIvaPrec[anno] || 0;
   const TRIM = [
     { q: 1, nome: '1° trimestre (gen-mar)', scad: scadenza(anno, 5, 16), cod: '6031', magg: true },
@@ -689,7 +938,7 @@ function renderAll() {
   }
   $('cards-trimestri-iva').innerHTML = html;
 
-  // 4. Utile, imposte dei soci e INPS
+  // 5. Utile, imposte dei soci e INPS
   const utileSnc = Math.max(0, totRicaviImp - totCostiDeducibili);
   const q1 = utileSnc * quotaS1() / 100;
   const q2 = utileSnc * quotaS2() / 100;
@@ -735,7 +984,7 @@ function renderAll() {
     riga(`IRAP (${fmtPct(s.irap)}):`, fmtEuro(irapSocieta), 'font-bold text-slate-900') +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Carico complessivo (soci + IRAP):</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totaleTasse)}</span></div>`;
 
-  // 5. Cruscotto
+  // 6. Cruscotto
   $('kpi-ricavi').textContent = fmtEuro(totRicaviImp);
   $('kpi-costi').textContent = fmtEuro(totCostiDeducibili);
   $('kpi-utile').textContent = fmtEuro(utileSnc);
@@ -765,7 +1014,7 @@ function renderAll() {
         <span class="text-xs font-bold text-slate-800">${esc(s.collabNome || 'Collaboratore familiare')}</span>
         <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full ${appState.collabInps ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'}">${appState.collabInps ? 'Attivo (solo INPS)' : 'Cessato'}</span>
       </div>
-      <p class="text-[11px] text-slate-500 mt-1">Nessun compenso. I contributi INPS si attivano nella scheda 5.</p>
+      <p class="text-[11px] text-slate-500 mt-1">Nessun compenso. I contributi INPS si attivano nella scheda 8.</p>
     </div>`;
 }
 
@@ -785,11 +1034,11 @@ if (DESKTOP && window.gestionale.onMenu) {
 // Avvio
 // ---------------------------------------------------------------------------
 (function avvio() {
-  $('ent-data').value = dataDefault();
-  $('acq-data').value = dataDefault();
+  for (const id of CAMPI_DATA) $(id).value = dataDefault();
   syncControlsFromState();
-  updateEntrataPreview();
-  updateAcquistoPreview();
+  for (const p of Object.keys(MODULI_ENTRATA)) updateEntrataPreview(p);
+  for (const p of Object.keys(MODULI_SPESA)) updateAcquistoPreview(p);
+  updateParcellaPreview();
   renderAll();
   let tab = 'dashboard';
   try { tab = sessionStorage.getItem('tab') || tab; } catch (_) {}

@@ -5,15 +5,20 @@ S.N.C.:
 
 1. **Dashboard**: ricavi, costi deducibili, utile fiscale, carico di imposte e INPS, ripartizione
    tra i soci.
-2. **Entrate**: corrispettivi e fatture emesse, con scorporo IVA 22% e regimi non imponibili
-   (art. 8 Svizzera/extra-UE, art. 41 UE).
-3. **Acquisti & spese**: categorie con le regole di detraibilità IVA e deducibilità del costo
-   (caffè, telefonia, auto promiscua…), reverse charge TD17/TD18 e bolle doganali.
-4. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
+2. **Fatture Emesse**: scorporo IVA 22% e regimi non imponibili (art. 8 Svizzera/extra-UE,
+   art. 41 UE).
+3. **Corrispettivi**: incassi del registratore telematico, con scorporo IVA.
+4. **Fatture Ricevute Fornitori**: merce e servizi per la rivendita, reverse charge TD17/TD18 e
+   bolle doganali.
+5. **Abbonamenti/Acquisti/Spese**: le altre spese, con le regole di detraibilità IVA e
+   deducibilità del costo (caffè, telefonia, auto promiscua…).
+6. **Commercialista**: parcelle con cassa, IVA e ritenuta d'acconto 20%, scadenze F24 codice
+   1040 da spuntare, riepilogo dell'anno in CSV per Excel.
+7. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
    del credito, scadenze F24.
-5. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
+8. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
    INPS commercianti, IRAP.
-6. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
+9. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
 
 Le cifre sono **stime di controllo**: non sostituiscono le dichiarazioni ufficiali. Aliquote e
 soglie si modificano nelle impostazioni e vanno verificate ogni anno.

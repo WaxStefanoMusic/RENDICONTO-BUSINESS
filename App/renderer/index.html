@@ -208,10 +208,11 @@
         <button data-tab="fornitori" class="tab-btn">4. Fatture Ricevute Fornitori</button>
         <button data-tab="estero" class="tab-btn">5. Autofatture/Fatture Estere</button>
         <button data-tab="acquisti" class="tab-btn">6. Abbonamenti/Acquisti/Spese</button>
-        <button data-tab="commercialista" class="tab-btn">7. Commercialista</button>
-        <button data-tab="iva" class="tab-btn">8. Liquidazione IVA (LIPE)</button>
-        <button data-tab="imposte" class="tab-btn">9. Imposte Soci &amp; INPS</button>
-        <button data-tab="guida" class="tab-btn">10. Guida &amp; Adempimenti</button>
+        <button data-tab="polizze" class="tab-btn">7. Polizze/Assicurazioni</button>
+        <button data-tab="commercialista" class="tab-btn">8. Commercialista</button>
+        <button data-tab="iva" class="tab-btn">9. Liquidazione IVA (LIPE)</button>
+        <button data-tab="imposte" class="tab-btn">10. Imposte Soci &amp; INPS</button>
+        <button data-tab="guida" class="tab-btn">11. Guida &amp; Adempimenti</button>
       </nav>
     </div>
   </header>
@@ -220,6 +221,7 @@
 
     <!-- TAB 1: DASHBOARD -->
     <section id="tab-dashboard" class="tab-content space-y-6">
+      <div id="dash-polizze" class="hidden"></div>
       <div id="demo-banner" class="hidden bg-amber-50 border border-amber-200 rounded-2xl p-4">
         <div class="flex items-start gap-3">
           <span class="text-amber-600 text-lg mt-0.5">💡</span>
@@ -535,7 +537,7 @@
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
         <div class="mb-5">
           <h2 class="text-lg font-bold text-slate-900">Registra abbonamento, acquisto o spesa</h2>
-          <p class="text-xs text-slate-500">Tutto ciò che non è merce da rivendere: abbonamenti (software, telefonia, internet), bollette, affitto, carburante, caffè, assicurazioni, spese bancarie. Scegli la categoria e l'app applica i limiti di detraibilità e deducibilità.</p>
+          <p class="text-xs text-slate-500">Tutto ciò che non è merce da rivendere: abbonamenti (software, telefonia, internet), bollette, affitto, carburante, caffè, spese bancarie. Le assicurazioni hanno il loro tab <strong>Polizze/Assicurazioni</strong>. Scegli la categoria e l'app applica i limiti di detraibilità e deducibilità.</p>
         </div>
         <form id="form-acquisti" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <label class="block text-xs font-semibold text-slate-700">Data documento
@@ -594,7 +596,76 @@
       </div>
     </section>
 
-    <!-- TAB 6: COMMERCIALISTA -->
+    <!-- TAB 7: POLIZZE / ASSICURAZIONI -->
+    <section id="tab-polizze" class="tab-content hidden space-y-6">
+      <div id="po-avvisi" class="hidden"></div>
+      <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <p class="text-xs sm:text-sm text-amber-900"><strong>La compagnia ti manda la fattura elettronica?</strong> Importala: compagnia, importo e periodo di copertura si leggono dal file. Puoi anche trascinarla qui sopra.</p>
+        <button data-action="import-xml" data-contesto="polizze" class="shrink-0 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-semibold transition">⇪ Importa XML / P7M / ZIP</button>
+      </div>
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">Registra una polizza</h2>
+          <p class="text-xs text-slate-500">I premi assicurativi sono esenti IVA: conta solo il costo. Se la polizza riguarda l'attività (negozio, merce, furgone) è deducibile per intero; quella dell'auto usata anche privatamente al 20%; le polizze personali dei soci non sono un costo della società. Inserisci il periodo di copertura e l'app ti avvisa quando è ora di rinnovare.</p>
+        </div>
+        <form id="form-polizze" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <label class="block text-xs font-semibold text-slate-700">Data pagamento
+            <input type="date" id="po-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Compagnia / agenzia
+            <input type="text" id="po-compagnia" placeholder="Es. Assicurazioni Alfa" required autocomplete="off" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Cosa copre
+            <input type="text" id="po-desc" placeholder="Es. RC e incendio negozio / RCA furgone / Furto merce" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">N. polizza
+            <input type="text" id="po-numero" placeholder="Facoltativo" autocomplete="off" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Tipo di polizza
+            <select id="po-categoria" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none"></select>
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Premio pagato (€)
+            <input type="number" step="0.01" min="0" id="po-premio" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Copertura dal
+            <input type="date" id="po-dal" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Copertura al (scadenza)
+            <input type="date" id="po-al" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <div class="sm:col-span-2 lg:col-span-4 p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div id="po-preview" class="text-xs text-slate-700 space-y-1"></div>
+            <button type="submit" class="shrink-0 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition">+ Registra polizza</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Polizze e assicurazioni <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">Premi pagati nell'anno. La scadenza si controlla su tutte le polizze, anche quelle pagate l'anno prima.</p>
+          </div>
+          <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+            Premi: <span id="tot-po-premi" class="text-slate-900">0,00 €</span> | Costo deducibile: <span id="tot-po-ded" class="text-slate-900">0,00 €</span>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Polizza</th><th class="py-3 px-4">Tipo</th>
+                <th class="py-3 px-4">Copertura</th><th class="py-3 px-4 text-right">Premio</th>
+                <th class="py-3 px-4 text-right">Costo deducibile</th><th class="py-3 px-4 text-center">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-polizze" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 8: COMMERCIALISTA -->
     <section id="tab-commercialista" class="tab-content hidden space-y-6">
       <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <p class="text-xs sm:text-sm text-amber-900"><strong>Hai i file delle fatture elettroniche?</strong> Importando l'XML della parcella, cassa e ritenuta d'acconto vengono lette direttamente dalla fattura. Puoi anche trascinarli qui sopra.</p>

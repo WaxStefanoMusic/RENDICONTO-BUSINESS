@@ -24,7 +24,11 @@ const CATEGORIE_SPESA = {
   tel_mob_50_80:    { label: 'Telefonia mobile aziendale',                                ivaDetPct: 0.5, costoDedPct: 0.8,  badge: 'IVA 50% | Costo 80%' },
   tel_fisso_100_80: { label: 'Telefonia fissa & internet negozio',                        ivaDetPct: 1.0, costoDedPct: 0.8,  badge: 'IVA 100% | Costo 80%' },
   auto_40_20:       { label: 'Auto promiscua soci & carburante / manutenzione',           ivaDetPct: 0.4, costoDedPct: 0.2,  badge: 'IVA 40% | Costo 20%' },
-  esente_0_100:     { label: 'Spese bancarie / assicurazioni / esenti art. 10',           ivaDetPct: 0.0, costoDedPct: 1.0,  badge: 'Esente IVA | Costo 100%' },
+  esente_0_100:     { label: 'Spese bancarie / commissioni / altre esenti art. 10',       ivaDetPct: 0.0, costoDedPct: 1.0,  badge: 'Esente IVA | Costo 100%' },
+  // polizze (tab Polizze/Assicurazioni): premi esenti IVA art. 10
+  polizza_100:         { label: 'Polizza dell\'attività (RC, incendio/furto negozio, merce, furgone N1)', ivaDetPct: 0.0, costoDedPct: 1.0, badge: 'Esente IVA | Costo 100%', breve: 'Attività' },
+  polizza_auto_20:     { label: 'Polizza auto usata anche privatamente dai soci (RCA, furto/incendio)', ivaDetPct: 0.0, costoDedPct: 0.2, badge: 'Esente IVA | Costo 20%', breve: 'Auto promiscua' },
+  polizza_personale_0: { label: 'Polizza personale dei soci (vita, infortuni, malattia)',            ivaDetPct: 0.0, costoDedPct: 0.0, badge: 'Esente IVA | Non è un costo della società', breve: 'Personale soci' },
 };
 
 // ---------------------------------------------------------------------------
@@ -57,7 +61,7 @@ const STATO_VUOTO = () => ({
   collabInps: false,
   impostazioni: IMPOSTAZIONI_BASE(),
   entrate: [],                 // tipo 'Fattura' → Fatture emesse, 'Corrispettivi' → Corrispettivi
-  acquisti: [],                // sezione 'fornitori' → Fatture ricevute, 'estero' → Autofatture/Fatture estere, 'spese' → Abbonamenti/Acquisti/Spese
+  acquisti: [],                // sezione 'fornitori' → Fatture ricevute, 'estero' → Autofatture/Fatture estere, 'spese' → Abbonamenti/Acquisti/Spese, 'polizze' → Polizze/Assicurazioni
   parcelle: [],                // fatture del commercialista, con la ritenuta d'acconto
   registroRiepiloghi: {},      // anno -> totali del PDF riepilogativo del Registro Corrispettivi
   regole: [],                  // controparte -> tab dove vanno sempre le sue fatture
@@ -97,6 +101,8 @@ function datiEsempio(anno) {
       { id: 108, data: d('07-15'), desc: 'Abbonamento telefonia mobile aziendale', provenienza: 'IT', categoria: 'tel_mob_50_80', imponibile: 400, iva: 88 },
       { id: 109, data: d('09-10'), desc: 'Fornitura divani e poltrone autunno - Salotti Gamma', provenienza: 'IT', categoria: 'merce_100_100', imponibile: 22000, iva: 4840 },
       { id: 110, data: d('01-05'), desc: 'Abbonamento annuale software fatturazione elettronica', provenienza: 'IT', categoria: 'merce_100_100', imponibile: 82, iva: 18.04, sezione: 'spese' },
+      { id: 111, data: d('03-01'), desc: 'RC terzi, incendio e furto negozio', compagnia: 'Assicurazioni Esempio Spa', numero: 'NEG-1001', dal: d('03-01'), al: `${anno + 1}-02-28`, provenienza: 'IT', categoria: 'polizza_100', imponibile: 1250, iva: 0, sezione: 'polizze' },
+      { id: 112, data: d('11-20'), desc: 'RCA furgone consegne (autocarro N1)', compagnia: 'Mutua Inventata', numero: 'AUTO-77', dal: d('11-20'), al: `${anno + 1}-11-19`, provenienza: 'IT', categoria: 'polizza_100', imponibile: 980, iva: 0, sezione: 'polizze' },
     ].map((a) => ({ ...a, sezione: sezioneDi(a) })),
     parcelle: [
       { id: 201, data: d('04-20'), desc: 'Studio Verdi - Fatt. n. 31 contabilità 1° trimestre', regime: 'ordinario', onorario: 600, cassaPct: 4, esenti: 0, pagamento: d('04-28'), ritenutaVersata: true },
@@ -509,7 +515,7 @@ function updateAcquistoPreview(p) {
   $(`${p}-preview`).innerHTML = html;
 }
 
-const OPZIONI_CATEGORIA = Object.entries(CATEGORIE_SPESA)
+const OPZIONI_CATEGORIA = Object.entries(CATEGORIE_SPESA).filter(([k]) => !k.startsWith('polizza_'))
   .map(([k, r]) => `<option value="${k}">${esc(r.label)} (${esc(r.badge)})</option>`).join('');
 for (const p of Object.keys(MODULI_SPESA)) $(`${p}-categoria`).innerHTML = OPZIONI_CATEGORIA;
 
@@ -518,7 +524,7 @@ function dataDefault() {
   const t = oggi();
   return annoDi(t) === appState.anno ? t : `${appState.anno}-01-01`;
 }
-const CAMPI_DATA = ['fe-data', 'co-data', 'fo-data', 'es-data', 'acq-data', 'pa-data'];
+const CAMPI_DATA = ['fe-data', 'co-data', 'fo-data', 'es-data', 'acq-data', 'po-data', 'pa-data'];
 
 function confermaRegistrazione(data, msg, focus) {
   if (annoDi(data) === appState.anno) showToast(msg);
@@ -672,7 +678,7 @@ function deleteEntrata(id) {
 function deleteAcquisto(id) {
   const x = appState.acquisti.find((v) => v.id === id);
   if (!x) return;
-  openConfirmModal(x.sezione === 'fornitori' ? 'Eliminare questa fattura del fornitore?' : x.sezione === 'estero' ? 'Eliminare questo acquisto dall\'estero?' : 'Eliminare questa spesa?',
+  openConfirmModal(x.sezione === 'fornitori' ? 'Eliminare questa fattura del fornitore?' : x.sezione === 'estero' ? 'Eliminare questo acquisto dall\'estero?' : x.sezione === 'polizze' ? 'Eliminare questa polizza?' : 'Eliminare questa spesa?',
     `${fmtData(x.data)} — ${x.desc} (${fmtEuro(x.imponibile)} + IVA)`, () => {
       appState.acquisti = appState.acquisti.filter((v) => v.id !== id);
       saveState(); renderAll(); showToast('Voce eliminata.');
@@ -691,7 +697,7 @@ function deleteParcella(id) {
 // ---------------------------------------------------------------------------
 // Riepilogo dell'anno per il commercialista (CSV che Excel apre da solo)
 // ---------------------------------------------------------------------------
-const NOMI_SEZIONE = { fornitori: 'Fatture fornitori', estero: 'Autofatture/fatture estere', spese: 'Abbonamenti/acquisti/spese' };
+const NOMI_SEZIONE = { fornitori: 'Fatture fornitori', estero: 'Autofatture/fatture estere', spese: 'Abbonamenti/acquisti/spese', polizze: 'Polizze/assicurazioni' };
 
 async function exportCsvAnno() {
   const anno = appState.anno;
@@ -708,7 +714,7 @@ async function exportCsvAnno() {
   }
   for (const x of appState.acquisti.filter(delAnno)) {
     const b = calcAcquistoBreakdown(x);
-    righe.push([NOMI_SEZIONE[x.sezione] || 'Abbonamenti/acquisti/spese', fmtData(x.data), 'Q' + getTrimestre(x.data), x.desc, PROV[x.provenienza] || x.provenienza, b.rule.label, num(b.imponibile), num(b.ivaDocumento), num(b.ivaDebitoRC), num(b.ivaDetraibile), num(b.costoDeducibile), num(b.imponibile + b.ivaDocumento), '', b.notaEstero]);
+    righe.push([NOMI_SEZIONE[x.sezione] || 'Abbonamenti/acquisti/spese', fmtData(x.data), 'Q' + getTrimestre(x.data), x.desc, PROV[x.provenienza] || x.provenienza, b.rule.label, num(b.imponibile), num(b.ivaDocumento), num(b.ivaDebitoRC), num(b.ivaDetraibile), num(b.costoDeducibile), num(b.imponibile + b.ivaDocumento), '', x.sezione === 'polizze' ? notaPolizza(x) : b.notaEstero]);
   }
   for (const x of appState.parcelle.filter(delAnno)) {
     const b = calcParcella(x);
@@ -753,6 +759,7 @@ const DESTINAZIONI = {
   fornitori: 'Fatture fornitori',
   estero: 'Autofatture/fatture estere',
   spese: 'Abbonamenti/acquisti/spese',
+  polizze: 'Polizze/assicurazioni',
   commercialista: 'Commercialista',
   salta: 'Non importare',
 };
@@ -776,6 +783,8 @@ function categoriaDa(f) {
   if (/assicura|polizza|\bbanca\b|bancari|commission|interess/.test(t) || (nature.length && nature.every((n) => n.startsWith('N4')))) return 'esente_0_100';
   return 'merce_100_100';
 }
+const sembraPolizza = (f) => /assicura|insurance|polizz|\bpremi[oa]? (di )?(assicura|polizz)|\b(generali|allianz|unipol(sai)?|axa|zurich|reale mutua|cattolica|groupama|helvetia|itas|vittoria assicurazioni|sara assicurazioni|genialloyd|quixa|verti|prima assicurazioni|poste assicura|net insurance|tua assicurazioni|hdi)\b/i
+  .test(`${f.cedente.nome} ${f.descrizioni.join(' ')}`);
 const sembraSpesa = (f) => {
   const t = `${f.cedente.nome} ${f.descrizioni.join(' ')}`.toLowerCase();
   return categoriaDa(f) !== 'merce_100_100'
@@ -809,6 +818,7 @@ function proponiDestinazione(f, contesto, presunta = '') {
   if (emessa) return { dest: 'fatture' };
   if (f.ritenuta > 0 || (f.cassa && f.cassa.importo > 0)) return { dest: 'commercialista' };
   if (['TD17', 'TD18', 'TD19'].includes(f.tipoDoc) || (f.cedente.paese && f.cedente.paese !== 'IT')) return { dest: 'estero' };
+  if (contesto === 'polizze' || sembraPolizza(f)) return { dest: 'polizze' };
   if (contesto === 'acquisti' || sembraSpesa(f)) return { dest: 'spese' };
   return { dest: contesto === 'commercialista' || contesto === 'estero' ? contesto : 'fornitori' };
 }
@@ -862,14 +872,14 @@ async function apriImport(lista, contesto) {
 function disegnaImport() {
   const { righe, errori, presunta } = importazione;
   const opzDest = (sel) => Object.entries(DESTINAZIONI).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
-  const opzCat = (sel) => Object.entries(CATEGORIE_SPESA).map(([k, r]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${esc(r.label)} (${esc(r.badge)})</option>`).join('');
+  const opzCat = (sel, dest) => Object.entries(CATEGORIE_SPESA).filter(([k]) => (dest === 'polizze') === k.startsWith('polizza_')).map(([k, r]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${esc(r.label)} (${esc(r.badge)})</option>`).join('');
   const segno = (f) => (NOTE_CREDITO.has(f.tipoDoc) ? -1 : 1);
 
   $('import-righe').innerHTML = righe.map((r) => {
     const f = r.f, s = segno(f);
     const emessa = r.dest === 'fatture';
     const controparte = emessa ? f.cessionario : f.cedente;
-    const conCategoria = r.dest === 'fornitori' || r.dest === 'estero' || r.dest === 'spese';
+    const conCategoria = r.dest === 'fornitori' || r.dest === 'estero' || r.dest === 'spese' || r.dest === 'polizze';
     const note = [];
     if (r.motivo) note.push(`<span class="text-amber-700 font-semibold">${esc(r.motivo)}</span>`);
     if (NOTE_CREDITO.has(f.tipoDoc)) note.push('<span class="text-indigo-700">Nota di credito: importi in negativo</span>');
@@ -884,7 +894,7 @@ function disegnaImport() {
       <td class="py-2 px-2 text-right whitespace-nowrap">${fmtEuro(s * f.iva)}</td>
       <td class="py-2 px-2 text-right whitespace-nowrap font-bold">${fmtEuro(s * f.totale)}</td>
       <td class="py-2 px-2"><select data-imp="${r.i}" data-campo="dest" class="px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs">${opzDest(r.dest)}</select></td>
-      <td class="py-2 px-2">${conCategoria ? `<select data-imp="${r.i}" data-campo="categoria" class="w-56 px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs">${opzCat(r.categoria)}</select>` : '<span class="text-slate-400">—</span>'}</td>
+      <td class="py-2 px-2">${conCategoria ? `<select data-imp="${r.i}" data-campo="categoria" class="w-56 px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs">${opzCat(r.dest === 'polizze' ? catPolizza(r.categoria) : r.categoria, r.dest)}</select>` : '<span class="text-slate-400">—</span>'}</td>
     </tr>`;
   }).join('');
 
@@ -920,7 +930,7 @@ async function confermaImport() {
   lotto.inCorso = true;
   $('import-ok').disabled = true;
   $('import-ok').textContent = 'Salvataggio…';
-  const conta = { fatture: 0, fornitori: 0, estero: 0, spese: 0, commercialista: 0 };
+  const conta = { fatture: 0, fornitori: 0, estero: 0, spese: 0, polizze: 0, commercialista: 0 };
   let id = Date.now();
   for (const r of lotto.righe) {
     if (r.dest === 'salta') continue;
@@ -955,6 +965,7 @@ async function confermaImport() {
         provenienza: r.provenienza, categoria: r.categoria,
         imponibile: s * f.imponibile, iva: rc ? 0 : s * f.iva,
         sezione: r.dest, xml: r.chiave, cp, ...fileXml,
+        ...(r.dest === 'polizze' ? { compagnia: f.cedente.nome, dal: (f.periodo && f.periodo.dal) || '', al: (f.periodo && f.periodo.al) || '', categoria: catPolizza(r.categoria), iva: 0 } : {}),
         ...(r.dest === 'fornitori' && r.provenienza !== 'IT' ? { sezioneManuale: true } : {}),
         // se un giorno la si sposta tra le parcelle, servono cassa e spese esenti
         ...(f.ritenuta > 0 || f.cassa ? { prof: { regime: f.cedente.regime === 'RF19' ? 'forfettario' : 'ordinario', cassaPct: f.cassa ? f.cassa.aliquota : 0, esenti: s * f.riepiloghi.filter((x) => (x.natura || '').startsWith('N1')).reduce((t, x) => t + x.imponibile, 0) } } : {}),
@@ -979,7 +990,7 @@ async function confermaImport() {
   const dove = Object.entries(conta).filter(([, n]) => n).map(([k, n]) => `${n} in ${DESTINAZIONI[k]}`).join(', ');
   // si apre il tab dove è finita la maggior parte delle fatture
   const principale = Object.entries(conta).sort((a, b) => b[1] - a[1])[0][0];
-  const tabDi = { fatture: 'fatture', fornitori: 'fornitori', estero: 'estero', spese: 'acquisti', commercialista: 'commercialista' };
+  const tabDi = { fatture: 'fatture', fornitori: 'fornitori', estero: 'estero', spese: 'acquisti', polizze: 'polizze', commercialista: 'commercialista' };
   importazione = null;
   popolaAnni(); renderAll();
   if (tot) switchTab(tabDi[principale]);
@@ -1398,15 +1409,16 @@ function renderAll() {
     CH_BOLLA: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold">Svizzera • Bolla doganale</span>',
     CH_SERVIZI: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold">Servizi esteri • Autofattura TD17</span>',
   };
-  const totSp = { fo: { det: 0, ded: 0 }, es: { det: 0, ded: 0 }, acq: { det: 0, ded: 0 } };
-  const htmlSp = { fo: '', es: '', acq: '' };
+  const totSp = { fo: { det: 0, ded: 0 }, es: { det: 0, ded: 0 }, acq: { det: 0, ded: 0 }, po: { det: 0, ded: 0, premi: 0 } };
+  const htmlSp = { fo: '', es: '', acq: '', po: '' };
   for (const item of acquisti) {
     const b = calcAcquistoBreakdown(item);
     const q = getTrimestre(item.data);
-    const p = item.sezione === 'fornitori' ? 'fo' : item.sezione === 'estero' ? 'es' : 'acq';
+    const p = item.sezione === 'fornitori' ? 'fo' : item.sezione === 'estero' ? 'es' : item.sezione === 'polizze' ? 'po' : 'acq';
     totCostiDeducibili += b.costoDeducibile;
     ivaTrim[q].debito += b.ivaDebitoRC; ivaTrim[q].credito += b.ivaDetraibile;
     totSp[p].det += b.ivaDetraibile; totSp[p].ded += b.costoDeducibile;
+    if (p === 'po') { totSp.po.premi += b.imponibile + b.ivaDocumento; htmlSp.po += rigaPolizza(item, b); continue; }
     htmlSp[p] += `<tr data-voce="acquisto:${item.id}" class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
@@ -1429,6 +1441,9 @@ function renderAll() {
   $('tbody-acquisti').innerHTML = htmlSp.acq || vuota(10, `Nessuna spesa nel ${anno}. Registra abbonamenti, bollette, carburante e le altre spese del negozio.`);
   $('tot-acq-iva-det').textContent = fmtEuro(totSp.acq.det);
   $('tot-acq-costo-ded').textContent = fmtEuro(totSp.acq.ded);
+  $('tbody-polizze').innerHTML = htmlSp.po || vuota(7, `Nessuna polizza pagata nel ${anno}. Registra qui RC, incendio e furto del negozio, la polizza del furgone e le altre assicurazioni.`);
+  $('tot-po-premi').textContent = fmtEuro(totSp.po.premi);
+  $('tot-po-ded').textContent = fmtEuro(totSp.po.ded);
 
   // 3. Commercialista: le parcelle sono costi come gli altri, con in più la ritenuta
   let paSpeso = 0, paNetto = 0, paCosto = 0, ritDaVersare = 0;
@@ -1602,8 +1617,9 @@ function renderAll() {
         <span class="text-xs font-bold text-slate-800">${esc(s.collabNome || 'Collaboratore familiare')}</span>
         <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full ${appState.collabInps ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'}">${appState.collabInps ? 'Attivo (solo INPS)' : 'Cessato'}</span>
       </div>
-      <p class="text-[11px] text-slate-500 mt-1">Nessun compenso. I contributi INPS si attivano nella scheda 8.</p>
+      <p class="text-[11px] text-slate-500 mt-1">Nessun compenso. I contributi INPS si attivano nel tab Imposte Soci &amp; INPS.</p>
     </div>`;
+  disegnaAvvisiPolizze();
   applicaRicerche();
 }
 
@@ -1631,7 +1647,8 @@ const RICERCHE = [
   { tbody: 'tbody-corrispettivi', tipo: 'entrata', voci: () => appState.entrate.filter((x) => x.tipo !== 'Fattura'), ph: 'Cerca mese, data o importo…' },
   { tbody: 'tbody-fornitori', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'fornitori'), ph: 'Cerca fornitore, numero, data o importo…' },
   { tbody: 'tbody-estero', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'estero'), ph: 'Cerca fornitore, numero, data o importo…' },
-  { tbody: 'tbody-acquisti', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione !== 'fornitori' && x.sezione !== 'estero'), ph: 'Cerca spesa, fornitore, categoria, data o importo…' },
+  { tbody: 'tbody-acquisti', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => !['fornitori', 'estero', 'polizze'].includes(x.sezione)), ph: 'Cerca spesa, fornitore, categoria, data o importo…' },
+  { tbody: 'tbody-polizze', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'polizze'), ph: 'Cerca compagnia, polizza, data o importo…', riquadri: (lista, filtrata) => riquadriPolizze(lista, filtrata) },
   { tbody: 'tbody-parcelle', tipo: 'parcella', voci: () => appState.parcelle, ph: 'Cerca professionista, numero, data o importo…' },
 ];
 const normTesto = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').toLowerCase();
@@ -1642,7 +1659,7 @@ const importoTesti = (n) => {
 const NOMI_REGIME = { IT_22: 'IVA 22%', IT_10: 'IVA 10%', IT_4: 'IVA 4%', ESENTE: 'esente', CH_ART8: 'Svizzera art. 8', UE_ART41: 'UE art. 41' };
 
 function testoVoce(tipo, x) {
-  const parti = [x.desc, fmtData(x.data), x.data];
+  const parti = [x.desc, fmtData(x.data), x.data, x.compagnia, x.numero, x.dal && fmtData(x.dal), x.al && fmtData(x.al)];
   const cp = controparteDi(tipo, x);
   if (cp) parti.push(cp.nome, cp.piva);
   if (tipo === 'entrata') {
@@ -1748,6 +1765,7 @@ function sommeVoci(tipo, lista) {
 function disegnaRiquadri(r, lista, filtrata) {
   const box = document.querySelector(`[data-riquadri="${r.tbody}"]`);
   if (!box) return;
+  if (r.riquadri) { box.innerHTML = r.riquadri(lista, filtrata); return; }
   const t = sommeVoci(r.tipo, lista);
   const corr = r.tbody === 'tbody-corrispettivi';
   const quante = corr ? (t.n === 1 ? 'registrazione' : 'registrazioni') : r.tipo === 'parcella' ? (t.n === 1 ? 'parcella' : 'parcelle') : (t.n === 1 ? 'fattura' : 'fatture');
@@ -1801,12 +1819,12 @@ document.addEventListener('keydown', (e) => {
    Per le fatture di cui si conosce il cliente o il fornitore si può creare
    una regola: le altre già registrate si spostano subito e quelle importate
    in futuro vengono proposte direttamente in quel tab. */
-const SPOSTABILI = ['fatture', 'fornitori', 'estero', 'spese', 'commercialista'];
+const SPOSTABILI = ['fatture', 'fornitori', 'estero', 'spese', 'polizze', 'commercialista'];
 const NOMI_TAB = {
   fatture: '2. Fatture emesse', fornitori: '4. Fatture ricevute fornitori', estero: '5. Autofatture/Fatture estere',
-  spese: '6. Abbonamenti/Acquisti/Spese', commercialista: '7. Commercialista',
+  spese: '6. Abbonamenti/Acquisti/Spese', polizze: '7. Polizze/Assicurazioni', commercialista: '8. Commercialista',
 };
-const TAB_DI_DEST = { fatture: 'fatture', fornitori: 'fornitori', estero: 'estero', spese: 'acquisti', commercialista: 'commercialista' };
+const TAB_DI_DEST = { fatture: 'fatture', fornitori: 'fornitori', estero: 'estero', spese: 'acquisti', polizze: 'polizze', commercialista: 'commercialista' };
 const COLLEZIONE = { entrata: 'entrate', acquisto: 'acquisti', parcella: 'parcelle' };
 const r2 = (n) => Math.round((+n || 0) * 100) / 100;
 const normNome = (s) => normTesto(s).replace(/[^a-z0-9]/g, '');
@@ -1892,7 +1910,10 @@ function convertiVoce(tipo, x, dest, opz = {}) {
   const prima = tipo === 'acquisto' ? x : {};
   const voce = tipo === 'acquisto' ? { ...x } : { ...base, imponibile: r2(imponibile), iva: r2(iva) };
   let provenienza = opz.provenienza || prima.provenienza || 'IT';
-  if (dest === 'fornitori') provenienza = 'IT';
+  if (dest === 'fornitori' || dest === 'polizze') provenienza = 'IT';
+  // fuori dal tab delle polizze la compagnia resta nella descrizione
+  if (prima.sezione === 'polizze' && dest !== 'polizze' && prima.compagnia && !normTesto(voce.desc).includes(normTesto(prima.compagnia))) voce.desc = `${prima.compagnia} - ${voce.desc}`;
+  if (dest === 'polizze' && !voce.compagnia && cp && cp.nome) voce.compagnia = cp.nome;
   Object.assign(voce, { sezione: dest, sezioneManuale: true, provenienza, categoria: opz.categoria || prima.categoria || 'merce_100_100' });
   if (cp) voce.cp = cp;
   return { tipo: 'acquisto', voce };
@@ -1992,11 +2013,13 @@ function chiediSpostamento(rif, dest) {
           .map(([k, l]) => `<option value="${k}" ${k === attuale ? 'selected' : ''}>${l}</option>`).join('')}
       </select></label>`);
   }
-  if (dest === 'fornitori' || dest === 'estero' || dest === 'spese') {
-    const attuale = (v.tipo === 'acquisto' && v.x.categoria) || (regola && regola.categoria) || 'merce_100_100';
+  if (dest === 'fornitori' || dest === 'estero' || dest === 'spese' || dest === 'polizze') {
+    let attuale = (v.tipo === 'acquisto' && v.x.categoria) || (regola && regola.categoria) || 'merce_100_100';
+    if (dest === 'polizze') attuale = catPolizza(attuale);
+    else if (attuale.startsWith('polizza_')) attuale = 'esente_0_100';
     campi.push(`<label class="block text-xs font-semibold text-slate-700">Categoria fiscale
       <select id="sposta-categoria" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
-        ${Object.entries(CATEGORIE_SPESA).map(([k, r]) => `<option value="${k}" ${k === attuale ? 'selected' : ''}>${esc(r.label)} (${esc(r.badge)})</option>`).join('')}
+        ${Object.entries(CATEGORIE_SPESA).filter(([k]) => (dest === 'polizze') === k.startsWith('polizza_')).map(([k, r]) => `<option value="${k}" ${k === attuale ? 'selected' : ''}>${esc(r.label)} (${esc(r.badge)})</option>`).join('')}
       </select></label>`);
   }
   $('sposta-campi').innerHTML = campi.join('');
@@ -2005,6 +2028,7 @@ function chiediSpostamento(rif, dest) {
   const note = [];
   if (dest === 'fatture') note.push('Diventa una fattura emessa: conta tra i ricavi e la sua IVA è a debito.');
   else if (v.tipo === 'entrata') note.push('Non sarà più un ricavo: diventa un costo.');
+  if (dest === 'polizze') note.push('Diventa una polizza: premio esente IVA, costo deducibile secondo il tipo. Nel tab Polizze puoi indicare il periodo di copertura per gli avvisi di scadenza.');
   if (dest === 'commercialista') note.push('Diventa una parcella: se il professionista non è forfettario l\'app calcola la ritenuta d\'acconto del 20% sull\'onorario, da versare con F24.');
   $('sposta-nota').textContent = note.join(' ');
   $('sposta-nota').classList.toggle('hidden', !note.length);
@@ -2343,6 +2367,136 @@ document.addEventListener('dblclick', (e) => {
   const v = trovaVoce(tr.dataset.voce);
   if (v && v.x.xml) vediFatturaXml(tr.dataset.voce);
 });
+
+// ---------------------------------------------------------------------------
+// Polizze / assicurazioni
+// ---------------------------------------------------------------------------
+/* Le polizze sono acquisti della sezione «polizze»: premio esente IVA
+   (art. 10), costo deducibile secondo il tipo. In più hanno compagnia,
+   numero e periodo di copertura, da cui l'app ricava le scadenze: una
+   polizza è «rinnovata» se c'è una registrazione successiva della stessa
+   polizza (stesso numero, o stessa compagnia e descrizione). */
+const CATEGORIE_POLIZZA = Object.keys(CATEGORIE_SPESA).filter((k) => k.startsWith('polizza_'));
+const catPolizza = (k) => (CATEGORIE_POLIZZA.includes(k) ? k : 'polizza_100');
+const polizze = () => appState.acquisti.filter((x) => x.sezione === 'polizze');
+const PREAVVISO_GIORNI = 45;
+
+const chiavePolizza = (x) => (x.numero ? 'n:' + normNome(x.numero) : 'd:' + normNome(x.compagnia || '') + '|' + normNome(x.desc));
+function statoPolizza(x, tutte = polizze()) {
+  if (!x.al) return null;
+  const adesso = new Date(); adesso.setHours(0, 0, 0, 0);
+  const [y, m, d] = x.al.split('-').map(Number);
+  const giorni = Math.round((new Date(y, m - 1, d) - adesso) / 86400000);
+  const k = chiavePolizza(x);
+  const rinnovata = tutte.some((z) => z !== x && z.al && z.al > x.al && chiavePolizza(z) === k);
+  if (rinnovata) return { giorni, tipo: 'rinnovata', testo: 'Rinnovata', cls: 'bg-slate-100 text-slate-600' };
+  if (giorni < 0) return { giorni, tipo: 'scaduta', testo: `Scaduta il ${fmtData(x.al)}`, cls: 'bg-rose-100 text-rose-700' };
+  if (giorni <= PREAVVISO_GIORNI) return { giorni, tipo: 'in-scadenza', testo: giorni === 0 ? 'Scade oggi' : giorni === 1 ? 'Scade domani' : `Scade tra ${giorni} giorni`, cls: 'bg-amber-100 text-amber-800' };
+  return { giorni, tipo: 'attiva', testo: 'Attiva', cls: 'bg-emerald-50 text-emerald-700' };
+}
+
+function notaPolizza(x) {
+  return [x.compagnia, x.numero ? 'polizza n. ' + x.numero : '', x.dal || x.al ? `copertura ${fmtData(x.dal) || '…'} – ${fmtData(x.al) || '…'}` : ''].filter(Boolean).join(', ');
+}
+
+function rigaPolizza(item, b) {
+  const st = statoPolizza(item);
+  const chi = [item.compagnia || (controparteDi('acquisto', item) || {}).nome, item.numero ? 'n. ' + item.numero : ''].filter(Boolean).join(' · ');
+  return `<tr data-voce="acquisto:${item.id}" class="hover:bg-slate-50/80 transition align-top">
+      <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
+      <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}${item.xml ? badgeXml('acquisto:' + item.id, item) : ''}</div>${chi ? `<div class="text-[11px] text-slate-500 mt-0.5">${esc(chi)}</div>` : ''}</td>
+      <td class="py-3 px-4 text-xs text-slate-700 min-w-[130px]" title="${esc(b.rule.label)}"><span class="font-semibold">${esc(b.rule.breve || b.rule.label)}</span><div class="text-[10px] font-semibold text-slate-500 mt-0.5">${esc(b.rule.badge)}</div></td>
+      <td class="py-3 px-4 text-xs whitespace-nowrap">${item.dal || item.al ? `<div class="text-slate-700">${esc(fmtData(item.dal) || '…')} – ${esc(fmtData(item.al) || '…')}</div>` : '<span class="text-slate-400">Non indicata</span>'}
+        ${st ? `<span class="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold ${st.cls}">${esc(st.testo)}</span>` : ''}</td>
+      <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.imponibile + b.ivaDocumento)}</td>
+      <td class="py-3 px-4 text-right font-semibold whitespace-nowrap ${b.costoDeducibile ? 'text-slate-900' : 'text-slate-400'}">${fmtEuro(b.costoDeducibile)}</td>
+      <td class="py-3 px-4 text-center"><button data-action="del-acquisto" data-id="${item.id}" class="text-rose-500 hover:text-rose-700 text-xs font-semibold px-2 py-1 rounded-lg hover:bg-rose-50">Elimina</button></td>
+    </tr>`;
+}
+
+/* Polizze da rinnovare: in scadenza entro il preavviso o scadute da poco
+   senza un rinnovo registrato */
+function polizzeDaRinnovare() {
+  const tutte = polizze();
+  return tutte.map((x) => ({ x, st: statoPolizza(x, tutte) }))
+    .filter(({ st }) => st && (st.tipo === 'in-scadenza' || (st.tipo === 'scaduta' && st.giorni >= -60)))
+    .sort((a, b) => a.st.giorni - b.st.giorni);
+}
+
+function disegnaAvvisiPolizze() {
+  const lista = polizzeDaRinnovare();
+  const voce = ({ x, st }) => `<li><strong>${esc(x.desc)}</strong>${x.compagnia ? ` (${esc(x.compagnia)})` : ''}: ${st.tipo === 'scaduta' ? `<span class="text-rose-700 font-semibold">scaduta il ${esc(fmtData(x.al))}</span>` : `scade il <strong>${esc(fmtData(x.al))}</strong> (${st.giorni === 0 ? 'oggi' : st.giorni === 1 ? 'domani' : `tra ${st.giorni} giorni`})`}</li>`;
+  const testo = lista.length ? `<div class="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-xs sm:text-sm text-amber-900 flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+      <div><div class="font-bold mb-1">${lista.length === 1 ? 'Una polizza da rinnovare' : `${lista.length} polizze da rinnovare`}</div>
+        <ul class="list-disc pl-5 space-y-0.5">${lista.map(voce).join('')}</ul>
+        <p class="mt-1.5 text-[11px] text-amber-800">Quando paghi il rinnovo, registralo con il nuovo periodo di copertura e l'avviso sparisce.</p></div>
+      <button data-tab="polizze" class="dash-solo shrink-0 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-semibold transition">Vai alle polizze</button>
+    </div>` : '';
+  for (const id of ['po-avvisi', 'dash-polizze']) {
+    const el = $(id);
+    if (!el) continue;
+    el.innerHTML = testo;
+    el.classList.toggle('hidden', !lista.length);
+    if (id === 'po-avvisi') el.querySelectorAll('.dash-solo').forEach((b) => b.remove());
+  }
+}
+
+function riquadriPolizze(lista, filtrata) {
+  const t = { premi: 0, ded: 0, n: lista.length };
+  for (const x of lista) { const b = calcAcquistoBreakdown(x); t.premi += b.imponibile + b.ivaDocumento; t.ded += b.costoDeducibile; }
+  const daRinnovare = polizzeDaRinnovare();
+  const prossima = polizze().map((x) => ({ x, st: statoPolizza(x) })).filter(({ st }) => st && st.tipo !== 'rinnovata' && st.giorni >= 0).sort((a, b) => a.st.giorni - b.st.giorni)[0];
+  const bordo = filtrata ? 'border-amber-300' : 'border-slate-200';
+  const cella = (titolo, valore, sub, colore = 'text-slate-900', forte = false) => `<div class="bg-white rounded-2xl border ${bordo} shadow-xs p-4">
+      <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500">${titolo}</div>
+      <div class="mt-1 ${forte ? 'text-2xl' : 'text-xl'} font-bold ${colore} whitespace-nowrap">${valore}</div>
+      <div class="mt-1 text-[11px] text-slate-500">${sub}</div>
+    </div>`;
+  const dove = filtrata ? ' · solo i risultati della ricerca' : ` nel ${appState.anno}`;
+  return cella('Premi pagati', fmtEuro(t.premi), `${t.n} ${t.n === 1 ? 'polizza' : 'polizze'}${dove}`, 'text-slate-900', true)
+    + cella('Costo deducibile', fmtEuro(t.ded), t.premi - t.ded > 0.004 ? `Non deducibile ${fmtEuro(t.premi - t.ded)}` : 'Esenti IVA: conta solo il costo')
+    + cella('Da rinnovare', String(daRinnovare.length), prossima ? `Prossima scadenza ${esc(fmtData(prossima.x.al))}` : 'Nessuna scadenza in vista', daRinnovare.length ? 'text-amber-600' : 'text-emerald-700');
+}
+
+// --- modulo ---
+$('po-categoria').innerHTML = CATEGORIE_POLIZZA.map((k) => `<option value="${k}">${esc(CATEGORIE_SPESA[k].label)} (${esc(CATEGORIE_SPESA[k].badge)})</option>`).join('');
+const NOTE_POLIZZA = {
+  polizza_100: 'Premio esente IVA: tutto costo deducibile della società.',
+  polizza_auto_20: 'Auto usata anche privatamente: il costo è deducibile al 20%.',
+  polizza_personale_0: 'Non è un costo della società: vita, infortuni e malattia dei soci possono dare una detrazione nella loro dichiarazione personale (chiedi al commercialista).',
+};
+function updatePolizzaPreview() {
+  const b = calcAcquistoBreakdown({ imponibile: $('po-premio').value, iva: 0, provenienza: 'IT', categoria: $('po-categoria').value });
+  $('po-preview').innerHTML = `Costo deducibile: <strong class="text-slate-900">${fmtEuro(b.costoDeducibile)}</strong> <span class="text-slate-500">· ${esc(NOTE_POLIZZA[$('po-categoria').value] || '')}</span>`;
+}
+['po-premio', 'po-categoria'].forEach((id) => { $(id).addEventListener('input', updatePolizzaPreview); $(id).addEventListener('change', updatePolizzaPreview); });
+// la copertura di solito dura un anno: la scadenza si propone da sola
+$('po-dal').addEventListener('change', () => {
+  const v = $('po-dal').value;
+  if (!v || $('po-al').value) return;
+  const [y, m, d] = v.split('-').map(Number);
+  const fine = new Date(y + 1, m - 1, d - 1);
+  $('po-al').value = `${fine.getFullYear()}-${String(fine.getMonth() + 1).padStart(2, '0')}-${String(fine.getDate()).padStart(2, '0')}`;
+});
+$('form-polizze').addEventListener('submit', function (e) {
+  e.preventDefault();
+  if ($('po-dal').value && $('po-al').value && $('po-al').value < $('po-dal').value) { showToast('La scadenza viene prima dell\'inizio della copertura.', true); $('po-al').focus(); return; }
+  const nuovo = {
+    id: Date.now(), data: $('po-data').value, desc: $('po-desc').value.trim(),
+    compagnia: $('po-compagnia').value.trim(), numero: $('po-numero').value.trim(),
+    dal: $('po-dal').value, al: $('po-al').value,
+    provenienza: 'IT', categoria: catPolizza($('po-categoria').value),
+    imponibile: parseFloat($('po-premio').value) || 0, iva: 0, sezione: 'polizze',
+  };
+  const categoria = nuovo.categoria;
+  appState.acquisti.push(nuovo);
+  appState.acquisti.sort((a, b) => a.data.localeCompare(b.data));
+  saveState(); this.reset();
+  $('po-data').value = nuovo.data; $('po-categoria').value = categoria;
+  updatePolizzaPreview(); renderAll();
+  confermaRegistrazione(nuovo.data, 'Polizza registrata.', 'po-compagnia');
+});
+updatePolizzaPreview();
 
 // ---------------------------------------------------------------------------
 // Avvio

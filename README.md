@@ -15,16 +15,20 @@ S.N.C.:
    doganali dalla Svizzera.
 6. **Abbonamenti/Acquisti/Spese**: le altre spese, con le regole di detraibilità IVA e
    deducibilità del costo (caffè, telefonia, auto promiscua…).
-7. **Commercialista**: parcelle con cassa, IVA e ritenuta d'acconto 20%, scadenze F24 codice
+7. **Polizze/Assicurazioni**: premi esenti IVA con compagnia, numero e periodo di copertura;
+   costo deducibile per intero (attività, negozio, furgone), al 20% (auto usata anche
+   privatamente) o per niente (polizze personali dei soci). Avvisi di rinnovo nel tab e nella
+   dashboard quando una polizza scade entro 45 giorni.
+8. **Commercialista**: parcelle con cassa, IVA e ritenuta d'acconto 20%, scadenze F24 codice
    1040 da spuntare, riepilogo dell'anno in CSV per Excel.
-8. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
+9. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
    del credito, scadenze F24.
-9. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
-   INPS commercianti, IRAP.
-10. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
+10. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
+    INPS commercianti, IRAP.
+11. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
 
 ### Importazione delle fatture elettroniche
-Nei tab Fatture Emesse, Fornitori, Autofatture/Fatture Estere, Abbonamenti/Acquisti/Spese e
+Nei tab Fatture Emesse, Fornitori, Autofatture/Fatture Estere, Abbonamenti/Acquisti/Spese, Polizze e
 Commercialista il pulsante **Importa fatture XML** (o il trascinamento dei file sulla finestra) legge le fatture
 elettroniche in formato FatturaPA: `.xml`, `.p7m` firmati e gli `.zip` scaricati in blocco da
 «Fatture e Corrispettivi», anche annidati. Data, numero, controparte, imponibile e IVA per

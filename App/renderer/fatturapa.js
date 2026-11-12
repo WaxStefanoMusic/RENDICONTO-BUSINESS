@@ -172,6 +172,12 @@
         cassa: cassa ? { tipo: val(cassa, 'TipoCassa'), aliquota: num(val(cassa, 'AlCassa')), importo: num(val(cassa, 'ImportoContributoCassa')) } : null,
         bollo: num(val(uno(gen, 'DatiBollo'), 'ImportoBollo')),
         descrizioni: tutti(corpo, 'DettaglioLinee').slice(0, 8).map((l) => val(l, 'Descrizione')).filter(Boolean),
+        // periodo indicato nelle righe (canoni, polizze): il primo inizio e l'ultima fine
+        periodo: (() => {
+          const ini = tutti(corpo, 'DataInizioPeriodo').map((x) => x.textContent.trim()).filter(Boolean).sort();
+          const fin = tutti(corpo, 'DataFinePeriodo').map((x) => x.textContent.trim()).filter(Boolean).sort();
+          return ini.length || fin.length ? { dal: ini[0] || '', al: fin[fin.length - 1] || '' } : null;
+        })(),
         scadenze: tutti(corpo, 'DettaglioPagamento').map((d) => ({ data: val(d, 'DataScadenzaPagamento'), importo: num(val(d, 'ImportoPagamento')) })).filter((s) => s.data),
       };
     });

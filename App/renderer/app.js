@@ -227,6 +227,7 @@ document.addEventListener('keydown', (e) => {
   if (!$('confirm-modal').classList.contains('hidden')) { chiudi($('confirm-modal')); confirmCallback = null; }
   else if (!$('import-modal').classList.contains('hidden')) { chiudi($('import-modal')); importazione = null; }
   else if (!$('pdfc-modal').classList.contains('hidden')) { chiudi($('pdfc-modal')); caricamentoPdf = null; }
+  else if (!$('popdf-modal').classList.contains('hidden')) chiudiPdfPolizze();
   else if (!$('settings-modal').classList.contains('hidden') && imp().configurate) chiudi($('settings-modal'));
 });
 
@@ -393,6 +394,9 @@ document.addEventListener('click', (e) => {
     case 'close-xml': chiudi($('xml-modal')); xmlAperto = null; break;
     case 'apri-allegato-xml': apriAllegatoFattura(+a.dataset.i); break;
     case 'import-pdf-corr': $('pdf-input').click(); break;
+    case 'import-pdf-polizze': $('po-pdf-input').click(); break;
+    case 'close-popdf': chiudiPdfPolizze(); break;
+    case 'conferma-popdf': confermaPdfPolizze(); break;
     case 'close-pdfc': chiudi($('pdfc-modal')); caricamentoPdf = null; break;
     case 'conferma-pdfc': confermaPdfCorrispettivi(); break;
     case 'apri-allegato': apriAllegato(a.dataset.rel); break;
@@ -1009,12 +1013,18 @@ window.addEventListener('drop', (e) => {
   e.preventDefault();
   trascinamenti = 0; chiudi($('drop-overlay'));
   const tutti = [...(e.dataTransfer?.files || [])];
+  const attivo = document.querySelector('.tab-content:not(.hidden)')?.id.replace('tab-', '');
+  // nel tab Polizze i PDF (anche dentro gli ZIP) sono ricevute e quietanze
+  if (attivo === 'polizze') {
+    const daLeggere = tutti.filter((f) => /\.(pdf|zip)$/i.test(f.name));
+    const xml = tutti.filter((f) => /\.(xml|p7m)$/i.test(f.name));
+    if (daLeggere.length) { apriPdfPolizze(daLeggere, xml); return; }
+  }
   const pdf = tutti.filter((f) => /\.pdf$/i.test(f.name));
   const lista = tutti.filter((f) => /\.(xml|p7m|zip)$/i.test(f.name));
   if (pdf.length && !lista.length) { apriPdfCorrispettivi(pdf); return; }
   if (!lista.length) { showToast('Trascina fatture elettroniche (.xml, .p7m, .zip) o i PDF del Registro Corrispettivi.', true); return; }
   if (pdf.length) showToast('Prima le fatture: i PDF dei corrispettivi caricali dopo, a parte.');
-  const attivo = document.querySelector('.tab-content:not(.hidden)')?.id.replace('tab-', '');
   apriImport(lista, attivo);
 });
 
@@ -2404,7 +2414,7 @@ function rigaPolizza(item, b) {
   const chi = [item.compagnia || (controparteDi('acquisto', item) || {}).nome, item.numero ? 'n. ' + item.numero : ''].filter(Boolean).join(' · ');
   return `<tr data-voce="acquisto:${item.id}" class="hover:bg-slate-50/80 transition align-top">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
-      <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}${item.xml ? badgeXml('acquisto:' + item.id, item) : ''}</div>${chi ? `<div class="text-[11px] text-slate-500 mt-0.5">${esc(chi)}</div>` : ''}</td>
+      <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}${item.xml ? badgeXml('acquisto:' + item.id, item) : ''}${item.allegato && DESKTOP ? ` <button type="button" data-action="apri-allegato" data-rel="${esc(item.allegato)}" class="ml-1 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold hover:bg-emerald-100 align-middle" title="Apri il PDF">📎 PDF</button>` : ''}</div>${chi ? `<div class="text-[11px] text-slate-500 mt-0.5">${esc(chi)}</div>` : ''}</td>
       <td class="py-3 px-4 text-xs text-slate-700 min-w-[130px]" title="${esc(b.rule.label)}"><span class="font-semibold">${esc(b.rule.breve || b.rule.label)}</span><div class="text-[10px] font-semibold text-slate-500 mt-0.5">${esc(b.rule.badge)}</div></td>
       <td class="py-3 px-4 text-xs whitespace-nowrap">${item.dal || item.al ? `<div class="text-slate-700">${esc(fmtData(item.dal) || '…')} – ${esc(fmtData(item.al) || '…')}</div>` : '<span class="text-slate-400">Non indicata</span>'}
         ${st ? `<span class="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold ${st.cls}">${esc(st.testo)}</span>` : ''}</td>
@@ -2497,6 +2507,148 @@ $('form-polizze').addEventListener('submit', function (e) {
   confermaRegistrazione(nuovo.data, 'Polizza registrata.', 'po-compagnia');
 });
 updatePolizzaPreview();
+
+// --- PDF delle polizze e delle quietanze ---
+/* Le compagnie mandano ricevute di pagamento, quietanze e schede di polizza
+   in PDF (i premi sono esenti IVA: spesso niente fattura elettronica). Il
+   lettore (polizze-pdf.js) ne ricava compagnia, numero, premio e periodo;
+   qui si controllano e si correggono prima di registrarli, e il PDF resta
+   allegato alla riga. Un PDF già registrato (stessa polizza e stesso
+   periodo) si riconosce e si salta. */
+let caricamentoPolizze = null;
+
+const giaRegistrata = (d) => polizze().find((x) => d.numero && x.numero && normNome(x.numero) === normNome(d.numero)
+  && (x.dal || '') === (d.dal || '') && (x.al || '') === (d.al || ''));
+
+async function apriPdfPolizze(lista, xmlDiretti = []) {
+  showToast(`Lettura di ${lista.length} ${lista.length === 1 ? 'file' : 'file'}…`);
+  let r;
+  try { r = await window.PolizzePDF.leggiFile(lista); }
+  catch (e) { showToast('Lettura non riuscita: ' + e.message, true); return; }
+  const dopo = [...xmlDiretti, ...r.altri];
+  if (!r.documenti.length) {
+    if (dopo.length) { apriImport(dopo, 'polizze'); return; }
+    showToast(r.errori.length ? `${r.errori[0].file}: ${r.errori[0].errore}` : 'Nessun PDF di polizze trovato.', true);
+    return;
+  }
+  caricamentoPolizze = {
+    errori: r.errori, dopo,
+    righe: r.documenti.map((d) => {
+      const doppia = giaRegistrata(d);
+      return { d, incluso: !doppia, doppia: !!doppia, v: {
+        data: d.data || oggi(), compagnia: d.compagnia, desc: d.desc, numero: d.numero,
+        categoria: catPolizza(d.categoria), premio: d.premio != null ? d.premio.toFixed(2) : '', dal: d.dal, al: d.al,
+      } };
+    }),
+  };
+  disegnaPdfPolizze();
+  apri($('popdf-modal'));
+}
+
+function disegnaPdfPolizze() {
+  const { righe, errori, dopo } = caricamentoPolizze;
+  const campo = (i, k, etichetta, tipo = 'text', extra = '') => `<label class="block text-[11px] font-semibold text-slate-600">${etichetta}
+      <input type="${tipo}" data-popdf="${i}" data-campo="${k}" value="${esc(righe[i].v[k] ?? '')}" ${extra} class="mt-0.5 w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400" /></label>`;
+  const blocchi = righe.map(({ d, incluso, doppia, v }, i) => `<div class="rounded-xl border ${incluso ? 'border-slate-200' : 'border-slate-200 opacity-60'} p-3 sm:p-4 space-y-3">
+      <div class="flex items-start justify-between gap-3">
+        <label class="flex items-start gap-2 cursor-pointer">
+          <input type="checkbox" data-popdf="${i}" data-campo="incluso" ${incluso ? 'checked' : ''} class="mt-0.5 w-4 h-4 accent-emerald-600" />
+          <span><span class="font-bold text-slate-900">${esc(d.file)}</span>
+            <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${d.tipoDoc === 'quietanza' ? 'bg-emerald-50 text-emerald-700' : 'bg-sky-50 text-sky-700'}">${d.tipoDoc === 'quietanza' ? 'Ricevuta / quietanza' : 'Scheda di polizza'}</span>
+            ${doppia ? '<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600">Già registrata</span>' : ''}
+            ${d.frazionamento ? `<span class="block text-[11px] text-slate-500 mt-0.5">Frazionamento ${esc(d.frazionamento.toLowerCase())}${d.pagato ? ` · pagata il ${esc(fmtData(d.pagato))}` : ''}</span>` : d.pagato ? `<span class="block text-[11px] text-slate-500 mt-0.5">Pagata il ${esc(fmtData(d.pagato))}</span>` : ''}</span>
+        </label>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        ${campo(i, 'data', 'Data pagamento', 'date')}
+        ${campo(i, 'compagnia', 'Compagnia')}
+        <div class="col-span-2">${campo(i, 'desc', 'Descrizione')}</div>
+        ${campo(i, 'numero', 'Numero polizza')}
+        <label class="block text-[11px] font-semibold text-slate-600">Tipo
+          <select data-popdf="${i}" data-campo="categoria" class="mt-0.5 w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white">
+            ${CATEGORIE_POLIZZA.map((k) => `<option value="${k}" ${k === v.categoria ? 'selected' : ''}>${esc(CATEGORIE_SPESA[k].label)} (${esc(CATEGORIE_SPESA[k].badge)})</option>`).join('')}
+          </select></label>
+        ${campo(i, 'premio', 'Premio pagato (€)', 'number', 'step="0.01" min="0"')}
+        <div class="col-span-2 grid grid-cols-2 gap-2">${campo(i, 'dal', 'Coperta dal', 'date')}${campo(i, 'al', 'al', 'date')}</div>
+      </div>
+      ${d.avvisi.length ? `<ul class="text-[11px] text-amber-800 list-disc pl-5 space-y-0.5">${d.avvisi.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}
+    </div>`);
+  if (errori.length) blocchi.push(`<div class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900"><strong>${errori.length === 1 ? 'Un file non letto' : `${errori.length} file non letti`}:</strong> ${errori.map((e) => `${esc(e.file)} (${esc(e.errore)})`).join('; ')}</div>`);
+  if (dopo.length) blocchi.push(`<div class="p-2.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-900">${dopo.length === 1 ? 'C\'è anche una fattura elettronica' : `Ci sono anche ${dopo.length} fatture elettroniche`}: dopo questi PDF si apre l'importazione XML.</div>`);
+  $('popdf-corpo').innerHTML = blocchi.join('');
+  aggiornaRiepilogoPolizze();
+}
+
+function aggiornaRiepilogoPolizze() {
+  const scelte = caricamentoPolizze.righe.filter((r) => r.incluso);
+  const tot = scelte.reduce((t, r) => t + (parseFloat(r.v.premio) || 0), 0);
+  $('popdf-riepilogo').textContent = scelte.length ? `${scelte.length} ${scelte.length === 1 ? 'polizza' : 'polizze'} da registrare, premi ${fmtEuro(tot)}.` : 'Nessuna polizza scelta.';
+  $('popdf-ok').textContent = scelte.length ? `Registra ${scelte.length}` : 'Chiudi';
+}
+
+const aggiornaCampoPolizza = (e) => {
+  const el = e.target;
+  if (!caricamentoPolizze || el.dataset.popdf == null) return;
+  const r = caricamentoPolizze.righe[+el.dataset.popdf];
+  if (!r) return;
+  if (el.dataset.campo === 'incluso') { r.incluso = el.checked; el.closest('.rounded-xl').classList.toggle('opacity-60', !el.checked); }
+  else r.v[el.dataset.campo] = el.value;
+  aggiornaRiepilogoPolizze();
+};
+document.addEventListener('input', aggiornaCampoPolizza);
+document.addEventListener('change', aggiornaCampoPolizza);
+
+function chiudiPdfPolizze() {
+  const dopo = caricamentoPolizze?.dopo || [];
+  caricamentoPolizze = null;
+  chiudi($('popdf-modal'));
+  if (dopo.length) apriImport(dopo, 'polizze');
+}
+
+async function confermaPdfPolizze() {
+  if (!caricamentoPolizze) return;
+  const scelte = caricamentoPolizze.righe.filter((r) => r.incluso);
+  for (const { v } of scelte) {
+    if (!v.data) { showToast('Manca la data del pagamento di una polizza.', true); return; }
+    if (!(parseFloat(v.premio) > 0)) { showToast(`Manca il premio di «${v.desc || v.compagnia || 'una polizza'}».`, true); return; }
+    if (v.dal && v.al && v.al < v.dal) { showToast(`«${v.desc}»: la scadenza viene prima dell'inizio della copertura.`, true); return; }
+  }
+  $('popdf-ok').disabled = true;
+  let id = Date.now(), persi = 0;
+  const nuove = [];
+  try {
+    for (const { d, v } of scelte) {
+      let allegato = '';
+      if (DESKTOP) {
+        const nome = [v.compagnia, v.numero, v.dal || v.data].filter(Boolean).join(' ') || d.file;
+        try { const r = await window.gestionale.salvaAllegato(`polizze/${annoDi(v.data) || 'senza-data'}`, nome, d.bytes); allegato = r.ok ? r.rel : ''; } catch (_) { allegato = ''; }
+        if (!allegato) persi++;
+      }
+      const voce = {
+        id: id++, data: v.data, desc: v.desc.trim() || 'Polizza', compagnia: v.compagnia.trim(), numero: v.numero.trim(),
+        dal: v.dal || '', al: v.al || '', provenienza: 'IT', categoria: catPolizza(v.categoria),
+        imponibile: Math.round(parseFloat(v.premio) * 100) / 100, iva: 0, sezione: 'polizze',
+      };
+      if (allegato) voce.allegato = allegato;
+      nuove.push(voce);
+    }
+  } finally { $('popdf-ok').disabled = false; }
+  appState.acquisti.push(...nuove);
+  appState.acquisti.sort((a, b) => a.data.localeCompare(b.data));
+  saveState();
+  const anni = [...new Set(nuove.map((x) => annoDi(x.data)))];
+  chiudiPdfPolizze();
+  popolaAnni();
+  if (anni.length === 1 && anni[0] && anni[0] !== appState.anno) cambiaAnnoRicerca(anni[0]);
+  else renderAll();
+  switchTab('polizze');
+  if (nuove.length) showToast(`${nuove.length === 1 ? 'Registrata 1 polizza' : `Registrate ${nuove.length} polizze`}.${persi ? ' Non è stato possibile copiare ' + persi + ' PDF nella cartella dei dati.' : ''}`, !!persi);
+}
+
+$('po-pdf-input').addEventListener('change', (e) => {
+  const lista = [...e.target.files]; e.target.value = '';
+  if (lista.length) apriPdfPolizze(lista);
+});
 
 // ---------------------------------------------------------------------------
 // Avvio

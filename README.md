@@ -58,6 +58,18 @@ l'app sposta subito tutte quelle della stessa ditta e crea una **regola**, così
 fatture importate di quel cliente o fornitore vengono proposte direttamente in quel tab. Le
 regole si vedono e si tolgono nelle Impostazioni.
 
+### PDF delle polizze e delle quietanze
+Le compagnie di solito non mandano fatture elettroniche ma ricevute di pagamento, quietanze e
+schede di polizza in PDF. Nel tab Polizze/Assicurazioni il pulsante **Carica PDF / ZIP** (o il
+trascinamento dei file sul tab) le legge, anche dentro archivi ZIP, pure annidati:
+compagnia, numero di polizza, premio lordo pagato, periodo coperto (anche scritto «g. m. a.»),
+data del pagamento e cosa copre, con la targa e il tipo di veicolo. Il tipo viene proposto da
+solo (autocarro o furgone = attività, autovettura = auto promiscua al 20%, vita e infortuni =
+personale). Prima di registrare, ogni campo si controlla e si corregge; una ricevuta già
+registrata (stessa polizza e stesso periodo) viene riconosciuta e saltata. Il PDF si copia in
+`allegati/polizze/<anno>` e si riapre dal pulsante 📎 della riga. Le fatture XML trovate negli
+ZIP passano all'importazione delle fatture elettroniche.
+
 ### PDF del Registro Corrispettivi
 Nel tab Corrispettivi il pulsante **Carica PDF corrispettivi** (o il trascinamento) legge i PDF
 prodotti dall'app Registro Corrispettivi:
@@ -91,7 +103,8 @@ esporta e si ripristina un backup.
 
 ## Struttura
 - `App/renderer/` — interfaccia (`index.html`, `app.js`, `fatturapa.js` lettore delle fatture elettroniche,
-  `corrispettivi-pdf.js` lettore dei PDF del Registro Corrispettivi, `lib/` pdf.js, `app.css` generato).
+  `corrispettivi-pdf.js` lettore dei PDF del Registro Corrispettivi, `polizze-pdf.js` lettore delle
+  ricevute e quietanze delle polizze, `lib/` pdf.js, `app.css` generato).
 - `App/src/tailwind.css` — sorgente degli stili: `npm run css` rigenera `renderer/app.css`
   (Tailwind gira in locale, niente CDN: l'app funziona senza rete).
 - `App/main.js`, `App/preload.js` — finestra, salvataggio, menu, aggiornamenti.

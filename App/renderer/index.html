@@ -600,8 +600,11 @@
     <section id="tab-polizze" class="tab-content hidden space-y-6">
       <div id="po-avvisi" class="hidden"></div>
       <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <p class="text-xs sm:text-sm text-amber-900"><strong>La compagnia ti manda la fattura elettronica?</strong> Importala: compagnia, importo e periodo di copertura si leggono dal file. Puoi anche trascinarla qui sopra.</p>
-        <button data-action="import-xml" data-contesto="polizze" class="shrink-0 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-semibold transition">⇪ Importa XML / P7M / ZIP</button>
+        <p class="text-xs sm:text-sm text-amber-900"><strong>Le compagnie mandano ricevute e quietanze in PDF.</strong> Caricale, anche dentro uno ZIP: compagnia, numero di polizza, premio e periodo di copertura si leggono dal file e il PDF resta allegato alla riga. Se arriva la fattura elettronica, importa l'XML. Puoi anche trascinare i file qui sopra.</p>
+        <div class="shrink-0 flex flex-wrap gap-2">
+          <button data-action="import-pdf-polizze" class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-semibold transition">📄 Carica PDF / ZIP</button>
+          <button data-action="import-xml" data-contesto="polizze" class="px-4 py-2 rounded-xl bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-sm font-semibold transition">⇪ Importa XML</button>
+        </div>
       </div>
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
         <div class="mb-5">
@@ -943,18 +946,40 @@
     </div>
   </div>
 
+  <div id="popdf-modal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs items-center justify-center p-2 sm:p-4">
+    <div class="bg-white rounded-2xl max-w-4xl w-full max-h-[94vh] flex flex-col shadow-2xl border border-slate-200" role="dialog" aria-modal="true" aria-labelledby="popdf-title">
+      <div class="px-5 sm:px-6 py-4 border-b border-slate-200 flex items-start justify-between gap-3">
+        <div>
+          <h3 id="popdf-title" class="text-lg font-bold text-slate-900">Polizze e quietanze in PDF</h3>
+          <p class="text-xs text-slate-500">Quello che si è letto da ogni PDF: controlla e correggi, poi registra.</p>
+        </div>
+        <button type="button" data-action="close-popdf" class="shrink-0 w-9 h-9 rounded-xl text-slate-500 hover:bg-slate-100" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="popdf-corpo" class="flex-1 overflow-auto px-5 sm:px-6 py-4 space-y-4 text-xs"></div>
+      <div class="px-5 sm:px-6 py-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <p id="popdf-riepilogo" class="text-xs text-slate-600"></p>
+        <div class="flex justify-end gap-3">
+          <button type="button" data-action="close-popdf" class="px-4 py-2 rounded-xl text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition">Annulla</button>
+          <button type="button" data-action="conferma-popdf" id="popdf-ok" class="px-5 py-2 rounded-xl text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition disabled:opacity-50">Registra</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="drop-overlay" class="fixed inset-0 z-[60] hidden bg-amber-500/20 backdrop-blur-xs items-center justify-center p-6 pointer-events-none">
     <div class="rounded-3xl border-4 border-dashed border-amber-500 bg-white/90 px-8 py-10 text-center shadow-2xl">
       <p class="text-2xl font-extrabold text-slate-900">Rilascia qui i file</p>
-      <p class="text-sm text-slate-600 mt-1">Fatture XML, P7M firmati, lo ZIP dell'Agenzia delle Entrate o i PDF del Registro Corrispettivi</p>
+      <p class="text-sm text-slate-600 mt-1">Fatture XML, P7M firmati, lo ZIP dell'Agenzia delle Entrate, i PDF del Registro Corrispettivi o, nel tab Polizze, ricevute e quietanze</p>
     </div>
   </div>
 
   <input type="file" id="xml-input" accept=".xml,.p7m,.zip,application/xml,text/xml,application/zip" multiple hidden />
   <input type="file" id="restore-input" accept="application/json,.json" hidden />
   <input type="file" id="pdf-input" accept=".pdf,application/pdf" multiple hidden />
+  <input type="file" id="po-pdf-input" accept=".pdf,.zip,application/pdf,application/zip" multiple hidden />
   <script src="fatturapa.js"></script>
   <script src="corrispettivi-pdf.js"></script>
+  <script src="polizze-pdf.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

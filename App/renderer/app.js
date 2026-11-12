@@ -33,6 +33,7 @@ const CATEGORIE_SPESA = {
 const IMPOSTAZIONI_BASE = () => ({
   configurate: false,
   ragione: 'La mia S.N.C.',
+  piva: '',
   attivita: 'Vendita al dettaglio • 2 soci + collaboratore familiare',
   s1Nome: 'Socio 1',
   s1Quota: 50,
@@ -206,6 +207,7 @@ $('confirm-ok').addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!$('confirm-modal').classList.contains('hidden')) { chiudi($('confirm-modal')); confirmCallback = null; }
+  else if (!$('import-modal').classList.contains('hidden')) { chiudi($('import-modal')); importazione = null; }
   else if (!$('settings-modal').classList.contains('hidden') && imp().configurate) chiudi($('settings-modal'));
 });
 
@@ -290,7 +292,7 @@ $('restore-input').addEventListener('change', async (e) => {
 // Impostazioni
 // ---------------------------------------------------------------------------
 const CAMPI_IMP = [
-  ['set-ragione', 'ragione', 't'], ['set-attivita', 'attivita', 't'],
+  ['set-ragione', 'ragione', 't'], ['set-piva', 'piva', 't'], ['set-attivita', 'attivita', 't'],
   ['set-s1-nome', 's1Nome', 't'], ['set-s1-quota', 's1Quota', 'n'],
   ['set-s2-nome', 's2Nome', 't'], ['set-collab-nome', 'collabNome', 't'],
   ['set-comm-lordo', 'commLordo', 'n'], ['set-comm-imp', 'commImp', 'n'], ['set-comm-sw', 'commSw', 'n'],
@@ -362,6 +364,9 @@ document.addEventListener('click', (e) => {
     case 'del-acquisto': deleteAcquisto(id); break;
     case 'del-parcella': deleteParcella(id); break;
     case 'export-csv': exportCsvAnno(); break;
+    case 'import-xml': scegliFileXml(a.dataset.contesto); break;
+    case 'close-import': chiudi($('import-modal')); importazione = null; break;
+    case 'conferma-import': confermaImport(); break;
   }
 });
 
@@ -370,6 +375,9 @@ document.addEventListener('click', (e) => {
 // ---------------------------------------------------------------------------
 function calcEntrataBreakdown(item) {
   const tot = parseFloat(item.totale) || 0;
+  /* le fatture importate dall'XML portano imponibile e IVA veri: valgono anche
+     con più aliquote (10%, 4%…) dove lo scorporo al 22% sbaglierebbe */
+  if (item.imponibile != null && item.iva != null) return { imponibile: +item.imponibile, iva: +item.iva, totale: tot };
   if (item.regime === 'IT_22') {
     const imponibile = tot / 1.22;
     return { imponibile, iva: tot - imponibile, totale: tot };
@@ -684,6 +692,248 @@ async function exportCsvAnno() {
 }
 
 // ---------------------------------------------------------------------------
+// Importazione delle fatture elettroniche (XML, P7M, ZIP)
+// ---------------------------------------------------------------------------
+/* Ogni fattura letta propone una destinazione; nell'anteprima la si può
+   cambiare prima di registrare. Il criterio:
+   - con la Partita IVA della società nelle impostazioni: se la società è il
+     cedente è una fattura emessa, se è il cessionario è ricevuta, altrimenti
+     non la riguarda;
+   - senza Partita IVA: decide il tab da cui si è partiti.
+   Le ricevute con ritenuta d'acconto sono parcelle di professionisti; le
+   autofatture TD17/TD18/TD19 sono acquisti dall'estero in reverse charge;
+   bollette, telefonia, carburante e simili vanno tra le spese. */
+let importazione = null;
+
+const DESTINAZIONI = {
+  fatture: 'Fatture emesse',
+  fornitori: 'Fatture fornitori',
+  spese: 'Abbonamenti/acquisti/spese',
+  commercialista: 'Commercialista',
+  salta: 'Non importare',
+};
+const pulisciPiva = (s) => String(s || '').toUpperCase().replace(/^IT/, '').replace(/[^0-9A-Z]/g, '');
+const chiaveFattura = (f) => `${pulisciPiva(f.cedente.piva || f.cedente.cf)}|${String(f.numero).trim().toUpperCase()}|${f.data}`;
+const NOTE_CREDITO = new Set(['TD04', 'TD08']);
+const TIPI_DOC = {
+  TD01: 'Fattura', TD02: 'Acconto', TD03: 'Acconto/parcella', TD04: 'Nota di credito', TD05: 'Nota di debito',
+  TD06: 'Parcella', TD16: 'Integrazione RC interno', TD17: 'Autofattura servizi estero', TD18: 'Autofattura beni UE',
+  TD19: 'Autofattura beni art. 17', TD20: 'Autofattura regolarizzazione', TD24: 'Fattura differita', TD25: 'Fattura differita', TD26: 'Cessione beni ammortizzabili',
+};
+
+/* Indovina la categoria di una spesa dal fornitore e dalle righe della fattura */
+function categoriaDa(f) {
+  const t = `${f.cedente.nome} ${f.descrizioni.join(' ')}`.toLowerCase();
+  const nature = f.riepiloghi.map((r) => r.natura).filter(Boolean);
+  if (/\b(tim|vodafone|wind|windtre|iliad|very mobile|ho\.? mobile|kena|poste ?mobile)\b|telefon|cellular|\bsim\b|mobile/.test(t)) return 'tel_mob_50_80';
+  if (/fastweb|fibra|adsl|internet|linea fissa|telefonia fissa|eolo|tiscali/.test(t)) return 'tel_fisso_100_80';
+  if (/caff[eè]|capsul|bar\b|ristor|acqua minerale|nespresso|lavazza/.test(t)) return 'caffe_0_75';
+  if (/gasolio|benzina|carburant|diesel|\beni\b|\bq8\b|\bip\b|tamoil|esso|autostrad|telepass/.test(t)) return 'furgone_100_100';
+  if (/assicura|polizza|\bbanca\b|bancari|commission|interess/.test(t) || (nature.length && nature.every((n) => n.startsWith('N4')))) return 'esente_0_100';
+  return 'merce_100_100';
+}
+const sembraSpesa = (f) => {
+  const t = `${f.cedente.nome} ${f.descrizioni.join(' ')}`.toLowerCase();
+  return categoriaDa(f) !== 'merce_100_100'
+    || /energia|elettric|\bluce\b|\bgas\b|enel|edison|a2a|hera|iren|sorgenia|acqua|bollett|abbonament|canone|software|licenz|hosting|dominio|pec|aruba|affitt|locazion|noleggi|leasing|pulizi|manutenz|vigilanz|rifiuti|tari/.test(t);
+};
+
+/* Senza Partita IVA nelle impostazioni: se un numero compare in tutte le
+   fatture del lotto (come cedente o come cessionario), è quasi certamente
+   quello della società. */
+function pivaPresunta(fatture) {
+  if (fatture.length < 2) return '';
+  const conta = new Map();
+  for (const f of fatture) {
+    for (const p of new Set([pulisciPiva(f.cedente.piva), pulisciPiva(f.cessionario.piva)].filter(Boolean))) conta.set(p, (conta.get(p) || 0) + 1);
+  }
+  const tutte = [...conta].filter(([, n]) => n === fatture.length).map(([p]) => p);
+  return tutte.length === 1 ? tutte[0] : '';
+}
+
+function proponiDestinazione(f, contesto, presunta = '') {
+  const mia = pulisciPiva(imp().piva) || presunta;
+  const ced = pulisciPiva(f.cedente.piva), ces = pulisciPiva(f.cessionario.piva || f.cessionario.cf);
+  let emessa;
+  if (mia) {
+    if (ced === mia && !['TD17', 'TD18', 'TD19', 'TD16', 'TD20'].includes(f.tipoDoc)) emessa = true;
+    else if (ces === mia || pulisciPiva(f.cessionario.cf) === mia || (ced === mia)) emessa = false;
+    else return { dest: 'salta', motivo: 'Non è intestata alla tua Partita IVA' };
+  } else {
+    emessa = contesto === 'fatture';
+  }
+  if (emessa) return { dest: 'fatture' };
+  if (f.ritenuta > 0 || (f.cassa && f.cassa.importo > 0)) return { dest: 'commercialista' };
+  if (['TD17', 'TD18', 'TD19'].includes(f.tipoDoc)) return { dest: 'fornitori' };
+  if (contesto === 'acquisti' || sembraSpesa(f)) return { dest: 'spese' };
+  return { dest: contesto === 'commercialista' ? 'commercialista' : 'fornitori' };
+}
+
+function giaPresenti() {
+  const k = new Set();
+  for (const x of [...appState.entrate, ...appState.acquisti, ...appState.parcelle]) if (x.xml) k.add(x.xml);
+  return k;
+}
+
+function scegliFileXml(contesto) {
+  $('xml-input').dataset.contesto = contesto || '';
+  $('xml-input').click();
+}
+$('xml-input').addEventListener('change', (e) => {
+  const lista = [...e.target.files]; e.target.value = '';
+  if (lista.length) apriImport(lista, e.target.dataset.contesto);
+});
+
+async function apriImport(lista, contesto) {
+  showToast(`Lettura di ${lista.length} file…`);
+  let r;
+  try { r = await window.FatturaPA.leggiFile(lista); }
+  catch (e) { showToast('Lettura non riuscita: ' + e.message, true); return; }
+  const presenti = giaPresenti();
+  const visti = new Set();
+  const presunta = pulisciPiva(imp().piva) ? '' : pivaPresunta(r.fatture);
+  const righe = r.fatture.map((f, i) => {
+    const chiave = chiaveFattura(f);
+    let p = proponiDestinazione(f, contesto, presunta);
+    if (presenti.has(chiave)) p = { dest: 'salta', motivo: 'Già importata' };
+    else if (visti.has(chiave)) p = { dest: 'salta', motivo: 'Doppione nello stesso import' };
+    visti.add(chiave);
+    const provenienza = f.tipoDoc === 'TD18' ? 'UE_MERCE' : (f.tipoDoc === 'TD17' || f.tipoDoc === 'TD19') ? 'CH_SERVIZI' : 'IT';
+    return { i, f, chiave, dest: p.dest, motivo: p.motivo || '', categoria: categoriaDa(f), provenienza };
+  });
+  importazione = { righe, errori: r.errori, contesto, presunta };
+  if (!righe.length) {
+    showToast(r.errori.length ? `Nessuna fattura letta: ${r.errori[0].file} — ${r.errori[0].errore}` : 'Nei file scelti non c\'è nessuna fattura elettronica.', true);
+    return;
+  }
+  disegnaImport();
+  apri($('import-modal'));
+}
+
+function disegnaImport() {
+  const { righe, errori, presunta } = importazione;
+  const opzDest = (sel) => Object.entries(DESTINAZIONI).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
+  const opzCat = (sel) => Object.entries(CATEGORIE_SPESA).map(([k, r]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${esc(r.label)} (${esc(r.badge)})</option>`).join('');
+  const segno = (f) => (NOTE_CREDITO.has(f.tipoDoc) ? -1 : 1);
+
+  $('import-righe').innerHTML = righe.map((r) => {
+    const f = r.f, s = segno(f);
+    const emessa = r.dest === 'fatture';
+    const controparte = emessa ? f.cessionario : f.cedente;
+    const conCategoria = r.dest === 'fornitori' || r.dest === 'spese';
+    const note = [];
+    if (r.motivo) note.push(`<span class="text-amber-700 font-semibold">${esc(r.motivo)}</span>`);
+    if (NOTE_CREDITO.has(f.tipoDoc)) note.push('<span class="text-indigo-700">Nota di credito: importi in negativo</span>');
+    if (f.ritenuta > 0) note.push(`Ritenuta ${fmtEuro(f.ritenuta)}`);
+    if (f.divisa !== 'EUR') note.push(`<span class="text-rose-600">In ${esc(f.divisa)}: controlla gli importi</span>`);
+    if (annoDi(f.data) !== appState.anno) note.push(`Anno ${annoDi(f.data)}`);
+    return `<tr class="${r.dest === 'salta' ? 'opacity-50' : ''} align-top">
+      <td class="py-2 px-2 whitespace-nowrap">${fmtData(f.data)}</td>
+      <td class="py-2 px-2 min-w-[140px]"><div class="font-semibold text-slate-900">n. ${esc(f.numero)}</div><div class="text-[11px] text-slate-500">${esc(TIPI_DOC[f.tipoDoc] || f.tipoDoc)} · <span title="${esc(f.file)}">${esc(f.file.length > 28 ? f.file.slice(0, 26) + '…' : f.file)}</span></div></td>
+      <td class="py-2 px-2 min-w-[180px]"><div class="font-medium text-slate-900">${esc(controparte.nome)}</div><div class="text-[11px] text-slate-500">${esc(controparte.piva ? 'P.IVA ' + controparte.piva : controparte.cf ? 'CF ' + controparte.cf : '')}</div>${note.length ? `<div class="text-[11px] mt-1 space-x-2">${note.join(' · ')}</div>` : ''}</td>
+      <td class="py-2 px-2 text-right whitespace-nowrap">${fmtEuro(s * f.imponibile)}</td>
+      <td class="py-2 px-2 text-right whitespace-nowrap">${fmtEuro(s * f.iva)}</td>
+      <td class="py-2 px-2 text-right whitespace-nowrap font-bold">${fmtEuro(s * f.totale)}</td>
+      <td class="py-2 px-2"><select data-imp="${r.i}" data-campo="dest" class="px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs">${opzDest(r.dest)}</select></td>
+      <td class="py-2 px-2">${conCategoria ? `<select data-imp="${r.i}" data-campo="categoria" class="w-56 px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs">${opzCat(r.categoria)}</select>` : '<span class="text-slate-400">—</span>'}</td>
+    </tr>`;
+  }).join('');
+
+  const avvisi = [];
+  if (presunta) avvisi.push(`<div class="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">Nelle impostazioni manca la Partita IVA della società: dai file sembra <strong>${esc(presunta)}</strong> e l'ho usata per distinguere emesse e ricevute. Se è giusta, inseriscila nelle <strong>Impostazioni</strong>.</div>`);
+  else if (!pulisciPiva(imp().piva)) avvisi.push(`<div class="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">Non hai ancora inserito la <strong>Partita IVA della società</strong> nelle impostazioni: senza, emesse e ricevute si distinguono solo dal tab da cui sei partito. Controlla la colonna «Dove va».</div>`);
+  if (righe.some((r) => ['TD17', 'TD18', 'TD19'].includes(r.f.tipoDoc) && r.dest !== 'salta')) avvisi.push('<div class="p-2.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-900">Ci sono <strong>autofatture TD17/TD18/TD19</strong>: registrano già l\'acquisto dall\'estero in reverse charge. Non inserire anche la fattura del fornitore estero, o il costo conterebbe due volte.</div>');
+  if (errori.length) avvisi.push(`<div class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900"><strong>${errori.length} file non letti:</strong> ${errori.slice(0, 5).map((e) => `${esc(e.file)} (${esc(e.errore)})`).join('; ')}${errori.length > 5 ? '…' : ''}</div>`);
+  $('import-avvisi').innerHTML = avvisi.join('');
+
+  const daFare = righe.filter((r) => r.dest !== 'salta').length;
+  $('import-sub').textContent = `${righe.length} fatture lette. Controlla dove finisce ognuna, poi conferma.`;
+  $('import-riepilogo').textContent = `${daFare} da registrare, ${righe.length - daFare} saltate.`;
+  $('import-ok').textContent = daFare ? `Registra ${daFare} fatture` : 'Niente da registrare';
+  $('import-ok').disabled = !daFare;
+  $('import-ok').classList.toggle('opacity-50', !daFare);
+}
+
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  if (!importazione || el.dataset.imp == null) return;
+  const r = importazione.righe[+el.dataset.imp];
+  if (!r) return;
+  r[el.dataset.campo] = el.value;
+  if (el.dataset.campo === 'dest') { r.motivo = el.value === 'salta' ? r.motivo : ''; disegnaImport(); }
+});
+
+function confermaImport() {
+  if (!importazione) return;
+  const conta = { fatture: 0, fornitori: 0, spese: 0, commercialista: 0 };
+  let id = Date.now();
+  for (const r of importazione.righe) {
+    if (r.dest === 'salta') continue;
+    const f = r.f;
+    const s = NOTE_CREDITO.has(f.tipoDoc) ? -1 : 1;
+    const nc = s < 0 ? 'Nota di credito ' : 'Fatt. ';
+    if (r.dest === 'fatture') {
+      const nature = f.riepiloghi.map((x) => x.natura);
+      const regime = nature.some((n) => n === 'N3.1') ? 'CH_ART8' : nature.some((n) => n === 'N3.2') ? 'UE_ART41' : 'IT_22';
+      appState.entrate.push({
+        id: id++, data: f.data, tipo: 'Fattura', desc: `${nc}n. ${f.numero} - ${f.cessionario.nome}`, regime,
+        totale: s * f.totale, imponibile: s * f.imponibile, iva: s * f.iva, xml: r.chiave,
+      });
+    } else if (r.dest === 'commercialista') {
+      /* nell'XML l'imponibile dei riepiloghi comprende già la cassa:
+         l'onorario è quello che resta togliendola */
+      const cassa = f.cassa ? f.cassa.importo : 0;
+      const esenti = f.riepiloghi.filter((x) => (x.natura || '').startsWith('N1')).reduce((t, x) => t + x.imponibile, 0);
+      const imponibileIva = f.riepiloghi.filter((x) => !(x.natura || '').startsWith('N1')).reduce((t, x) => t + x.imponibile, 0);
+      appState.parcelle.push({
+        id: id++, data: f.data, desc: `${f.cedente.nome} - ${nc}n. ${f.numero}`,
+        regime: f.cedente.regime === 'RF19' ? 'forfettario' : 'ordinario',
+        onorario: s * Math.max(0, imponibileIva - cassa), cassaPct: f.cassa ? f.cassa.aliquota : 0, esenti: s * esenti,
+        pagamento: '', ritenutaVersata: false, xml: r.chiave,
+      });
+    } else {
+      const rc = r.provenienza !== 'IT';
+      appState.acquisti.push({
+        id: id++, data: f.data, desc: `${f.cedente.nome} - ${nc}n. ${f.numero}`,
+        provenienza: r.provenienza, categoria: r.categoria,
+        imponibile: s * f.imponibile, iva: rc ? 0 : s * f.iva,
+        sezione: r.dest === 'fornitori' ? 'fornitori' : 'spese', xml: r.chiave,
+      });
+    }
+    conta[r.dest]++;
+  }
+  for (const k of ['entrate', 'acquisti', 'parcelle']) appState[k].sort((a, b) => a.data.localeCompare(b.data));
+  appState.isDemo = false;
+  saveState();
+  chiudi($('import-modal'));
+  const tot = Object.values(conta).reduce((a, b) => a + b, 0);
+  const dove = Object.entries(conta).filter(([, n]) => n).map(([k, n]) => `${n} in ${DESTINAZIONI[k]}`).join(', ');
+  // si apre il tab dove è finita la maggior parte delle fatture
+  const principale = Object.entries(conta).sort((a, b) => b[1] - a[1])[0][0];
+  const tabDi = { fatture: 'fatture', fornitori: 'fornitori', spese: 'acquisti', commercialista: 'commercialista' };
+  importazione = null;
+  popolaAnni(); renderAll();
+  if (tot) switchTab(tabDi[principale]);
+  showToast(`Importate ${tot} fatture: ${dove}.`);
+}
+
+/* Trascinare i file sulla finestra. Senza questo, Electron aprirebbe il file
+   lasciato cadere al posto dell'app. */
+let trascinamenti = 0;
+const haFile = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+window.addEventListener('dragenter', (e) => { if (!haFile(e)) return; e.preventDefault(); trascinamenti++; apri($('drop-overlay')); });
+window.addEventListener('dragover', (e) => { if (haFile(e)) e.preventDefault(); });
+window.addEventListener('dragleave', () => { if (--trascinamenti <= 0) { trascinamenti = 0; chiudi($('drop-overlay')); } });
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  trascinamenti = 0; chiudi($('drop-overlay'));
+  const lista = [...(e.dataTransfer?.files || [])].filter((f) => /\.(xml|p7m|zip)$/i.test(f.name));
+  if (!lista.length) { showToast('Trascina file .xml, .p7m o .zip di fatture elettroniche.', true); return; }
+  const attivo = document.querySelector('.tab-content:not(.hidden)')?.id.replace('tab-', '');
+  apriImport(lista, attivo);
+});
+
+// ---------------------------------------------------------------------------
 // Controlli collegati allo stato
 // ---------------------------------------------------------------------------
 function popolaAnni() {
@@ -768,6 +1018,7 @@ function renderAll() {
   const acquisti = appState.acquisti.filter((x) => annoDi(x.data) === anno);
   const parcelle = appState.parcelle.filter((x) => annoDi(x.data) === anno);
   const ivaTrim = { 1: { debito: 0, credito: 0 }, 2: { debito: 0, credito: 0 }, 3: { debito: 0, credito: 0 }, 4: { debito: 0, credito: 0 } };
+  const XML_BADGE = '<span class="ml-1.5 align-middle px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold" title="Importata dalla fattura elettronica">XML</span>';
   const vuota = (col, testo) => `<tr><td colspan="${col}" class="py-8 text-center text-slate-400 text-xs">${testo}</td></tr>`;
   const btnElimina = (azione, id) => `<td class="py-3 px-4 text-center"><button data-action="${azione}" data-id="${id}" class="text-rose-500 hover:text-rose-700 text-xs font-semibold px-2 py-1 rounded-lg hover:bg-rose-50">Elimina</button></td>`;
 
@@ -789,7 +1040,7 @@ function renderAll() {
     htmlEnt[p] += `<tr class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
-      <td class="py-3 px-4 font-medium text-slate-900 min-w-[200px]">${esc(item.desc)}</td>
+      <td class="py-3 px-4 font-medium text-slate-900 min-w-[200px]">${esc(item.desc)}${item.xml ? XML_BADGE : ''}</td>
       ${p === 'fe' ? `<td class="py-3 px-4">${REGIME[item.regime] || esc(item.regime)}</td>` : ''}
       <td class="py-3 px-4 text-right font-semibold text-slate-900 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
       <td class="py-3 px-4 text-right text-rose-600 whitespace-nowrap">${fmtEuro(b.iva)}</td>
@@ -826,7 +1077,7 @@ function renderAll() {
     htmlSp[p] += `<tr class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
-      <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}</div>${PROV[item.provenienza] || ''}</td>
+      <td class="py-3 px-4 min-w-[220px]"><div class="font-medium text-slate-900">${esc(item.desc)}${item.xml ? XML_BADGE : ''}</div>${PROV[item.provenienza] || ''}</td>
       <td class="py-3 px-4 text-xs text-slate-600 min-w-[140px]">${b.rule.badge}</td>
       <td class="py-3 px-4 text-right font-medium text-slate-800 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
       <td class="py-3 px-4 text-right text-slate-500 whitespace-nowrap">${fmtEuro(b.ivaDocumento)}</td>
@@ -873,7 +1124,7 @@ function renderAll() {
     }
     html += `<tr class="hover:bg-slate-50/80 transition align-top">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
-      <td class="py-3 px-4 font-medium text-slate-900 min-w-[220px]">${esc(item.desc)}${item.regime === 'forfettario' ? '<div class="text-[10px] font-bold text-slate-500 mt-1">FORFETTARIO</div>' : ''}</td>
+      <td class="py-3 px-4 font-medium text-slate-900 min-w-[220px]">${esc(item.desc)}${item.xml ? XML_BADGE : ''}${item.regime === 'forfettario' ? '<div class="text-[10px] font-bold text-slate-500 mt-1">FORFETTARIO</div>' : ''}</td>
       <td class="py-3 px-4 text-right whitespace-nowrap">${fmtEuro(b.imponibileIva)}</td>
       <td class="py-3 px-4 text-right text-emerald-700 whitespace-nowrap">${fmtEuro(b.iva)}</td>
       <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.totale)}</td>

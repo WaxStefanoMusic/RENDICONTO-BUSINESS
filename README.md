@@ -20,6 +20,17 @@ S.N.C.:
    INPS commercianti, IRAP.
 9. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
 
+### Importazione delle fatture elettroniche
+Nei tab Fatture Emesse, Fornitori, Abbonamenti/Acquisti/Spese e Commercialista il pulsante
+**Importa fatture XML** (o il trascinamento dei file sulla finestra) legge le fatture
+elettroniche in formato FatturaPA: `.xml`, `.p7m` firmati e gli `.zip` scaricati in blocco da
+«Fatture e Corrispettivi», anche annidati. Data, numero, controparte, imponibile e IVA per
+aliquota, ritenuta e cassa previdenziale si leggono dal file; l'app propone dove registrare
+ognuna (emessa o ricevuta in base alla Partita IVA della società, parcelle con ritenuta nel tab
+Commercialista, autofatture TD17/TD18/TD19 in reverse charge, bollette e telefonia tra le
+spese) e chiede conferma. Note di credito in negativo, doppioni e file di metadati dello SDI
+vengono riconosciuti. Tutto avviene sul computer: nessun file viene inviato.
+
 Le cifre sono **stime di controllo**: non sostituiscono le dichiarazioni ufficiali. Aliquote e
 soglie si modificano nelle impostazioni e vanno verificate ogni anno.
 
@@ -33,7 +44,7 @@ copia di sicurezza al giorno (le ultime 30) in `copie-di-sicurezza`. Dal menu **
 esporta e si ripristina un backup.
 
 ## Struttura
-- `App/renderer/` — interfaccia (`index.html`, `app.js`, `app.css` generato).
+- `App/renderer/` — interfaccia (`index.html`, `app.js`, `fatturapa.js` lettore delle fatture elettroniche, `app.css` generato).
 - `App/src/tailwind.css` — sorgente degli stili: `npm run css` rigenera `renderer/app.css`
   (Tailwind gira in locale, niente CDN: l'app funziona senza rete).
 - `App/main.js`, `App/preload.js` — finestra, salvataggio, menu, aggiornamenti.

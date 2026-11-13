@@ -1464,6 +1464,7 @@ function renderTesti() {
   $('hdr-ragione').textContent = `${s.ragione} — Contabilità & Fisco`;
   $('hdr-attivita').textContent = s.attivita || '';
   $('hdr-badge').textContent = `${s.regime === 'ordinaria' ? 'Ordinaria' : 'Semplificata'} ${anno}`;
+  $('dash-regime').textContent = s.regime === 'ordinaria' ? 'Contabilità ordinaria' : 'Contabilità semplificata';
   document.querySelectorAll('[data-anno]').forEach((el) => { el.textContent = anno; });
   document.querySelectorAll('[data-s1-nome]').forEach((el) => { el.textContent = s.s1Nome; });
   document.querySelectorAll('[data-s2-nome]').forEach((el) => { el.textContent = s.s2Nome; });
@@ -1490,8 +1491,21 @@ function renderTesti() {
   $('txt-guida-strategia').innerHTML = `Usa questa app tutto l'anno per tenere sotto controllo IVA trimestrale, spese deducibili e tasse previste. A fine anno puoi compilare da solo i modelli gratuiti dell'Agenzia delle Entrate oppure portare il riepilogo già ordinato a un CAF o a un commercialista online chiedendo solo l'invio telematico (in media <strong>600 € – 900 €</strong>${+s.commLordo > 0 ? ` invece di ${fmtEuro(s.commLordo)}` : ''}).`;
 }
 
+/* Per saldo e acconti serve l'anno prima: gli acconti dovuti (se non inseriti)
+   e il credito avanzato. Si calcola prima quello, fino a 3 anni indietro. */
+let profonditaCalcolo = 0;
+const versamentiAnno = {};
+const annoConDati = (a) => Object.keys(appState.fiscale[a] || {}).length > 0 ||
+  appState.entrate.some((x) => annoDi(x.data) === a) || appState.acquisti.some((x) => annoDi(x.data) === a);
+
 function renderAll() {
   const anno = appState.anno;
+  let precedente = null;
+  if (profonditaCalcolo < 3 && annoConDati(anno - 1)) {
+    profonditaCalcolo++;
+    appState.anno = anno - 1;
+    try { renderAll(); precedente = versamentiAnno[anno - 1]; } finally { appState.anno = anno; profonditaCalcolo--; }
+  }
   const s = imp();
   renderTesti();
   $('demo-banner').classList.toggle('hidden', !appState.isDemo);
@@ -1742,20 +1756,29 @@ function renderAll() {
   const righeVersamenti = (k, irpef, inpsEcc, add, rit = 0) => {
     // le ritenute subite riducono l'IRPEF da versare, e quindi anche gli acconti
     irpef = irpef - rit;
-    const a = accontiVersati(k);
-    const accIrpef = +a.irpef || 0, accInps = +a.inps || 0, accCom = +a.com || 0;
+    /* Acconti dell'anno: quelli inseriti; se mancano, quelli dovuti in base
+       all'anno prima (metodo storico), pagati o coperti dai crediti. */
+    const a = accontiVersati(k), prec = precedente && precedente[k];
+    const inseriti = ['irpef', 'inps', 'com'].some((c) => a[c] !== '' && a[c] != null);
+    const stimati = !inseriti && prec ? prec.dett : null;
+    const accIrpef = +(stimati || a).irpef || 0, accInps = +(stimati || a).inps || 0, accCom = +(stimati || a).com || 0;
     const sIrpef = irpef - accIrpef, sInps = inpsEcc - accInps, sCom = add.comunale - accCom;
     const baseAcc = Math.max(0, irpef);
     const acc1 = baseAcc * 0.5 + inpsEcc * 0.5 + add.comunale * 0.3;
     const acc2 = baseAcc * 0.5 + inpsEcc * 0.5;
     const giugno = Math.max(0, sIrpef) + Math.max(0, sInps) + add.regionale + Math.max(0, sCom) + acc1;
-    const crediti = Math.max(0, -sIrpef) + Math.max(0, -sInps) + Math.max(0, -sCom);
+    const riporto = prec ? prec.resto : 0;               // credito avanzato dall'anno prima
+    const crediti = Math.max(0, -sIrpef) + Math.max(0, -sInps) + Math.max(0, -sCom) + riporto;
+    versamenti[k] = { saldo: giugno - acc1, acc1, acc2, riporto, stimati: !!stimati,
+      dett: { irpef: baseAcc, inps: inpsEcc, com: add.comunale * 0.3 }, ...compensa(giugno, acc2, crediti) };
     return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
       titoloInps(`Versamenti F24 per il ${appState.anno}`) +
       (rit > 0 ? riga('Ritenute d\'acconto attribuite:', '- ' + fmtEuro(rit), 'text-emerald-700') : '') +
-      (accIrpef + accInps + accCom > 0
+      (stimati ? riga(`Acconti del ${appState.anno} (dovuti in base al ${appState.anno - 1}):`, fmtEuro(accIrpef + accInps + accCom), 'text-slate-500')
+        : accIrpef + accInps + accCom > 0
         ? riga(`Acconti già versati nel ${appState.anno}:`, fmtEuro(accIrpef + accInps + accCom), 'text-slate-500')
         : riga(`Acconti versati nel ${appState.anno}:`, 'non inseriti', 'text-amber-700')) +
+      (riporto > 0 ? riga(`Credito avanzato dal ${appState.anno - 1}:`, fmtEuro(riporto), 'text-emerald-700') : '') +
       riga(`Saldo IRPEF (giugno ${annoDopo}):`, importoSaldo(sIrpef), clsSaldo(sIrpef)) +
       (inpsEcc > 0 || accInps > 0 ? riga('Saldo INPS oltre il minimale:', importoSaldo(sInps), clsSaldo(sInps)) : '') +
       riga('Addizionale regionale (solo a saldo):', fmtEuro(add.regionale)) +
@@ -1767,9 +1790,14 @@ function renderAll() {
   /* I crediti dei saldi si usano nell'F24 (compensazione) per pagare quanto
      dovuto a giugno; quello che avanza copre il 2° acconto di novembre e poi
      resta disponibile. Ogni contribuente compensa solo i propri crediti. */
-  const righeCompensazione = (giugno, novembre, crediti, avvisoVisto) => {
+  const compensa = (giugno, novembre, crediti) => {
     const usatoGiu = Math.min(crediti, giugno), restoGiu = crediti - usatoGiu;
     const usatoNov = Math.min(restoGiu, novembre), resto = restoGiu - usatoNov;
+    return { usatoGiu, usatoNov, resto, daGiu: giugno - usatoGiu, daNov: novembre - usatoNov };
+  };
+  const versamenti = {};   // per il riquadro del cruscotto
+  const righeCompensazione = (giugno, novembre, crediti, avvisoVisto) => {
+    const { usatoGiu, usatoNov, resto } = compensa(giugno, novembre, crediti);
     const totale = (lbl, v, cls) => `<div class="flex justify-between gap-3 text-sm"><span class="font-bold text-slate-900">${lbl}</span><span class="font-extrabold ${cls} whitespace-nowrap">${fmtEuro(v)}</span></div>`;
     if (crediti <= 0) return totale(`Da versare a giugno ${annoDopo}:`, giugno, 'text-indigo-600') + '</div>';
     return riga(`Dovuto a giugno ${annoDopo} prima della compensazione:`, fmtEuro(giugno), 'text-slate-500') +
@@ -1834,15 +1862,23 @@ function renderAll() {
     riga(`IRAP (${fmtPct(s.irap)}):`, fmtEuro(irapSocieta), 'font-bold text-slate-900') +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Carico complessivo (soci + IRAP):</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totaleTasse)}</span></div>` +
     (() => {
-      const acc = +fiscaleAnno().irap || 0, saldo = irapSocieta - acc;
+      const valIrap = fiscaleAnno().irap, prec = precedente && precedente.soc;
+      const stimato = (valIrap === '' || valIrap == null) && prec;
+      const acc = stimato ? prec.acc1 + prec.acc2 : +valIrap || 0, saldo = irapSocieta - acc;
+      const riporto = prec ? prec.resto : 0, crediti = Math.max(0, -saldo) + riporto;
+      versamenti.soc = { saldo: Math.max(0, saldo), acc1: irapSocieta * 0.5, acc2: irapSocieta * 0.5, riporto, stimati: !!stimato,
+        ...compensa(Math.max(0, saldo) + irapSocieta * 0.5, irapSocieta * 0.5, crediti) };
       return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
         titoloInps(`IRAP: versamenti F24 per il ${appState.anno}`) +
-        (acc > 0 ? riga(`Acconti IRAP versati nel ${appState.anno}:`, fmtEuro(acc), 'text-slate-500') : riga(`Acconti IRAP versati nel ${appState.anno}:`, 'non inseriti', 'text-amber-700')) +
+        (stimato ? riga(`Acconti IRAP del ${appState.anno} (dovuti in base al ${appState.anno - 1}):`, fmtEuro(acc), 'text-slate-500')
+          : acc > 0 ? riga(`Acconti IRAP versati nel ${appState.anno}:`, fmtEuro(acc), 'text-slate-500') : riga(`Acconti IRAP versati nel ${appState.anno}:`, 'non inseriti', 'text-amber-700')) +
+        (riporto > 0 ? riga(`Credito IRAP avanzato dal ${appState.anno - 1}:`, fmtEuro(riporto), 'text-emerald-700') : '') +
         riga(`Saldo IRAP (giugno ${annoDopo}):`, importoSaldo(saldo), clsSaldo(saldo)) +
         riga(`1° acconto IRAP ${annoDopo} (giugno):`, fmtEuro(irapSocieta * 0.5)) +
         riga(`2° acconto IRAP ${annoDopo} (novembre):`, fmtEuro(irapSocieta * 0.5)) +
-        righeCompensazione(Math.max(0, saldo) + irapSocieta * 0.5, irapSocieta * 0.5, Math.max(0, -saldo), false);
+        righeCompensazione(Math.max(0, saldo) + irapSocieta * 0.5, irapSocieta * 0.5, crediti, false);
     })();
+  versamentiAnno[anno] = versamenti;
 
   // 6. Cruscotto
   $('kpi-ricavi').textContent = fmtEuro(totRicaviImp);
@@ -1885,6 +1921,7 @@ function renderAll() {
       </div>
       <p class="text-[11px] text-slate-500 mt-1">Nessun compenso. I contributi INPS si attivano nel tab Imposte Soci &amp; INPS.</p>
     </div>`;
+  disegnaVersamentiDash(versamenti, annoDopo, s);
   disegnaAvvisiPolizze();
   applicaRicerche();
 }
@@ -2690,6 +2727,39 @@ function polizzeDaRinnovare() {
   return tutte.map((x) => ({ x, st: statoPolizza(x, tutte) }))
     .filter(({ st }) => st && (st.tipo === 'in-scadenza' || (st.tipo === 'scaduta' && st.giorni >= -60)))
     .sort((a, b) => a.st.giorni - b.st.giorni);
+}
+
+/* Cruscotto: quanto pagheranno la società e i soci l'anno dopo per le imposte
+   dell'anno scelto (saldo + acconti), già al netto dei crediti in compensazione. */
+function disegnaVersamentiDash(v, annoDopo, s) {
+  const anno = annoDopo - 1;
+  const r = (lbl, val, cls = 'text-slate-900') => `<div class="flex justify-between gap-3 text-xs"><span class="text-slate-600">${lbl}</span><span class="font-semibold whitespace-nowrap ${cls}">${val}</span></div>`;
+  const scheda = (titolo, sotto, x) => !x ? '' :
+    `<div class="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+      <div><p class="text-sm font-bold text-slate-900">${esc(titolo)}</p><p class="text-[11px] text-slate-500">${sotto}</p></div>
+      ${r(`Saldo ${anno} (giugno):`, fmtEuro(x.saldo))}
+      ${r(`1° acconto ${annoDopo} (giugno):`, fmtEuro(x.acc1))}
+      ${x.usatoGiu > 0 ? r('Crediti usati nell\'F24:', '- ' + fmtEuro(x.usatoGiu), 'text-emerald-700') : ''}
+      <div class="flex justify-between gap-3 text-sm pt-1 border-t border-slate-200"><span class="font-bold text-slate-900">Giugno ${annoDopo}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(x.daGiu)}</span></div>
+      ${r(`2° acconto (novembre ${annoDopo}):`, fmtEuro(x.daNov) + (x.usatoNov > 0 ? ` <span class="font-normal text-emerald-700">(- ${fmtEuro(x.usatoNov)} di credito)</span>` : ''))}
+      <div class="flex justify-between gap-3 text-sm pt-1 border-t border-slate-200"><span class="font-bold text-slate-900">Totale ${annoDopo}:</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(x.daGiu + x.daNov)}</span></div>
+      ${x.resto > 0 ? r('Credito che avanza:', fmtEuro(x.resto), 'text-emerald-700') : ''}
+      ${x.riporto > 0 || x.stimati ? `<p class="text-[11px] text-slate-500">${[x.riporto > 0 ? `Comprende ${fmtEuro(x.riporto)} di credito avanzato dal ${anno - 1}.` : '', x.stimati ? `Acconti ${anno} non inseriti: uso quelli dovuti in base al ${anno - 1}.` : ''].filter(Boolean).join(' ')}</p>` : ''}
+    </div>`;
+  const tot = ['soc', 's1', 's2'].reduce((t, k) => t + (v[k] ? v[k].daGiu + v[k].daNov : 0), 0);
+  $('dash-versamenti').innerHTML =
+    `<div class="flex flex-wrap items-start justify-between gap-2">
+      <div>
+        <h2 class="text-base font-bold text-slate-900">Imposte del ${anno} da pagare nel ${annoDopo}</h2>
+        <p class="text-xs text-slate-500">Saldo e acconti con l'F24 di giugno e novembre, già al netto dei crediti in compensazione. L'INPS fisso sul minimale si paga a rate nell'anno stesso e qui non c'è.</p>
+      </div>
+      <div class="text-right"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Totale ${annoDopo}</p><p class="text-xl font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(tot)}</p></div>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+      ${scheda('Società', 'IRAP', v.soc)}
+      ${scheda(s.s1Nome, 'IRPEF, addizionali e INPS oltre il minimale', v.s1)}
+      ${scheda(s.s2Nome, 'IRPEF, addizionali e INPS oltre il minimale', v.s2)}
+    </div>`;
 }
 
 function disegnaAvvisiPolizze() {

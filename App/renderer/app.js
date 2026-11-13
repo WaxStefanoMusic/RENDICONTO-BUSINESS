@@ -26,6 +26,7 @@ const CATEGORIE_SPESA = {
   auto_40_20:       { label: 'Auto promiscua soci & carburante / manutenzione',           ivaDetPct: 0.4, costoDedPct: 0.2,  badge: 'IVA 40% | Costo 20%' },
   esente_0_100:     { label: 'Spese bancarie / commissioni / altre esenti art. 10',       ivaDetPct: 0.0, costoDedPct: 1.0,  badge: 'Esente IVA | Costo 100%' },
   trasferta_0_75:   { label: 'Vitto e alloggio in trasferta (ristoranti, hotel)',       ivaDetPct: 1.0, costoDedPct: 0.75, badge: 'IVA 100% con fattura | Costo 75%' },
+  interessi_passivi: { label: 'Interessi passivi bancari (fido, scoperto di conto)',   ivaDetPct: 0.0, costoDedPct: 1.0,  badge: 'Esente IVA | Costo 100% (non deducibile IRAP)' },
   // polizze (tab Polizze/Assicurazioni): premi esenti IVA art. 10
   polizza_100:         { label: 'Polizza dell\'attività (RC, incendio/furto negozio, merce, furgone N1)', ivaDetPct: 0.0, costoDedPct: 1.0, badge: 'Esente IVA | Costo 100%', breve: 'Attività' },
   polizza_auto_20:     { label: 'Polizza auto usata anche privatamente dai soci (RCA, furto/incendio)', ivaDetPct: 0.0, costoDedPct: 0.2, badge: 'Esente IVA | Costo 20%', breve: 'Auto promiscua' },
@@ -72,6 +73,7 @@ const STATO_VUOTO = () => ({
   regole: [],                  // controparte -> tab dove vanno sempre le sue fatture
   cartaEstratti: [],           // estratti conto della carta caricati: periodo, saldi, PDF
   cartaCategorie: {},          // esercente -> tipo di spesa scelto a mano, per i prossimi estratti
+  scalari: [],                 // estratti conto scalari caricati: fido, tasso, interessi, oneri, saldo
 });
 
 /* Le spese registrate prima della divisione in due tab non sapevano dove
@@ -137,6 +139,7 @@ function normalizza(s) {
   st.regole = Array.isArray(st.regole) ? st.regole.filter((r) => r && r.dest && (r.piva || r.nome)) : [];
   if (typeof st.registroRiepiloghi !== 'object' || st.registroRiepiloghi === null || Array.isArray(st.registroRiepiloghi)) st.registroRiepiloghi = {};
   st.cartaEstratti = Array.isArray(st.cartaEstratti) ? st.cartaEstratti : [];
+  st.scalari = Array.isArray(st.scalari) ? st.scalari : [];
   if (typeof st.cartaCategorie !== 'object' || st.cartaCategorie === null || Array.isArray(st.cartaCategorie)) st.cartaCategorie = {};
   // il credito IVA prima era un numero unico: diventa per anno
   if (typeof st.creditoIvaPrec !== 'object' || st.creditoIvaPrec === null) {
@@ -242,6 +245,7 @@ document.addEventListener('keydown', (e) => {
   else if (!$('pdfc-modal').classList.contains('hidden')) { chiudi($('pdfc-modal')); caricamentoPdf = null; }
   else if (!$('popdf-modal').classList.contains('hidden')) chiudiPdfPolizze();
   else if (!$('carta-modal').classList.contains('hidden')) chiudiEstrattoCarta();
+  else if (!$('scalare-modal').classList.contains('hidden')) chiudiPdfScalare();
   else if (!$('settings-modal').classList.contains('hidden') && imp().configurate) chiudi($('settings-modal'));
 });
 
@@ -412,6 +416,9 @@ document.addEventListener('click', (e) => {
     case 'import-carta': $('carta-input').click(); break;
     case 'close-carta': chiudiEstrattoCarta(); break;
     case 'conferma-carta': confermaEstrattoCarta(); break;
+    case 'import-scalare': $('scalare-input').click(); break;
+    case 'close-scalare': chiudiPdfScalare(); break;
+    case 'conferma-scalare': confermaPdfScalare(); break;
     case 'close-popdf': chiudiPdfPolizze(); break;
     case 'conferma-popdf': confermaPdfPolizze(); break;
     case 'close-pdfc': chiudi($('pdfc-modal')); caricamentoPdf = null; break;
@@ -545,7 +552,7 @@ function dataDefault() {
   const t = oggi();
   return annoDi(t) === appState.anno ? t : `${appState.anno}-01-01`;
 }
-const CAMPI_DATA = ['fe-data', 'co-data', 'fo-data', 'es-data', 'acq-data', 'po-data', 'ca-data', 'pa-data'];
+const CAMPI_DATA = ['fe-data', 'co-data', 'fo-data', 'es-data', 'acq-data', 'po-data', 'sc-data', 'ca-data', 'pa-data'];
 
 function confermaRegistrazione(data, msg, focus) {
   if (annoDi(data) === appState.anno) showToast(msg);
@@ -718,7 +725,7 @@ function deleteParcella(id) {
 // ---------------------------------------------------------------------------
 // Riepilogo dell'anno per il commercialista (CSV che Excel apre da solo)
 // ---------------------------------------------------------------------------
-const NOMI_SEZIONE = { fornitori: 'Fatture fornitori', estero: 'Autofatture/fatture estere', spese: 'Abbonamenti/acquisti/spese', polizze: 'Polizze/assicurazioni', carta: 'Carta business' };
+const NOMI_SEZIONE = { fornitori: 'Fatture fornitori', estero: 'Autofatture/fatture estere', spese: 'Abbonamenti/acquisti/spese', polizze: 'Polizze/assicurazioni', scalare: 'Estratto conto scalare', carta: 'Carta business' };
 
 async function exportCsvAnno() {
   const anno = appState.anno;
@@ -1033,6 +1040,7 @@ window.addEventListener('drop', (e) => {
   const attivo = document.querySelector('.tab-content:not(.hidden)')?.id.replace('tab-', '');
   // nel tab Carta Business ogni file è un estratto conto
   if (attivo === 'carta') { if (tutti.length) apriEstrattoCarta(tutti); return; }
+  if (attivo === 'scalare') { if (tutti.length) apriPdfScalare(tutti); return; }
   // nel tab Polizze i PDF (anche dentro gli ZIP) sono ricevute e quietanze
   if (attivo === 'polizze') {
     const daLeggere = tutti.filter((f) => /\.(pdf|zip)$/i.test(f.name));
@@ -1438,18 +1446,21 @@ function renderAll() {
     CH_BOLLA: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold">Svizzera • Bolla doganale</span>',
     CH_SERVIZI: '<span class="inline-block mt-1 px-2 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold">Servizi esteri • Autofattura TD17</span>',
   };
-  const totSp = { fo: { det: 0, ded: 0 }, es: { det: 0, ded: 0 }, acq: { det: 0, ded: 0 }, po: { det: 0, ded: 0, premi: 0 }, ca: { det: 0, ded: 0 } };
-  const vociCarta = [];
+  const totSp = { fo: { det: 0, ded: 0 }, es: { det: 0, ded: 0 }, acq: { det: 0, ded: 0 }, po: { det: 0, ded: 0, premi: 0 }, ca: { det: 0, ded: 0 }, sc: { det: 0, ded: 0 } };
+  const vociCarta = [], vociScal = [];
+  let interessiPassivi = 0;          // non deducibili ai fini IRAP
   const htmlSp = { fo: '', es: '', acq: '', po: '' };
   for (const item of acquisti) {
     const b = calcAcquistoBreakdown(item);
     const q = getTrimestre(item.data);
-    const p = item.sezione === 'fornitori' ? 'fo' : item.sezione === 'estero' ? 'es' : item.sezione === 'polizze' ? 'po' : item.sezione === 'carta' ? 'ca' : 'acq';
+    if (item.categoria === 'interessi_passivi') interessiPassivi += calcAcquistoBreakdown(item).costoDeducibile;
+    const p = item.sezione === 'fornitori' ? 'fo' : item.sezione === 'estero' ? 'es' : item.sezione === 'polizze' ? 'po' : item.sezione === 'carta' ? 'ca' : item.sezione === 'scalare' ? 'sc' : 'acq';
     totCostiDeducibili += b.costoDeducibile;
     ivaTrim[q].debito += b.ivaDebitoRC; ivaTrim[q].credito += b.ivaDetraibile;
     totSp[p].det += b.ivaDetraibile; totSp[p].ded += b.costoDeducibile;
     if (p === 'po') { totSp.po.premi += b.imponibile + b.ivaDocumento; htmlSp.po += rigaPolizza(item, b); continue; }
     if (p === 'ca') { vociCarta.push({ item, b }); continue; }
+    if (p === 'sc') { vociScal.push({ item, b }); continue; }
     htmlSp[p] += `<tr data-voce="acquisto:${item.id}" class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
@@ -1476,6 +1487,7 @@ function renderAll() {
   $('tot-po-premi').textContent = fmtEuro(totSp.po.premi);
   $('tot-po-ded').textContent = fmtEuro(totSp.po.ded);
   disegnaCarta(vociCarta);
+  disegnaScalare(vociScal);
 
   // 3. Commercialista: le parcelle sono costi come gli altri, con in più la ritenuta
   let paSpeso = 0, paNetto = 0, paCosto = 0, ritDaVersare = 0;
@@ -1594,7 +1606,9 @@ function renderAll() {
   const addS2 = impIrpefS2 * addiz;
   const totS2 = irpefS2 + addS2 + inpsS2.totale;
 
-  const irapSocieta = Math.max(0, utileSnc - (+s.irapDed || 0)) * (s.irap / 100);
+  // per l'IRAP gli interessi passivi non si deducono: si riaggiungono
+  const baseIrap = Math.max(0, risultato + interessiPassivi);
+  const irapSocieta = Math.max(0, baseIrap - (+s.irapDed || 0)) * (s.irap / 100);
   const totaleTasse = totS1 + totS2 + irapSocieta;
   const nettoTasca = Math.max(0, utileSnc - totaleTasse);
 
@@ -1617,6 +1631,7 @@ function renderAll() {
 
   $('dettaglio-societa').innerHTML =
     riga(risultato < 0 ? 'Perdita fiscale SNC:' : 'Utile fiscale SNC:', fmtEuro(risultato), risultato < 0 ? 'font-bold text-rose-600' : 'font-bold text-slate-900') +
+    (interessiPassivi > 0 ? riga('Interessi passivi (non deducibili IRAP):', '+ ' + fmtEuro(interessiPassivi), 'font-semibold text-slate-700') : '') +
     riga('Deduzione base IRAP stimata:', '- ' + fmtEuro(s.irapDed), 'font-semibold text-emerald-700') +
     riga(`IRAP (${fmtPct(s.irap)}):`, fmtEuro(irapSocieta), 'font-bold text-slate-900') +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Carico complessivo (soci + IRAP):</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totaleTasse)}</span></div>`;
@@ -1687,8 +1702,9 @@ const RICERCHE = [
   { tbody: 'tbody-corrispettivi', tipo: 'entrata', voci: () => appState.entrate.filter((x) => x.tipo !== 'Fattura'), ph: 'Cerca mese, data o importo…' },
   { tbody: 'tbody-fornitori', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'fornitori'), ph: 'Cerca fornitore, numero, data o importo…' },
   { tbody: 'tbody-estero', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'estero'), ph: 'Cerca fornitore, numero, data o importo…' },
-  { tbody: 'tbody-acquisti', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => !['fornitori', 'estero', 'polizze', 'carta'].includes(x.sezione)), ph: 'Cerca spesa, fornitore, categoria, data o importo…' },
+  { tbody: 'tbody-acquisti', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => !['fornitori', 'estero', 'polizze', 'carta', 'scalare'].includes(x.sezione)), ph: 'Cerca spesa, fornitore, categoria, data o importo…' },
   { tbody: 'tbody-polizze', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'polizze'), ph: 'Cerca compagnia, polizza, data o importo…', riquadri: (lista, filtrata) => riquadriPolizze(lista, filtrata) },
+  { tbody: 'tbody-scalare', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'scalare'), ph: 'Cerca interessi, oneri, data o importo…', riquadri: (lista, filtrata) => riquadriScalare(lista, filtrata), colonne: 'grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4' },
   { tbody: 'tbody-carta', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'carta'), ph: 'Cerca esercente, data o importo…', riquadri: (lista, filtrata) => riquadriCarta(lista, filtrata), colonne: 'grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4' },
   { tbody: 'tbody-parcelle', tipo: 'parcella', voci: () => appState.parcelle, ph: 'Cerca professionista, numero, data o importo…' },
 ];
@@ -1863,7 +1879,7 @@ document.addEventListener('keydown', (e) => {
 const SPOSTABILI = ['fatture', 'fornitori', 'estero', 'spese', 'polizze', 'commercialista'];
 const NOMI_TAB = {
   fatture: '2. Fatture emesse', fornitori: '4. Fatture ricevute fornitori', estero: '5. Autofatture/Fatture estere',
-  spese: '6. Abbonamenti/Acquisti/Spese', polizze: '7. Polizze/Assicurazioni', commercialista: '9. Commercialista',
+  spese: '6. Abbonamenti/Acquisti/Spese', polizze: '7. Polizze/Assicurazioni', commercialista: '10. Commercialista',
 };
 const TAB_DI_DEST = { fatture: 'fatture', fornitori: 'fornitori', estero: 'estero', spese: 'acquisti', polizze: 'polizze', commercialista: 'commercialista' };
 const COLLEZIONE = { entrata: 'entrate', acquisto: 'acquisti', parcella: 'parcelle' };
@@ -1982,7 +1998,7 @@ document.addEventListener('contextmenu', (e) => {
   if (!tr || e.target.closest('input, select, textarea')) return;
   const v = trovaVoce(tr.dataset.voce);
   if (!v || (v.tipo === 'entrata' && v.x.tipo !== 'Fattura')) return;
-  if (v.x.sezione === 'carta') return;          // i movimenti della carta si gestiscono dalla riga
+  if (v.x.sezione === 'carta' || v.x.sezione === 'scalare') return;   // carta e conto si gestiscono dalla riga
   e.preventDefault();
   const qui = destDi(v.tipo, v.x);
   const cp = controparteDi(v.tipo, v.x);
@@ -3020,6 +3036,268 @@ $('form-carta').addEventListener('submit', function (e) {
   confermaRegistrazione(nuovo.data, 'Pagamento con carta registrato.', 'ca-desc');
 });
 updateCartaPreview();
+
+// ---------------------------------------------------------------------------
+// Estratto conto scalare
+// ---------------------------------------------------------------------------
+/* Il conteggio delle competenze del conto: gli oneri del fido (CFA), le
+   commissioni e le spese si addebitano con la valuta del conteggio e
+   contano in quell'anno; gli interessi debitori dell'anno si addebitano il
+   1° marzo dell'anno dopo (art. 120 TUB) e, con la contabilità semplificata
+   per cassa, sono un costo dell'anno in cui si pagano. Ogni voce è un
+   acquisto della sezione «scalare»; gli estratti caricati restano in
+   appState.scalari con fido, tasso e saldo. Gli interessi passivi non si
+   deducono ai fini IRAP: il calcolo dell'IRAP li riaggiunge. */
+const fmtTasso = (t) => (+t).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + '%';
+const vociScalare = () => appState.acquisti.filter((x) => x.sezione === 'scalare');
+const chiaveScalare = (d, tipo) => `${normNome(d.conto || d.banca || 'conto')}|${d.conteggio}|${tipo}`;
+const TIPI_SCALARE = {
+  interessi: { categoria: 'interessi_passivi', nome: 'Interessi passivi', badge: 'bg-rose-50 text-rose-700' },
+  oneri: { categoria: 'esente_0_100', nome: 'Oneri fido e spese', badge: 'bg-slate-100 text-slate-700' },
+};
+const descScalare = (d, tipo) => {
+  const conto = d.conto ? ` c/c n. ${d.conto}` : '';
+  return tipo === 'interessi'
+    ? `Interessi passivi ${d.annoCompetenza} sul fido${conto}${d.banca ? ` - ${d.banca}` : ''}`
+    : `Oneri fido (CFA), commissioni e spese al ${fmtData(d.conteggio)}${conto}${d.banca ? ` - ${d.banca}` : ''}`;
+};
+
+function disegnaScalare(voci) {
+  const ordinate = voci.slice().sort((a, b) => a.item.data.localeCompare(b.item.data) || a.item.id - b.item.id);
+  let html = '', tot = 0, ded = 0;
+  for (const { item, b } of ordinate) {
+    const tipo = (item.scalare && item.scalare.tipo) || (item.categoria === 'interessi_passivi' ? 'interessi' : 'oneri');
+    const t = TIPI_SCALARE[tipo];
+    const comp = item.scalare && item.scalare.anno ? (tipo === 'interessi' ? `Maturati nel ${item.scalare.anno}` : `Conteggio al ${fmtData(item.scalare.conteggio)}`) : '';
+    tot += b.imponibile; ded += b.costoDeducibile;
+    html += `<tr data-voce="acquisto:${item.id}" class="hover:bg-slate-50/80 transition">
+      <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
+      <td class="py-3 px-4 min-w-[240px]"><div class="font-medium text-slate-900">${esc(item.desc)}</div>
+        <span class="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold ${t.badge}">${esc(t.nome)}</span></td>
+      <td class="py-3 px-4 text-xs text-slate-600 whitespace-nowrap">${esc(comp)}</td>
+      <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
+      <td class="py-3 px-4 text-right font-semibold whitespace-nowrap">${fmtEuro(b.costoDeducibile)}</td>
+      <td class="py-3 px-4 text-center"><button data-action="del-acquisto" data-id="${item.id}" class="text-rose-500 hover:text-rose-700 text-xs font-semibold px-2 py-1 rounded-lg hover:bg-rose-50">Elimina</button></td>
+    </tr>`;
+  }
+  $('tbody-scalare').innerHTML = html || `<tr><td colspan="6" class="py-8 text-center text-slate-400 text-xs">Nessun addebito del conto nel ${appState.anno}. Carica il PDF dell'estratto conto scalare: gli interessi dell'anno prima compaiono qui con l'addebito del 1° marzo.</td></tr>`;
+  $('tot-sc-importo').textContent = fmtEuro(tot);
+  $('tot-sc-ded').textContent = fmtEuro(ded);
+  disegnaEstrattiScalare();
+}
+
+/* gli estratti che riguardano l'anno: quelli del conteggio e quelli i cui interessi si pagano nell'anno */
+function disegnaEstrattiScalare() {
+  const anno = appState.anno;
+  const lista = appState.scalari.filter((d) => annoDi(d.conteggio) === anno || (d.dataInteressi && annoDi(d.dataInteressi) === anno))
+    .sort((a, b) => a.conteggio.localeCompare(b.conteggio));
+  const el = $('scalare-estratti');
+  el.classList.toggle('hidden', !lista.length);
+  el.innerHTML = lista.map((d) => `<div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 text-xs text-slate-700 space-y-1">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="font-bold text-slate-900 text-sm">Conteggio al ${esc(fmtData(d.conteggio))}${d.banca ? ` · ${esc(d.banca)}` : ''}${d.conto ? ` · c/c ${esc(d.conto)}` : ''}</div>
+        ${d.allegato && DESKTOP ? `<button type="button" data-action="apri-allegato" data-rel="${esc(d.allegato)}" class="px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-[11px] font-bold hover:bg-emerald-100">📎 Apri PDF</button>` : ''}
+      </div>
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-slate-600">
+        ${d.fido != null ? `<span>Fido <strong class="text-slate-900">${fmtEuro(d.fido)}</strong></span>` : ''}
+        ${d.tasso != null ? `<span>Tasso debitore <strong class="text-slate-900">${esc(fmtTasso(d.tasso))}</strong></span>` : ''}
+        ${d.interessiPeriodo != null ? `<span>Interessi del periodo ${fmtEuro(d.interessiPeriodo)}</span>` : ''}
+        ${d.oneri != null ? `<span>Oneri addebitati il ${esc(fmtData(d.dataOneri))}: <strong class="text-slate-900">${fmtEuro(d.oneri)}</strong>${d.cfa != null ? ` (CFA ${fmtEuro(d.cfa)} + spese ${fmtEuro(d.spese || 0)})` : ''}</span>` : ''}
+        ${d.interessiDaAddebitare != null ? `<span>Interessi ${d.annoCompetenza} da addebitare il ${esc(fmtData(d.dataInteressi))}: <strong class="text-rose-700">${fmtEuro(d.interessiDaAddebitare)}</strong></span>` : ''}
+        ${d.saldoFinale != null ? `<span>Saldo al ${esc(fmtData(d.conteggio))}: <strong class="${d.saldoSegno === 'D' ? 'text-rose-700' : 'text-slate-900'}">${fmtEuro(d.saldoFinale)}${d.saldoSegno === 'D' ? ' a debito' : d.saldoSegno === 'C' ? ' a credito' : ''}</strong></span>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+function riquadriScalare(lista, filtrata) {
+  let interessi = 0, oneri = 0, ded = 0;
+  const anniInt = new Set();
+  for (const x of lista) {
+    const b = calcAcquistoBreakdown(x);
+    ded += b.costoDeducibile;
+    if (x.categoria === 'interessi_passivi') { interessi += b.imponibile; if (x.scalare && x.scalare.anno) anniInt.add(x.scalare.anno); } else oneri += b.imponibile;
+  }
+  const anno = appState.anno;
+  const ultimo = appState.scalari.filter((d) => annoDi(d.conteggio) <= anno).sort((a, b) => b.conteggio.localeCompare(a.conteggio))[0];
+  const prossimi = appState.scalari.filter((d) => d.annoCompetenza === anno && d.interessiDaAddebitare != null)[0];
+  const bordo = filtrata ? 'border-amber-300' : 'border-slate-200';
+  const cella = (titolo, valore, sub, colore = 'text-slate-900', forte = false) => `<div class="bg-white rounded-2xl border ${bordo} shadow-xs p-4">
+      <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500">${titolo}</div>
+      <div class="mt-1 ${forte ? 'text-2xl' : 'text-xl'} font-bold ${colore} whitespace-nowrap">${valore}</div>
+      <div class="mt-1 text-[11px] text-slate-500">${sub}</div>
+    </div>`;
+  const dove = filtrata ? ' · solo i risultati della ricerca' : '';
+  return cella(`Interessi pagati nel ${anno}`, fmtEuro(interessi), (anniInt.size ? `Maturati nel ${[...anniInt].sort().join(', ')}, addebitati a marzo` : 'Gli interessi si pagano il 1° marzo dell\'anno dopo') + dove, 'text-rose-600', true)
+    + cella('Oneri fido e spese', fmtEuro(oneri), 'CFA, commissioni e spese: contano nell\'anno dell\'addebito' + dove)
+    + cella('Costo deducibile', fmtEuro(ded), 'Gli interessi passivi non si deducono dall\'IRAP')
+    + cella('Fido', ultimo && ultimo.fido != null ? fmtEuro(ultimo.fido) : '—',
+      ultimo ? [ultimo.tasso != null ? `Tasso ${esc(fmtTasso(ultimo.tasso))}` : '', ultimo.saldoFinale != null ? `saldo al ${esc(fmtData(ultimo.conteggio))} ${fmtEuro(ultimo.saldoFinale)}${ultimo.saldoSegno === 'D' ? ' a debito' : ''}` : '',
+        prossimi ? `<br><strong class="text-slate-700">Interessi ${anno} da pagare il ${esc(fmtData(prossimi.dataInteressi))}: ${fmtEuro(prossimi.interessiDaAddebitare)}</strong>` : ''].filter(Boolean).join(' · ') : 'Si legge dall\'estratto scalare');
+}
+
+// --- caricamento del PDF ---
+let caricamentoScalare = null;
+
+async function apriPdfScalare(lista) {
+  showToast(`Lettura di ${lista.length === 1 ? '1 file' : `${lista.length} file`}…`);
+  let r;
+  try { r = await window.ScalarePDF.leggiFile(lista); }
+  catch (e) { showToast('Lettura non riuscita: ' + e.message, true); return; }
+  if (!r.documenti.length) {
+    showToast(r.errori.length ? `${r.errori[0].file}: ${r.errori[0].errore}` : 'Nessun estratto scalare trovato.', true);
+    return;
+  }
+  const gia = new Set(vociScalare().map((x) => x.scalare && x.scalare.k).filter(Boolean));
+  caricamentoScalare = {
+    errori: r.errori,
+    documenti: r.documenti.sort((a, b) => a.conteggio.localeCompare(b.conteggio)).map((d) => ({
+      d,
+      voci: ['oneri', 'interessi'].filter((t) => (t === 'oneri' ? d.oneri : d.interessiDaAddebitare) != null && (t === 'oneri' ? d.oneri : d.interessiDaAddebitare) > 0).map((tipo) => {
+        const k = chiaveScalare(d, tipo);
+        return { tipo, k, doppio: gia.has(k), incluso: !gia.has(k),
+          v: { data: tipo === 'oneri' ? d.dataOneri : d.dataInteressi, importo: (tipo === 'oneri' ? d.oneri : d.interessiDaAddebitare).toFixed(2), desc: descScalare(d, tipo) } };
+      }),
+    })),
+  };
+  disegnaPdfScalare();
+  apri($('scalare-modal'));
+}
+
+function disegnaPdfScalare() {
+  const { documenti, errori } = caricamentoScalare;
+  const blocchi = documenti.map(({ d, voci }, i) => {
+    const verifiche = d.verifiche.map((v) => v.ok
+      ? `<span class="inline-flex px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] font-semibold">✓ ${esc(v.cosa)}: ${fmtEuro(v.atteso)}</span>`
+      : `<span class="inline-flex px-2 py-0.5 rounded bg-rose-50 text-rose-700 text-[11px] font-semibold">✗ ${esc(v.cosa)}: il PDF dice ${fmtEuro(v.atteso)}, la somma fa ${fmtEuro(v.letto)}</span>`).join(' ');
+    const tasso = d.tassi.length ? d.tassi[d.tassi.length - 1].tasso : null;
+    const righe = voci.map((x, j) => `<div class="rounded-lg border ${x.incluso ? 'border-slate-200' : 'border-slate-200 opacity-60'} p-3 space-y-2">
+        <label class="flex items-start gap-2 cursor-pointer">
+          <input type="checkbox" data-scalare="${i}:${j}" data-campo="incluso" ${x.incluso ? 'checked' : ''} class="mt-0.5 w-4 h-4 accent-emerald-600" />
+          <span><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${TIPI_SCALARE[x.tipo].badge}">${esc(TIPI_SCALARE[x.tipo].nome)}</span>
+            ${x.doppio ? '<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600">Già registrato</span>' : ''}
+            <span class="block text-[11px] text-slate-500 mt-1">${x.tipo === 'interessi' ? `Interessi maturati nel ${d.annoCompetenza}: si addebitano il 1° marzo ${d.annoCompetenza + 1} e contano come costo del ${d.annoCompetenza + 1}. Se la banca li ha addebitati in un altro giorno, cambia la data.` : `Addebitati in conto con valuta ${esc(fmtData(d.dataOneri))}: contano come costo del ${annoDi(d.dataOneri)}.`}</span></span>
+        </label>
+        <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+          <label class="block text-[11px] font-semibold text-slate-600">Data addebito
+            <input type="date" data-scalare="${i}:${j}" data-campo="data" value="${esc(x.v.data)}" class="mt-0.5 w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs" /></label>
+          <label class="block sm:col-span-2 text-[11px] font-semibold text-slate-600">Descrizione
+            <input type="text" data-scalare="${i}:${j}" data-campo="desc" value="${esc(x.v.desc)}" class="mt-0.5 w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs" /></label>
+          <label class="block text-[11px] font-semibold text-slate-600">Importo (€)
+            <input type="number" step="0.01" min="0" data-scalare="${i}:${j}" data-campo="importo" value="${esc(x.v.importo)}" class="mt-0.5 w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs" /></label>
+        </div>
+      </div>`).join('');
+    return `<div class="rounded-xl border border-slate-200 p-3 sm:p-4 space-y-3">
+      <div>
+        <div class="font-bold text-slate-900">${esc(d.file)}</div>
+        <div class="text-[11px] text-slate-500 mt-0.5">${[`Conteggio al ${fmtData(d.conteggio)}`, d.banca, d.conto ? 'c/c ' + d.conto : '', d.fido != null ? 'fido ' + fmtEuro(d.fido) : '', tasso != null ? `tasso ${fmtTasso(tasso)}` : '', d.saldoFinale != null ? `saldo ${fmtEuro(d.saldoFinale)}${d.saldoSegno === 'D' ? ' a debito' : ''}` : ''].filter(Boolean).map(esc).join(' · ')}</div>
+      </div>
+      ${verifiche ? `<div class="flex flex-wrap gap-1.5">${verifiche}</div>` : ''}
+      ${righe || '<div class="text-slate-500">Nessun addebito da registrare in questo estratto.</div>'}
+      ${d.avvisi.length ? `<ul class="text-[11px] text-amber-800 list-disc pl-5 space-y-0.5">${d.avvisi.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}
+    </div>`;
+  });
+  if (errori.length) blocchi.push(`<div class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900"><strong>${errori.length === 1 ? 'Un file non letto' : `${errori.length} file non letti`}:</strong> ${errori.map((x) => `${esc(x.file)} (${esc(x.errore)})`).join('; ')}</div>`);
+  $('scalare-corpo').innerHTML = blocchi.join('');
+  aggiornaRiepilogoScalare();
+}
+
+function aggiornaRiepilogoScalare() {
+  let n = 0, tot = 0;
+  for (const { voci } of caricamentoScalare.documenti) for (const x of voci) if (x.incluso) { n++; tot += parseFloat(x.v.importo) || 0; }
+  $('scalare-riepilogo').textContent = n ? `${n} ${n === 1 ? 'addebito' : 'addebiti'} da registrare, ${fmtEuro(tot)}.` : 'Niente di nuovo da registrare.';
+  $('scalare-ok').textContent = n ? `Registra ${n}` : 'Salva l\'estratto';
+}
+
+const aggiornaCampoScalare = (e) => {
+  const el = e.target;
+  if (!caricamentoScalare || !el.dataset || el.dataset.scalare == null) return;
+  const [i, j] = el.dataset.scalare.split(':').map(Number);
+  const x = caricamentoScalare.documenti[i]?.voci[j];
+  if (!x) return;
+  if (el.dataset.campo === 'incluso') { x.incluso = el.checked; el.closest('.rounded-lg').classList.toggle('opacity-60', !el.checked); }
+  else x.v[el.dataset.campo] = el.value;
+  aggiornaRiepilogoScalare();
+};
+document.addEventListener('input', aggiornaCampoScalare);
+document.addEventListener('change', aggiornaCampoScalare);
+
+function chiudiPdfScalare() { caricamentoScalare = null; chiudi($('scalare-modal')); }
+
+async function confermaPdfScalare() {
+  if (!caricamentoScalare) return;
+  for (const { voci } of caricamentoScalare.documenti) for (const x of voci) {
+    if (!x.incluso) continue;
+    if (!x.v.data) { showToast('Manca la data di un addebito.', true); return; }
+    if (!(parseFloat(x.v.importo) > 0)) { showToast('Manca l\'importo di un addebito.', true); return; }
+  }
+  const lavoro = caricamentoScalare;
+  $('scalare-ok').disabled = true;
+  let id = Date.now(), persi = 0;
+  const nuove = [];
+  try {
+    for (const { d, voci } of lavoro.documenti) {
+      for (const x of voci) {
+        if (!x.incluso) continue;
+        nuove.push({
+          id: id++, data: x.v.data, desc: x.v.desc.trim() || descScalare(d, x.tipo), provenienza: 'IT', categoria: TIPI_SCALARE[x.tipo].categoria,
+          imponibile: Math.round(parseFloat(x.v.importo) * 100) / 100, iva: 0, sezione: 'scalare', sezioneManuale: true,
+          scalare: { k: x.k, tipo: x.tipo, anno: d.annoCompetenza, conteggio: d.conteggio },
+        });
+      }
+      let allegato = '';
+      if (DESKTOP && d.bytes) {
+        try { const r = await window.gestionale.salvaAllegato(`scalare/${d.annoCompetenza}`, `Estratto scalare ${d.conteggio}${d.conto ? ' ' + d.conto : ''}`, d.bytes); allegato = r.ok ? r.rel : ''; } catch (_) { allegato = ''; }
+        if (!allegato) persi++;
+      }
+      const k = chiaveScalare(d, 'doc');
+      const tasso = d.tassi.length ? d.tassi[d.tassi.length - 1].tasso : null;
+      appState.scalari = appState.scalari.filter((v) => v.k !== k);
+      appState.scalari.push({
+        k, file: d.file, banca: d.banca, conto: d.conto, conteggio: d.conteggio, annoCompetenza: d.annoCompetenza,
+        fido: d.fido ?? null, cfaPct: d.cfaPct ?? null, tasso, interessiPeriodo: d.interessiPeriodo ?? null, giaConteggiati: d.giaConteggiati,
+        cfa: d.cfa ?? null, spese: d.spese ?? null, oneri: d.oneri ?? null, dataOneri: d.dataOneri,
+        interessiDaAddebitare: d.interessiDaAddebitare ?? null, dataInteressi: d.dataInteressi,
+        saldoFinale: d.saldoFinale ?? null, saldoSegno: d.saldoSegno || '', allegato, caricato: oggi(),
+      });
+    }
+  } finally { $('scalare-ok').disabled = false; }
+  appState.acquisti.push(...nuove);
+  appState.acquisti.sort((a, b) => a.data.localeCompare(b.data));
+  saveState();
+  chiudiPdfScalare();
+  popolaAnni();
+  // si va nell'anno in cui si pagano gli interessi, se ci sono
+  const int = nuove.find((x) => x.scalare.tipo === 'interessi');
+  const verso = int ? annoDi(int.data) : nuove.length ? annoDi(nuove[nuove.length - 1].data) : 0;
+  if (verso && verso !== appState.anno) cambiaAnnoRicerca(verso);
+  else renderAll();
+  switchTab('scalare');
+  const anni = [...new Set(nuove.map((x) => annoDi(x.data)))].sort();
+  showToast((nuove.length ? `${nuove.length === 1 ? 'Registrato 1 addebito' : `Registrati ${nuove.length} addebiti`}${anni.length > 1 ? ` (nel ${anni.join(' e nel ')})` : ''}.` : 'Estratto salvato: niente di nuovo da registrare.') + (persi ? ' Non è stato possibile copiare il PDF nella cartella dei dati.' : ''), !!persi);
+}
+
+$('scalare-input').addEventListener('change', (e) => {
+  const lista = [...e.target.files]; e.target.value = '';
+  if (lista.length) apriPdfScalare(lista);
+});
+
+// --- modulo: un addebito inserito a mano ---
+$('sc-form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  const importo = Math.round((parseFloat($('sc-importo').value) || 0) * 100) / 100;
+  if (!(importo > 0)) { showToast('Inserisci l\'importo addebitato.', true); return; }
+  const tipo = $('sc-tipo').value === 'interessi' ? 'interessi' : 'oneri';
+  const nuovo = {
+    id: Date.now(), data: $('sc-data').value, desc: $('sc-desc').value.trim(), provenienza: 'IT', categoria: TIPI_SCALARE[tipo].categoria,
+    imponibile: importo, iva: 0, sezione: 'scalare', sezioneManuale: true, scalare: { tipo },
+  };
+  appState.acquisti.push(nuovo);
+  appState.acquisti.sort((a, b) => a.data.localeCompare(b.data));
+  saveState(); this.reset();
+  $('sc-data').value = nuovo.data;
+  renderAll();
+  confermaRegistrazione(nuovo.data, 'Addebito del conto registrato.', 'sc-desc');
+});
 
 // ---------------------------------------------------------------------------
 // Avvio

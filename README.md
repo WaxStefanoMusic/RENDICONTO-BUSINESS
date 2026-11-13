@@ -19,15 +19,17 @@ S.N.C.:
    costo deducibile per intero (attività, negozio, furgone), al 20% (auto usata anche
    privatamente) o per niente (polizze personali dei soci). Avvisi di rinnovo nel tab e nella
    dashboard quando una polizza scade entro 45 giorni.
-8. **Carta Business**: i pagamenti con la carta aziendale che hanno solo scontrino o ricevuta,
+8. **Estratto Conto Scalare**: oneri del fido, commissioni e spese e interessi passivi del conto, ognuno
+   nell'anno in cui viene addebitato.
+9. **Carta Business**: i pagamenti con la carta aziendale che hanno solo scontrino o ricevuta,
    dall'estratto conto (PDF, ZIP, Excel o CSV), divisi per mese con il riepilogo in alto.
-9. **Commercialista**: parcelle con cassa, IVA e ritenuta d'acconto 20%, scadenze F24 codice
+10. **Commercialista**: parcelle con cassa, IVA e ritenuta d'acconto 20%, scadenze F24 codice
    1040 da spuntare, riepilogo dell'anno in CSV per Excel.
-10. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
+11. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
    del credito, scadenze F24.
-11. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
+12. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
     INPS commercianti, IRAP.
-12. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
+13. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
 
 ### Importazione delle fatture elettroniche
 Nei tab Fatture Emesse, Fornitori, Autofatture/Fatture Estere, Abbonamenti/Acquisti/Spese, Polizze e
@@ -71,6 +73,18 @@ personale). Prima di registrare, ogni campo si controlla e si corregge; una rice
 registrata (stessa polizza e stesso periodo) viene riconosciuta e saltata. Il PDF si copia in
 `allegati/polizze/<anno>` e si riapre dal pulsante 📎 della riga. Le fatture XML trovate negli
 ZIP passano all'importazione delle fatture elettroniche.
+
+### Estratto conto scalare
+Il PDF del conteggio delle competenze del conto (anche dentro uno ZIP) si carica nel tab Estratto
+Conto Scalare. Dal 2016 (art. 120 TUB, delibera CICR 343/2016) gli interessi debitori si calcolano
+al 31 dicembre e diventano esigibili il **1° marzo dell'anno dopo**, mentre gli oneri del fido
+(CFA), le commissioni e le spese si addebitano subito con la valuta del conteggio. L'app registra
+quindi due voci: gli oneri con la data della valuta e gli interessi dell'anno con la data del 1°
+marzo successivo (modificabile se la banca li addebita in un altro giorno). Con la contabilità
+semplificata per cassa ognuna conta nell'anno in cui viene addebitata. Si leggono anche fido,
+tasso, interessi dei trimestri e saldo; le somme si verificano (trimestri = interessi da
+addebitare, CFA + spese = oneri). Gli interessi passivi sono deducibili dal reddito ma non
+dall'IRAP: il calcolo dell'IRAP li riaggiunge. I PDF si copiano in `allegati/scalare/<anno>`.
 
 ### Estratto conto della Carta Business
 Molti pagamenti con la carta aziendale non hanno la fattura ma solo lo scontrino o la ricevuta.
@@ -128,7 +142,8 @@ esporta e si ripristina un backup.
 ## Struttura
 - `App/renderer/` — interfaccia (`index.html`, `app.js`, `fatturapa.js` lettore delle fatture elettroniche,
   `corrispettivi-pdf.js` lettore dei PDF del Registro Corrispettivi, `polizze-pdf.js` lettore delle
-  ricevute e quietanze delle polizze, `carta-estratto.js` lettore degli estratti conto della carta, `lib/` pdf.js, `app.css` generato).
+  ricevute e quietanze delle polizze, `carta-estratto.js` lettore degli estratti conto della carta, `scalare-pdf.js` lettore
+  dell'estratto conto scalare, `lib/` pdf.js, `app.css` generato).
 - `App/src/tailwind.css` — sorgente degli stili: `npm run css` rigenera `renderer/app.css`
   (Tailwind gira in locale, niente CDN: l'app funziona senza rete).
 - `App/main.js`, `App/preload.js` — finestra, salvataggio, menu, aggiornamenti.

@@ -209,11 +209,12 @@
         <button data-tab="estero" class="tab-btn">5. Autofatture/Fatture Estere</button>
         <button data-tab="acquisti" class="tab-btn">6. Abbonamenti/Acquisti/Spese</button>
         <button data-tab="polizze" class="tab-btn">7. Polizze/Assicurazioni</button>
-        <button data-tab="carta" class="tab-btn">8. Carta Business</button>
-        <button data-tab="commercialista" class="tab-btn">9. Commercialista</button>
-        <button data-tab="iva" class="tab-btn">10. Liquidazione IVA (LIPE)</button>
-        <button data-tab="imposte" class="tab-btn">11. Imposte Soci &amp; INPS</button>
-        <button data-tab="guida" class="tab-btn">12. Guida &amp; Adempimenti</button>
+        <button data-tab="scalare" class="tab-btn">8. Estratto Conto Scalare</button>
+        <button data-tab="carta" class="tab-btn">9. Carta Business</button>
+        <button data-tab="commercialista" class="tab-btn">10. Commercialista</button>
+        <button data-tab="iva" class="tab-btn">11. Liquidazione IVA (LIPE)</button>
+        <button data-tab="imposte" class="tab-btn">12. Imposte Soci &amp; INPS</button>
+        <button data-tab="guida" class="tab-btn">13. Guida &amp; Adempimenti</button>
       </nav>
     </div>
   </header>
@@ -669,7 +670,67 @@
       </div>
     </section>
 
-    <!-- TAB 8: CARTA BUSINESS -->
+    <!-- TAB 8: ESTRATTO CONTO SCALARE -->
+    <section id="tab-scalare" class="tab-content hidden space-y-6">
+      <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <p class="text-xs sm:text-sm text-amber-900"><strong>Carica il PDF dell'estratto conto scalare</strong> (il conteggio delle competenze del conto, anche dentro uno ZIP): l'app divide gli <strong>oneri del fido, le commissioni e le spese</strong>, addebitati subito, dagli <strong>interessi passivi dell'anno</strong>, che la banca addebita il 1° marzo dell'anno dopo. Ognuno conta come costo nell'anno in cui viene addebitato. Puoi anche trascinare il PDF qui sopra.</p>
+        <button data-action="import-scalare" class="shrink-0 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-semibold transition">📄 Carica estratto scalare</button>
+      </div>
+
+      <div id="scalare-estratti" class="hidden space-y-3"></div>
+
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">Registra un addebito del conto</h2>
+          <p class="text-xs text-slate-500">Se non hai il PDF: metti la data in cui la banca ha addebitato l'importo sul conto. Gli interessi passivi maturati in un anno si pagano il 1° marzo dell'anno dopo e, con la contabilità semplificata (per cassa), sono un costo di quell'anno. Sono deducibili dal reddito ma non dall'IRAP; oneri del fido e spese sono costi deducibili per intero.</p>
+        </div>
+        <form id="sc-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <label class="block text-xs font-semibold text-slate-700">Data addebito
+            <input type="date" id="sc-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Tipo
+            <select id="sc-tipo" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+              <option value="interessi">Interessi passivi (fido, scoperto)</option>
+              <option value="oneri">Oneri fido (CFA), commissioni e spese</option>
+            </select>
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Descrizione
+            <input type="text" id="sc-desc" placeholder="Es. Interessi passivi 2025 sul fido" required autocomplete="off" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Importo addebitato (€)
+            <input type="number" step="0.01" min="0" id="sc-importo" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <div class="sm:col-span-2 lg:col-span-4 flex justify-end">
+            <button type="submit" class="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition">+ Registra addebito</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Addebiti del conto nel <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">Per data di addebito: è quella che decide l'anno in cui il costo conta.</p>
+          </div>
+          <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+            Addebitati: <span id="tot-sc-importo" class="text-slate-900">0,00 €</span> | Costo deducibile: <span id="tot-sc-ded" class="text-slate-900">0,00 €</span>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data addebito</th><th class="py-3 px-4">Descrizione</th><th class="py-3 px-4">Competenza</th>
+                <th class="py-3 px-4 text-right">Importo</th><th class="py-3 px-4 text-right">Costo deducibile</th><th class="py-3 px-4 text-center">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-scalare" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 9: CARTA BUSINESS -->
     <section id="tab-carta" class="tab-content hidden space-y-6">
       <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <p class="text-xs sm:text-sm text-amber-900"><strong>Carica l'estratto conto della carta aziendale</strong> in PDF, anche dentro uno ZIP, in Excel o in CSV: ogni pagamento diventa una spesa col tipo proposto, divisa per mese. Ricaricando un estratto che si sovrappone a uno già caricato, entrano solo i movimenti nuovi. Puoi anche trascinare i file qui sopra.</p>
@@ -726,7 +787,7 @@
       </div>
     </section>
 
-    <!-- TAB 9: COMMERCIALISTA -->
+    <!-- TAB 10: COMMERCIALISTA -->
     <section id="tab-commercialista" class="tab-content hidden space-y-6">
       <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <p class="text-xs sm:text-sm text-amber-900"><strong>Hai i file delle fatture elettroniche?</strong> Importando l'XML della parcella, cassa e ritenuta d'acconto vengono lette direttamente dalla fattura. Puoi anche trascinarli qui sopra.</p>
@@ -1044,22 +1105,44 @@
     </div>
   </div>
 
+  <div id="scalare-modal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs items-center justify-center p-2 sm:p-4">
+    <div class="bg-white rounded-2xl max-w-4xl w-full max-h-[94vh] flex flex-col shadow-2xl border border-slate-200" role="dialog" aria-modal="true" aria-labelledby="scalare-title">
+      <div class="px-5 sm:px-6 py-4 border-b border-slate-200 flex items-start justify-between gap-3">
+        <div>
+          <h3 id="scalare-title" class="text-lg font-bold text-slate-900">Estratto conto scalare</h3>
+          <p class="text-xs text-slate-500">Gli addebiti letti dal PDF, ognuno con la data in cui conta come costo: controlla, poi registra.</p>
+        </div>
+        <button type="button" data-action="close-scalare" class="shrink-0 w-9 h-9 rounded-xl text-slate-500 hover:bg-slate-100" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="scalare-corpo" class="flex-1 overflow-auto px-3 sm:px-6 py-4 space-y-4 text-xs"></div>
+      <div class="px-5 sm:px-6 py-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <p id="scalare-riepilogo" class="text-xs text-slate-600"></p>
+        <div class="flex justify-end gap-3">
+          <button type="button" data-action="close-scalare" class="px-4 py-2 rounded-xl text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition">Annulla</button>
+          <button type="button" data-action="conferma-scalare" id="scalare-ok" class="px-5 py-2 rounded-xl text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition disabled:opacity-50">Registra</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="drop-overlay" class="fixed inset-0 z-[60] hidden bg-amber-500/20 backdrop-blur-xs items-center justify-center p-6 pointer-events-none">
     <div class="rounded-3xl border-4 border-dashed border-amber-500 bg-white/90 px-8 py-10 text-center shadow-2xl">
       <p class="text-2xl font-extrabold text-slate-900">Rilascia qui i file</p>
-      <p class="text-sm text-slate-600 mt-1">Fatture XML, P7M firmati, lo ZIP dell'Agenzia delle Entrate, i PDF del Registro Corrispettivi , nel tab Polizze ricevute e quietanze, nel tab Carta Business gli estratti conto</p>
+      <p class="text-sm text-slate-600 mt-1">Fatture XML, P7M firmati, lo ZIP dell'Agenzia delle Entrate, i PDF del Registro Corrispettivi , nel tab Polizze ricevute e quietanze, nei tab Estratto Conto Scalare e Carta Business gli estratti conto</p>
     </div>
   </div>
 
   <input type="file" id="xml-input" accept=".xml,.p7m,.zip,application/xml,text/xml,application/zip" multiple hidden />
   <input type="file" id="restore-input" accept="application/json,.json" hidden />
   <input type="file" id="pdf-input" accept=".pdf,application/pdf" multiple hidden />
+  <input type="file" id="scalare-input" accept=".pdf,.zip,application/pdf,application/zip" multiple hidden />
   <input type="file" id="carta-input" accept=".pdf,.zip,.xlsx,.xlsm,.xls,.csv,.txt,application/pdf,application/zip,text/csv" multiple hidden />
   <input type="file" id="po-pdf-input" accept=".pdf,.zip,application/pdf,application/zip" multiple hidden />
   <script src="fatturapa.js"></script>
   <script src="corrispettivi-pdf.js"></script>
   <script src="polizze-pdf.js"></script>
   <script src="carta-estratto.js"></script>
+  <script src="scalare-pdf.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

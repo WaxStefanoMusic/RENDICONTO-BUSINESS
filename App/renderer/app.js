@@ -53,7 +53,10 @@ const IMPOSTAZIONI_BASE = () => ({
   commImp: 0,
   commSw: 100,
   irpef1: 23, irpef2: 35, irpef3: 43,
-  addiz: 2.2,
+  // addizionale regionale: aliquote sugli scaglioni IRPEF (fino a 15.000, 28.000, 50.000 e oltre);
+  // addizionale comunale: aliquota unica su tutto il reddito, salvo la soglia di esenzione del comune
+  addReg1: 1.23, addReg2: 1.23, addReg3: 1.23, addReg4: 1.23,
+  addCom: 0.8, addComEsenz: 0,
   irap: 3.9, irapDed: 8000,
   // INPS artigiani/commercianti (valori 2025, da aggiornare con la circolare INPS di ogni anno)
   inpsMin: 18555, inpsFisso: 4515, inpsAliq: 24.48,
@@ -138,6 +141,9 @@ function normalizza(s) {
   const base = STATO_VUOTO();
   const st = Object.assign(base, s || {});
   st.impostazioni = Object.assign(IMPOSTAZIONI_BASE(), (s && s.impostazioni) || {});
+  if (s?.impostazioni && s.impostazioni.addReg1 == null && s.impostazioni.addiz != null) {
+    st.impostazioni.addCom = Math.max(0, Math.round((+s.impostazioni.addiz - 1.23) * 100) / 100);
+  }
   st.entrate = Array.isArray(st.entrate) ? st.entrate : [];
   st.acquisti = (Array.isArray(st.acquisti) ? st.acquisti : []).map((a) => ({ ...a, sezione: sezioneDi(a) }));
   st.parcelle = Array.isArray(st.parcelle) ? st.parcelle : [];
@@ -343,7 +349,9 @@ const CAMPI_IMP = [
   ['set-s2-nome', 's2Nome', 't'], ['set-collab-nome', 'collabNome', 't'],
   ['set-comm-lordo', 'commLordo', 'n'], ['set-comm-imp', 'commImp', 'n'], ['set-comm-sw', 'commSw', 'n'],
   ['set-irpef1', 'irpef1', 'n'], ['set-irpef2', 'irpef2', 'n'], ['set-irpef3', 'irpef3', 'n'],
-  ['set-addiz', 'addiz', 'n'], ['set-irap', 'irap', 'n'], ['set-irap-ded', 'irapDed', 'n'],
+  ['set-add-reg1', 'addReg1', 'n'], ['set-add-reg2', 'addReg2', 'n'], ['set-add-reg3', 'addReg3', 'n'], ['set-add-reg4', 'addReg4', 'n'],
+  ['set-add-com', 'addCom', 'n'], ['set-add-com-esenz', 'addComEsenz', 'n'],
+  ['set-irap', 'irap', 'n'], ['set-irap-ded', 'irapDed', 'n'],
   ['set-inps-min', 'inpsMin', 'n'], ['set-inps-fisso', 'inpsFisso', 'n'], ['set-inps-aliq', 'inpsAliq', 'n'],
   ['set-inps-fascia', 'inpsFascia', 'n'], ['set-inps-aliq2', 'inpsAliq2', 'n'],
   ['set-inps-mass-vecchi', 'inpsMassVecchi', 'n'], ['set-inps-mass-nuovi', 'inpsMassNuovi', 'n'],
@@ -511,6 +519,23 @@ function calcolaIrpefScaglioni(imponibile) {
      un punto in più oltre;
    - niente oltre il massimale, che è più basso per chi ha contributi
      versati prima del 1° gennaio 1996. */
+/* Addizionali IRPEF sul reddito imponibile (dopo i contributi INPS):
+   regionale a scaglioni come l'IRPEF, comunale con un'aliquota sola su tutto
+   il reddito, niente se il reddito non supera la soglia di esenzione. */
+function calcolaAddizionali(imponibile) {
+  const s = imp();
+  const r = Math.max(0, imponibile);
+  const scaglioni = [[15000, s.addReg1], [28000, s.addReg2], [50000, s.addReg3], [Infinity, s.addReg4]];
+  let regionale = 0, da = 0;
+  for (const [a, pct] of scaglioni) {
+    if (r > da) regionale += (Math.min(r, a) - da) * ((+pct || 0) / 100);
+    da = a;
+  }
+  const esente = r <= (+s.addComEsenz || 0);
+  const comunale = esente ? 0 : r * ((+s.addCom || 0) / 100);
+  return { regionale, comunale, esente, totale: regionale + comunale };
+}
+
 function calcolaInpsCommercianti(redditoQuota, attivo, ante96 = false) {
   const s = imp();
   const massimale = +(ante96 ? s.inpsMassVecchi : s.inpsMassNuovi) || Infinity;
@@ -1635,16 +1660,15 @@ function renderAll() {
   const inpsS1 = calcolaInpsCommercianti(q1, true, appState.inpsAnte96.s1);
   const inpsS2 = calcolaInpsCommercianti(q2, appState.socio2Inps, appState.inpsAnte96.s2);
   const inpsCollab = appState.collabInps ? (+s.inpsFisso || 0) : 0;   // a carico del socio titolare
-  const addiz = s.addiz / 100;
 
   const impIrpefS1 = Math.max(0, q1 - inpsS1.totale - inpsCollab);
   const irpefS1 = calcolaIrpefScaglioni(impIrpefS1);
-  const addS1 = impIrpefS1 * addiz;
+  const addizS1 = calcolaAddizionali(impIrpefS1), addS1 = addizS1.totale;
   const totS1 = irpefS1 + addS1 + inpsS1.totale + inpsCollab;
 
   const impIrpefS2 = Math.max(0, q2 - inpsS2.totale);
   const irpefS2 = calcolaIrpefScaglioni(impIrpefS2);
-  const addS2 = impIrpefS2 * addiz;
+  const addizS2 = calcolaAddizionali(impIrpefS2), addS2 = addizS2.totale;
   const totS2 = irpefS2 + addS2 + inpsS2.totale;
 
   // per l'IRAP gli interessi passivi non si deducono: si riaggiungono
@@ -1657,6 +1681,9 @@ function renderAll() {
   const irapS1 = irapSocieta * quotaS1() / 100, irapS2 = irapSocieta * quotaS2() / 100;
   const nettoS1 = q1 - totS1 - irapS1, nettoS2 = q2 - totS2 - irapS2;
 
+  const righeAddiz = (x) =>
+    riga('Addizionale regionale (a scaglioni):', fmtEuro(x.regionale)) +
+    riga(`Addizionale comunale (${fmtPct(s.addCom)}):`, x.esente && x.comunale === 0 && +s.addComEsenz > 0 ? 'esente' : fmtEuro(x.comunale));
   const titoloInps = (t) => `<p class="pt-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">${esc(t)}</p>`;
   const righeInps = (x, nome) => !x.totale ? riga(`INPS di ${esc(nome)}:`, 'non dovuto', 'text-slate-500') :
     titoloInps(`INPS di ${nome}`) +
@@ -1684,7 +1711,7 @@ function renderAll() {
     righeCollab() +
     riga('Imponibile netto IRPEF:', fmtEuro(impIrpefS1), 'font-bold text-slate-800', 'pt-2 border-t border-slate-100') +
     riga('IRPEF netta stimata:', fmtEuro(irpefS1)) +
-    riga(`Addizionali reg./com. (~${fmtPct(s.addiz)}):`, fmtEuro(addS1)) +
+    righeAddiz(addizS1) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
     righeNetto(quotaS1(), irapS1, nettoS1, +inail.s1 || 0);
 
@@ -1693,7 +1720,7 @@ function renderAll() {
     righeInps(inpsS2, s.s2Nome) +
     riga('Imponibile netto IRPEF:', fmtEuro(impIrpefS2), 'font-bold text-slate-800', 'pt-2 border-t border-slate-100') +
     riga('IRPEF netta stimata:', fmtEuro(irpefS2)) +
-    riga(`Addizionali reg./com. (~${fmtPct(s.addiz)}):`, fmtEuro(addS2)) +
+    righeAddiz(addizS2) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>` +
     righeNetto(quotaS2(), irapS2, nettoS2, +inail.s2 || 0);
 

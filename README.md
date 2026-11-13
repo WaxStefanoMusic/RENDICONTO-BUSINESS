@@ -27,7 +27,9 @@ S.N.C.:
    1040 da spuntare, riepilogo dell'anno in CSV per Excel.
 11. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
    del credito, scadenze F24.
-12. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionali,
+12. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionale regionale a
+    scaglioni e comunale con la sua soglia di esenzione (da impostare per la propria regione e il
+    proprio comune),
     INPS artigiani/commercianti (contributo fisso sul minimale, aliquota della prima fascia e
     un punto in più oltre, massimale più basso per chi ha contributi prima del 1996), premio
     INAIL dei soci (costo della società, deducibile anche IRAP), IRAP e netto in tasca di ogni

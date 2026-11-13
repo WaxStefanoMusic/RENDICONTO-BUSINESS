@@ -2780,12 +2780,12 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
 
   // elenco dei pagamenti: { chi: 'iva' | 'soc' | 's1' | 's2', data, importo } (l'IVA è della società)
   const pagamenti = [];
-  const paga = (chi, data, importo, voce) => { if (importo > 0.005) pagamenti.push({ chi, data, importo, voce }); return importo; };
+  const paga = (chi, data, importo, voce, rif) => { if (importo > 0.005) pagamenti.push({ chi, data, importo, voce, rif }); return importo; };
 
   // 1. IVA
   const casella = (x) => {
     const d = x.acconto ? DATE_IVA.acc : DATE_IVA[x.q];
-    paga('soc', d, x.daVersare, 'IVA');
+    paga('soc', d, x.daVersare, 'IVA', x.acconto ? 'acconto' : `${x.q}° trim. ${anno}`);
     return `<div class="p-3 rounded-xl border ${x.daVersare > 0 ? 'border-slate-200 bg-slate-50' : 'border-emerald-200 bg-emerald-50/50'}">
       <p class="text-[11px] font-semibold text-slate-500">${x.acconto ? 'Acconto IVA' : `${x.q}° trimestre`}</p>
       <p class="text-[11px] text-slate-500">${fmtData(d)}</p>
@@ -2837,36 +2837,46 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
     schedaSocio('s1', s.s1Nome, extra.inps.s1, extra.inps.collab, v.s1) +
     schedaSocio('s2', s.s2Nome, extra.inps.s2, 0, v.s2);
 
-  // 3. totali per trimestre (in base alla data di pagamento): trimestri in
-  //    colonna, voci in riga, una tabella per la società e una per i soci
-  const chiaveQ = (d) => d.getFullYear() * 10 + Math.floor(d.getMonth() / 3) + 1;
-  const colonne = [...new Set(pagamenti.map((p) => chiaveQ(p.data)))].sort((x, y) => x - y);
-  const MESI_Q = ['gen-mar', 'apr-giu', 'lug-set', 'ott-dic'];
-  const somme = (filtro) => colonne.map((k) => pagamenti.filter((p) => filtro(p) && chiaveQ(p.data) === k).reduce((t, p) => t + p.importo, 0));
-  const td = (n, cls = '') => `<td class="px-3 py-2 text-right whitespace-nowrap ${cls}">${n > 0.005 ? fmtEuro(n) : '<span class="text-slate-300">—</span>'}</td>`;
-  const rigaT = (lbl, valori, cls = '', clsLbl = 'text-slate-700') => `<tr class="border-b border-slate-100 ${cls}"><td class="py-2 pr-3 ${clsLbl}">${lbl}</td>${valori.map((n) => td(n)).join('')}${td(valori.reduce((t, n) => t + n, 0), 'font-bold')}</tr>`;
-  const voci = (chi) => [...new Set(pagamenti.filter((p) => p.chi === chi).map((p) => p.voce))];
-  const tabella = (corpo) => `<div class="overflow-x-auto mt-2"><table class="w-full min-w-[760px] table-fixed text-sm">
+  // 3. totali per scadenza: in colonna le date ufficiali di pagamento (già
+  //    spostate al lunedì se cadono nel fine settimana), voci in riga; per
+  //    l'IVA ogni cella dice a quale trimestre si riferisce. Una tabella per
+  //    la società e una per i soci, ognuna con le sue scadenze.
+  const fmtCol = (t) => new Date(t).toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: 'numeric' });
+  const td = (n, sotto = '', cls = '') => `<td class="px-3 py-2 text-right whitespace-nowrap ${cls}">${n > 0.005 ? fmtEuro(n) : '<span class="text-slate-300">—</span>'}${sotto ? `<span class="block text-[10px] font-normal text-slate-500">${sotto}</span>` : ''}</td>`;
+  const tabella = (lista, righe) => {
+    if (!lista.length) return '<p class="text-xs text-slate-500 mt-2">Nessun versamento.</p>';
+    const colonne = [...new Set(lista.map((p) => p.data.getTime()))].sort((x, y) => x - y);
+    const celle = (filtro) => colonne.map((t) => lista.filter((p) => filtro(p) && p.data.getTime() === t));
+    const somma = (ps) => ps.reduce((x, p) => x + p.importo, 0);
+    const rigaT = (lbl, filtro, cls = '', clsLbl = 'text-slate-700', conRif = false) => {
+      const gruppi = celle(filtro);
+      return `<tr class="border-b border-slate-100 ${cls}"><td class="py-2 pr-3 ${clsLbl}">${lbl}</td>${gruppi.map((ps) => td(somma(ps), conRif ? ps.map((p) => p.rif).filter(Boolean).join(', ') : '')).join('')}${td(somma(gruppi.flat()), '', 'font-bold')}</tr>`;
+    };
+    const intestazione = (testo) => `<tr><td colspan="${colonne.length + 2}" class="pt-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-500">${testo}</td></tr>`;
+    return `<div class="overflow-x-auto mt-2"><table class="w-full min-w-[760px] text-sm">
       <thead><tr class="border-b border-slate-200 text-slate-500">
-        <th class="w-64 py-2 pr-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">Voce</th>
-        ${colonne.map((k) => `<th class="px-3 py-2 text-right whitespace-nowrap"><span class="block text-xs font-bold text-slate-800">${k % 10}° trim. ${Math.floor(k / 10)}</span><span class="block text-[11px] font-normal">${MESI_Q[k % 10 - 1]}</span></th>`).join('')}
+        <th class="w-56 py-2 pr-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">Voce</th>
+        ${colonne.map((t) => `<th class="px-3 py-2 text-right whitespace-nowrap text-xs font-bold text-slate-800">${fmtCol(t)}</th>`).join('')}
         <th class="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-400">Totale</th></tr></thead>
-      <tbody>${corpo}</tbody></table></div>`;
-  const corpoSoc = voci('soc').map((vo) => rigaT(vo, somme((p) => p.chi === 'soc' && p.voce === vo))).join('') +
-    rigaT('Totale società', somme((p) => p.chi === 'soc'), 'bg-slate-50 font-bold', 'font-bold text-slate-900');
-  const corpoSocio = (chi, nome) => !voci(chi).length ? '' :
-    `<tr><td colspan="${colonne.length + 2}" class="pt-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-500">${esc(nome)}</td></tr>` +
-    voci(chi).map((vo) => rigaT(vo, somme((p) => p.chi === chi && p.voce === vo))).join('') +
-    rigaT(`Totale ${esc(nome)}`, somme((p) => p.chi === chi), 'font-semibold', 'font-semibold text-slate-900');
-  const corpoSoci = corpoSocio('s1', s.s1Nome) + corpoSocio('s2', s.s2Nome) +
-    rigaT('Totale soci', somme((p) => p.chi !== 'soc'), 'bg-slate-50 font-bold', 'font-bold text-slate-900');
+      <tbody>${righe(rigaT, intestazione)}</tbody></table></div>`;
+  };
+  const voci = (chi) => [...new Set(pagamenti.filter((p) => p.chi === chi).map((p) => p.voce))];
+  const tabSoc = tabella(pagamenti.filter((p) => p.chi === 'soc'), (rigaT) =>
+    voci('soc').map((vo) => rigaT(vo, (p) => p.voce === vo, '', 'text-slate-700', vo === 'IVA')).join('') +
+    rigaT('Totale società', () => true, 'bg-slate-50 font-bold', 'font-bold text-slate-900'));
+  const tabSoci = tabella(pagamenti.filter((p) => p.chi !== 'soc'), (rigaT, intestazione) =>
+    [['s1', s.s1Nome], ['s2', s.s2Nome]].filter(([chi]) => voci(chi).length).map(([chi, nome]) =>
+      intestazione(esc(nome)) +
+      voci(chi).map((vo) => rigaT(vo, (p) => p.chi === chi && p.voce === vo)).join('') +
+      rigaT(`Totale ${esc(nome)}`, (p) => p.chi === chi, 'font-semibold', 'font-semibold text-slate-900')).join('') +
+    rigaT('Totale soci', () => true, 'bg-slate-50 font-bold', 'font-bold text-slate-900'));
   $('dash-trimestri').innerHTML =
-    `<h2 class="text-base font-bold text-slate-900">Totale da pagare per trimestre: il ${anno}</h2>
-    <p class="text-xs text-slate-500">Gli stessi versamenti del riquadro sopra, sommati per trimestre in base alla data in cui si pagano.</p>
+    `<h2 class="text-base font-bold text-slate-900">Totale da pagare per scadenza: il ${anno}</h2>
+    <p class="text-xs text-slate-500">Gli stessi versamenti del riquadro sopra, alle date ufficiali dell'F24 (se la scadenza cade di sabato o domenica si paga il lunedì). Sotto l'IVA è indicato il trimestre a cui si riferisce.</p>
     <div class="mt-4 p-4 rounded-xl border border-slate-200">
-      <p class="text-sm font-bold text-slate-900">Società</p>${tabella(corpoSoc)}</div>
+      <p class="text-sm font-bold text-slate-900">Società</p>${tabSoc}</div>
     <div class="mt-4 p-4 rounded-xl border border-slate-200">
-      <p class="text-sm font-bold text-slate-900">Soci</p>${tabella(corpoSoci)}</div>`;
+      <p class="text-sm font-bold text-slate-900">Soci</p>${tabSoci}</div>`;
 
   $('dash-versamenti').innerHTML =
     `<h2 class="text-base font-bold text-slate-900">Cosa pagare e quando: il ${anno}</h2>

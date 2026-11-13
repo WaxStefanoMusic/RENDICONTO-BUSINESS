@@ -10,7 +10,8 @@ S.N.C.:
    dicembre; un riquadro per la società (INAIL in 4 rate, IRAP) e uno per ogni socio (INPS fisso
    in 4 rate, anche del collaboratore familiare, e IRPEF, addizionali e INPS sul reddito a giugno
    e novembre dell'anno dopo, già al netto dei crediti). In un riquadro a sé il totale da pagare
-   per trimestre: due tabelle (società e soci) con i trimestri in colonna e le voci in riga.
+   per scadenza: due tabelle (società e soci) con le date ufficiali dell'F24 in colonna e le voci
+   in riga; sotto ogni importo IVA il trimestre a cui si riferisce.
 2. **Fatture Emesse**: scorporo IVA 22% e regimi non imponibili (art. 8 Svizzera/extra-UE,
    art. 41 UE).
 3. **Corrispettivi**: incassi del registratore telematico, con scorporo IVA; caricamento dei PDF

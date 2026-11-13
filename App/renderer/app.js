@@ -1408,6 +1408,9 @@ function renderTesti() {
   document.querySelectorAll('[data-s2-quota]').forEach((el) => { el.textContent = fmtPct(quotaS2()); });
   $('kpi-utile-sub').textContent = `Imputato ${fmtPct(quotaS1())} a ${s.s1Nome} / ${fmtPct(quotaS2())} a ${s.s2Nome}`;
   $('txt-inps-s1').textContent = `Socio amministratore che lavora in negozio. Contributo fisso sul minimale (~${fmtEuro(s.inpsFisso)}/anno) + ${fmtPct(s.inpsAliq)} sul reddito da ${fmtEuro(s.inpsMin)} a ${fmtEuro(s.inpsFascia)}, ${fmtPct(s.inpsAliq2)} oltre, fino al massimale.`;
+  for (const k of ['s1', 's2']) $('txt-inail-' + k).textContent = +inailAnno()[k] > 0
+    ? `Solo per il ${anno}: ogni anno ha il suo premio.`
+    : `Nessun premio INAIL nel ${anno} (lascia vuoto se il socio non è più assicurato).`;
   for (const k of ['s1', 's2']) $('txt-mass-' + k).textContent = `Massimale ${fmtEuro(appState.inpsAnte96[k] ? s.inpsMassVecchi : s.inpsMassNuovi)}: oltre non si paga INPS.`;
   $('txt-inps-collab').textContent = `Nessuno stipendio. Se attivo, conta i contributi INPS minimali (~${fmtEuro(s.inpsFisso)}/anno), deducibili dal reddito di ${s.s1Nome}.`;
   $('lbl-socio2-inps').textContent = appState.socio2Inps ? 'INPS attivo' : 'Non attivo';
@@ -1654,11 +1657,19 @@ function renderAll() {
   const irapS1 = irapSocieta * quotaS1() / 100, irapS2 = irapSocieta * quotaS2() / 100;
   const nettoS1 = q1 - totS1 - irapS1, nettoS2 = q2 - totS2 - irapS2;
 
-  const righeInps = (x) => !x.totale ? riga('INPS:', 'non dovuto', 'text-slate-500') :
+  const titoloInps = (t) => `<p class="pt-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">${esc(t)}</p>`;
+  const righeInps = (x, nome) => !x.totale ? riga(`INPS di ${esc(nome)}:`, 'non dovuto', 'text-slate-500') :
+    titoloInps(`INPS di ${nome}`) +
     riga('INPS contributo fisso (minimale):', '- ' + fmtEuro(x.fisso), 'font-semibold text-rose-600') +
     (x.fascia1 > 0 ? riga(`INPS ${fmtPct(s.inpsAliq)} da ${fmtEuro(s.inpsMin)} a ${fmtEuro(s.inpsFascia)}:`, '- ' + fmtEuro(x.fascia1), 'font-semibold text-rose-600') : '') +
     (x.fascia2 > 0 ? riga(`INPS ${fmtPct(s.inpsAliq2)} oltre ${fmtEuro(s.inpsFascia)}:`, '- ' + fmtEuro(x.fascia2), 'font-semibold text-rose-600') : '') +
-    (x.oltreMassimale ? riga(`Oltre il massimale (${fmtEuro(x.massimale)}):`, 'niente INPS', 'font-semibold text-emerald-700') : '');
+    (x.oltreMassimale ? riga(`Oltre il massimale (${fmtEuro(x.massimale)}):`, 'niente INPS', 'font-semibold text-emerald-700') : '') +
+    riga(`Totale INPS di ${esc(nome)}:`, '- ' + fmtEuro(x.totale), 'font-bold text-rose-700', 'pt-1 border-t border-slate-100');
+  // l'INPS del collaboratore familiare lo paga il titolare, ma resta una posizione a parte
+  const righeCollab = () => !inpsCollab ? '' :
+    titoloInps(!s.collabNome || /^collaborat/i.test(s.collabNome) ? 'INPS del collaboratore familiare' : `INPS di ${s.collabNome} (collaboratore familiare)`) +
+    riga('Contributo fisso (minimale), pagato dal titolare:', '- ' + fmtEuro(inpsCollab), 'font-semibold text-rose-600') +
+    riga('Totale INPS collaboratore:', '- ' + fmtEuro(inpsCollab), 'font-bold text-rose-700', 'pt-1 border-t border-slate-100');
   const righeNetto = (quota, irap, netto, inailSocio) =>
     `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
     riga(`Quota IRAP della società (${fmtPct(quota)}):`, '- ' + fmtEuro(irap), 'font-semibold text-rose-600') +
@@ -1669,17 +1680,17 @@ function renderAll() {
 
   $('dettaglio-socio1').innerHTML =
     riga(`Quota utile SNC (${fmtPct(quotaS1())}):`, fmtEuro(q1), 'font-bold text-slate-900') +
-    righeInps(inpsS1) +
-    (inpsCollab > 0 ? riga('INPS collaboratore deducibile:', '- ' + fmtEuro(inpsCollab), 'font-semibold text-rose-600') : '') +
+    righeInps(inpsS1, s.s1Nome) +
+    righeCollab() +
     riga('Imponibile netto IRPEF:', fmtEuro(impIrpefS1), 'font-bold text-slate-800', 'pt-2 border-t border-slate-100') +
     riga('IRPEF netta stimata:', fmtEuro(irpefS1)) +
     riga(`Addizionali reg./com. (~${fmtPct(s.addiz)}):`, fmtEuro(addS1)) +
-    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
+    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
     righeNetto(quotaS1(), irapS1, nettoS1, +inail.s1 || 0);
 
   $('dettaglio-socio2').innerHTML =
     riga(`Quota utile SNC (${fmtPct(quotaS2())}):`, fmtEuro(q2), 'font-bold text-slate-900') +
-    righeInps(inpsS2) +
+    righeInps(inpsS2, s.s2Nome) +
     riga('Imponibile netto IRPEF:', fmtEuro(impIrpefS2), 'font-bold text-slate-800', 'pt-2 border-t border-slate-100') +
     riga('IRPEF netta stimata:', fmtEuro(irpefS2)) +
     riga(`Addizionali reg./com. (~${fmtPct(s.addiz)}):`, fmtEuro(addS2)) +
@@ -1713,18 +1724,19 @@ function renderAll() {
       : barra('Utile fiscale SNC (base imponibile)', utileSnc, utileSnc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700')) +
     barra('Utile netto residuo (dopo IRPEF, IRAP e INPS)', nettoTasca, nettoTasca / maxVal * 100, 'bg-indigo-600', 'text-indigo-700');
 
-  const scheda = (nome, quota, utile, irpef, inps, netto) => `
+  const scheda = (nome, quota, utile, irpef, inps, netto, collab = 0) => `
     <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
       <div class="flex justify-between items-center gap-2">
         <span class="text-xs font-bold text-slate-800">${esc(nome)} (${fmtPct(quota)})</span>
         <span class="text-xs font-bold text-emerald-700 whitespace-nowrap">${fmtEuro(utile)} utile</span>
       </div>
       <div class="mt-2 flex justify-between text-xs text-slate-600"><span>IRPEF + addizionali:</span><span class="font-semibold text-slate-900">${fmtEuro(irpef)}</span></div>
-      <div class="flex justify-between text-xs text-slate-600"><span>INPS:</span><span class="font-semibold text-slate-900">${fmtEuro(inps)}</span></div>
+      <div class="flex justify-between text-xs text-slate-600"><span>INPS ${esc(nome)}:</span><span class="font-semibold text-slate-900">${fmtEuro(inps)}</span></div>
+      ${collab ? `<div class="flex justify-between text-xs text-slate-600"><span>INPS collaboratore familiare:</span><span class="font-semibold text-slate-900">${fmtEuro(collab)}</span></div>` : ''}
       <div class="mt-1 pt-1.5 border-t border-slate-200 flex justify-between text-xs"><span class="font-semibold text-slate-700">Netto in tasca:</span><span class="font-bold ${netto < 0 ? 'text-rose-600' : 'text-emerald-700'} whitespace-nowrap">${fmtEuro(netto)} · ${fmtEuro(netto / 12)}/mese</span></div>
     </div>`;
   $('dash-soci').innerHTML =
-    scheda(s.s1Nome, quotaS1(), q1, irpefS1 + addS1, inpsS1.totale + inpsCollab, nettoS1) +
+    scheda(s.s1Nome, quotaS1(), q1, irpefS1 + addS1, inpsS1.totale, nettoS1, inpsCollab) +
     scheda(s.s2Nome, quotaS2(), q2, irpefS2 + addS2, inpsS2.totale, nettoS2) +
     `<div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
       <div class="flex justify-between items-center gap-2">

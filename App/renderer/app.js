@@ -1950,7 +1950,10 @@ function renderAll() {
       </div>
       <p class="text-[11px] text-slate-500 mt-1">Nessun compenso. I contributi INPS si attivano nel tab Imposte Soci &amp; INPS.</p>
     </div>`;
-  disegnaVersamentiDash(versamenti, annoDopo, s, ivaVers);
+  disegnaVersamentiDash(versamenti, annoDopo, s, ivaVers, {
+    inps: { s1: inpsS1.fisso, s2: inpsS2.fisso, collab: inpsCollab },
+    inail: { s1: +inail.s1 || 0, s2: +inail.s2 || 0 },
+  });
   disegnaAvvisiPolizze();
   applicaRicerche();
 }
@@ -2758,38 +2761,113 @@ function polizzeDaRinnovare() {
     .sort((a, b) => a.st.giorni - b.st.giorni);
 }
 
-/* Cruscotto: in poche righe cosa si paga e quando. Sopra l'IVA della società
-   trimestre per trimestre, sotto le imposte sul reddito dell'anno che si
-   pagano l'anno dopo (giugno e novembre), già al netto dei crediti. */
-function disegnaVersamentiDash(v, annoDopo, s, iva) {
+/* Cruscotto «Cosa pagare e quando»: tutto ciò che si paga per l'anno scelto,
+   con la data di ogni versamento (spostata al lunedì se cade nel fine
+   settimana). Sopra l'IVA, poi un riquadro per la società e uno per socio,
+   in fondo i totali per trimestre in base alla data di pagamento. */
+function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
   const anno = annoDopo - 1;
-  const SCAD = { 1: '16 maggio', 2: '20 agosto', 3: '16 novembre', 4: `16 marzo ${annoDopo}` };
-  const casella = (x) => `<div class="p-3 rounded-xl border ${x.daVersare > 0 ? 'border-slate-200 bg-slate-50' : 'border-emerald-200 bg-emerald-50/50'}">
-      <p class="text-[11px] font-semibold text-slate-500">${x.acconto ? `Acconto · 27 dicembre` : `${x.q}° trimestre · ${SCAD[x.q]}`}</p>
+  const giorno = (a, m, g) => {
+    const d = new Date(a, m - 1, g);
+    while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+    return d;
+  };
+  const fmtData = (d) => d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' });
+  const RATE = [giorno(anno, 5, 16), giorno(anno, 8, 20), giorno(anno, 11, 16), giorno(annoDopo, 2, 16)];      // INPS fisso
+  const RATE_INAIL = [giorno(anno, 2, 16), giorno(anno, 5, 16), giorno(anno, 8, 20), giorno(anno, 11, 16)];
+  const GIUGNO = giorno(annoDopo, 6, 30), NOVEMBRE = giorno(annoDopo, 11, 30);
+  const DATE_IVA = { 1: giorno(anno, 5, 16), 2: giorno(anno, 8, 20), 3: giorno(anno, 11, 16), 4: giorno(annoDopo, 3, 16), acc: giorno(anno, 12, 27) };
+
+  // elenco dei pagamenti: { chi: 'iva' | 'soc' | 's1' | 's2', data, importo } (l'IVA è della società)
+  const pagamenti = [];
+  const paga = (chi, data, importo) => { if (importo > 0.005) pagamenti.push({ chi, data, importo }); return importo; };
+
+  // 1. IVA
+  const casella = (x) => {
+    const d = x.acconto ? DATE_IVA.acc : DATE_IVA[x.q];
+    paga('iva', d, x.daVersare);
+    return `<div class="p-3 rounded-xl border ${x.daVersare > 0 ? 'border-slate-200 bg-slate-50' : 'border-emerald-200 bg-emerald-50/50'}">
+      <p class="text-[11px] font-semibold text-slate-500">${x.acconto ? 'Acconto IVA' : `${x.q}° trimestre`}</p>
+      <p class="text-[11px] text-slate-500">${fmtData(d)}</p>
       <p class="text-lg font-extrabold whitespace-nowrap ${x.daVersare > 0 ? 'text-slate-900' : 'text-emerald-700'}">${x.daVersare > 0 ? fmtEuro(x.daVersare) : 'niente'}</p>
       ${x.daVersare > 0 || !x.credito ? '' : `<p class="text-[11px] text-emerald-700">credito ${fmtEuro(x.credito)}</p>`}
     </div>`;
+  };
+  const caselleIva = iva.map(casella).join('');
   const totIva = iva.reduce((t, x) => t + x.daVersare, 0);
-  const righe = [['Società (IRAP)', v.soc], [s.s1Nome, v.s1], [s.s2Nome, v.s2]].filter(([, x]) => x);
+
+  // 2. riquadri della società e dei soci
+  const riga = (d, lbl, importo) => `<div class="flex justify-between gap-3 text-xs py-1">
+      <span class="text-slate-600"><span class="inline-block w-32 text-slate-500">${fmtData(d)}</span>${lbl}</span>
+      <span class="font-semibold text-slate-900 whitespace-nowrap">${fmtEuro(importo)}</span></div>`;
+  const gruppo = (titolo, nota, righe) => `<div class="pt-3">
+      <p class="text-xs font-bold text-slate-800">${titolo}</p>${nota ? `<p class="text-[11px] text-slate-500">${nota}</p>` : ''}
+      <div class="mt-1 divide-y divide-slate-100">${righe}</div></div>`;
+  const rate4 = (chi, date, totale, nomi) => date.map((d, i) => riga(d, nomi[i], paga(chi, d, totale / 4))).join('');
+  const NOMI_INPS = ['1ª rata', '2ª rata', '3ª rata', '4ª rata'];
+  const imposte = (chi, x, lbl) => !x ? '' : gruppo(lbl, `Saldo ${anno} e acconti ${annoDopo}, già tolti i crediti compensati nell'F24.`,
+    riga(GIUGNO, 'saldo e 1° acconto', paga(chi, GIUGNO, x.daGiu)) + riga(NOVEMBRE, '2° acconto', paga(chi, NOVEMBRE, x.daNov)) +
+    (x.resto > 0 ? `<p class="text-[11px] text-emerald-700 pt-1">Credito che avanza: ${fmtEuro(x.resto)}</p>` : ''));
+  const totaleDi = (chi) => pagamenti.filter((p) => p.chi === chi).reduce((t, p) => t + p.importo, 0);
+  const scheda = (chi, titolo, sotto, contenuto) => {
+    const tot = totaleDi(chi);
+    return `<div class="p-4 rounded-xl bg-white border border-slate-200 flex flex-col">
+      <p class="text-sm font-bold text-slate-900">${esc(titolo)}</p><p class="text-[11px] text-slate-500">${sotto}</p>
+      <div class="flex-1">${contenuto}</div>
+      <div class="flex justify-between gap-3 text-sm pt-3 mt-3 border-t border-slate-200"><span class="font-bold text-slate-900">Totale per il ${anno}${chi === 'soc' ? ' (IVA esclusa)' : ''}:</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(tot)}</span></div>
+    </div>`;
+  };
+
+  // società: INAIL dei soci e IRAP (l'IVA è sopra)
+  const inailTot = extra.inail.s1 + extra.inail.s2;
+  const contSoc =
+    (inailTot > 0 ? gruppo(`INAIL ${anno}`, 'Premio per i soci: in un\'unica volta a febbraio oppure in 4 rate (dalla 2ª con piccoli interessi).',
+      rate4('soc', RATE_INAIL, inailTot, NOMI_INPS)) : gruppo(`INAIL ${anno}`, 'Nessun premio inserito: si inserisce nel tab Imposte Soci &amp; INPS.', '')) +
+    imposte('soc', v.soc, `IRAP ${anno}`);
+  const schedaSoc = scheda('soc', 'Società', 'INAIL e IRAP', contSoc);
+
+  const schedaSocio = (chi, nome, fisso, collab, x) => {
+    const cont =
+      (fisso > 0 ? gruppo(`INPS ${anno}, contributo fisso`, 'Sul minimale, in 4 rate uguali.', rate4(chi, RATE, fisso, NOMI_INPS)) : '') +
+      (collab > 0 ? gruppo(`INPS ${anno} del collaboratore familiare`, 'Pagato dal titolare, in 4 rate uguali.', rate4(chi, RATE, collab, NOMI_INPS)) : '') +
+      imposte(chi, x, 'IRPEF, addizionali e INPS sul reddito');
+    return scheda(chi, nome, fisso > 0 ? 'INPS, IRPEF e addizionali' : 'IRPEF e addizionali (INPS non dovuto)', cont);
+  };
+  const schede = schedaSoc +
+    schedaSocio('s1', s.s1Nome, extra.inps.s1, extra.inps.collab, v.s1) +
+    schedaSocio('s2', s.s2Nome, extra.inps.s2, 0, v.s2);
+
+  // 3. totali per trimestre, in base alla data di pagamento
+  const trimestri = new Map();
+  for (const p of [...pagamenti].sort((a, b) => a.data - b.data)) {
+    const q = Math.floor(p.data.getMonth() / 3) + 1, a = p.data.getFullYear();
+    const k = `${a}-${q}`;
+    if (!trimestri.has(k)) trimestri.set(k, { nome: `${q}° trimestre ${a}`, mesi: ['gen-mar', 'apr-giu', 'lug-set', 'ott-dic'][q - 1], soc: 0, soci: 0 });
+    trimestri.get(k)[p.chi === 'soc' || p.chi === 'iva' ? 'soc' : 'soci'] += p.importo;
+  }
   const cella = (n, cls = '') => `<td class="py-2 text-right whitespace-nowrap ${cls}">${fmtEuro(n)}</td>`;
-  const tot = righe.reduce((t, [, x]) => ({ giu: t.giu + x.daGiu, nov: t.nov + x.daNov }), { giu: 0, nov: 0 });
-  const avanzi = righe.filter(([, x]) => x.resto > 0).map(([n, x]) => `${esc(n)} ${fmtEuro(x.resto)}`);
+  const tq = [...trimestri.values()];
+  const somma = tq.reduce((t, x) => ({ soc: t.soc + x.soc, soci: t.soci + x.soci }), { soc: 0, soci: 0 });
+
   $('dash-versamenti').innerHTML =
-    `<h2 class="text-base font-bold text-slate-900">Cosa pagare e quando</h2>
-    <div class="mt-4">
+    `<h2 class="text-base font-bold text-slate-900">Cosa pagare e quando: il ${anno}</h2>
+    <p class="text-xs text-slate-500">Tutti i versamenti dovuti per il ${anno}, ognuno con la sua data. Se la scadenza cade di sabato o domenica, si paga il lunedì.</p>
+    <div class="mt-5">
       <div class="flex justify-between items-baseline gap-2"><p class="text-sm font-bold text-slate-800">IVA della società ${anno}</p><p class="text-xs text-slate-500">totale <strong class="text-slate-900">${fmtEuro(totIva)}</strong></p></div>
-      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-2">${iva.map(casella).join('')}</div>
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-2">${caselleIva}</div>
       ${iva.some((x) => x.acconto && x.daVersare > 0) ? `<p class="text-[11px] text-slate-500 mt-2">Il 4° trimestre è già al netto dell'acconto di dicembre.</p>` : ''}
     </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-6">${schede}</div>
     <div class="mt-6">
-      <p class="text-sm font-bold text-slate-800">Imposte sui redditi del ${anno}, da pagare nel ${annoDopo}</p>
+      <p class="text-sm font-bold text-slate-800">Totale da pagare per trimestre</p>
+      <p class="text-[11px] text-slate-500">In base alla data di ogni versamento. Società: IVA, INAIL e IRAP. Soci: INPS, IRPEF e addizionali.</p>
       <table class="w-full mt-1 text-sm">
         <thead><tr class="text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-200">
-          <th class="py-2 text-left font-semibold"></th><th class="py-2 text-right font-semibold">Giugno</th><th class="py-2 text-right font-semibold">Novembre</th><th class="py-2 text-right font-semibold">Totale</th></tr></thead>
-        <tbody>${righe.map(([n, x]) => `<tr class="border-b border-slate-100"><td class="py-2 font-semibold text-slate-800">${esc(n)}</td>${cella(x.daGiu)}${cella(x.daNov)}${cella(x.daGiu + x.daNov, 'font-bold')}</tr>`).join('')}
-          <tr><td class="py-2 font-bold text-slate-900">Totale</td>${cella(tot.giu, 'font-bold')}${cella(tot.nov, 'font-bold')}${cella(tot.giu + tot.nov, 'font-extrabold text-rose-600')}</tr></tbody>
+          <th class="py-2 text-left font-semibold">Trimestre</th><th class="py-2 text-right font-semibold">Società</th><th class="py-2 text-right font-semibold">Soci</th><th class="py-2 text-right font-semibold">Totale</th></tr></thead>
+        <tbody>${tq.map((x) => `<tr class="border-b border-slate-100"><td class="py-2 font-semibold text-slate-800">${x.nome} <span class="font-normal text-slate-500">(${x.mesi})</span></td>${cella(x.soc)}${cella(x.soci)}${cella(x.soc + x.soci, 'font-bold')}</tr>`).join('')}
+          <tr><td class="py-2 font-bold text-slate-900">Totale</td>${cella(somma.soc, 'font-bold')}${cella(somma.soci, 'font-bold')}${cella(somma.soc + somma.soci, 'font-extrabold text-rose-600')}</tr></tbody>
       </table>
-      <p class="text-[11px] text-slate-500 mt-2">Saldo più acconti, già tolti i crediti che si possono compensare nell'F24.${avanzi.length ? ` Credito che avanza: ${avanzi.join(', ')}.` : ''} Il dettaglio è nel tab Imposte Soci &amp; INPS.</p>
+      <p class="text-[11px] text-slate-500 mt-2">Il dettaglio dei calcoli è nei tab Liquidazione IVA e Imposte Soci &amp; INPS.</p>
     </div>`;
 }
 

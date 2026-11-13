@@ -5,10 +5,12 @@ S.N.C.:
 
 1. **Dashboard**: ricavi, costi deducibili, utile fiscale, carico di imposte e INPS, ripartizione
    tra i soci con il netto in tasca di ognuno (all'anno e al mese) e il riquadro «Cosa pagare e
-   quando»: l'IVA della società trimestre per trimestre (con l'acconto del 27 dicembre) e le
-   imposte sui redditi dell'anno da
-   pagare l'anno dopo, a giugno e a novembre, per la società e per ogni socio (già al netto dei
-   crediti; se gli acconti dell'anno non sono inseriti usa quelli dovuti in base all'anno prima).
+   quando»: tutti i versamenti dovuti per l'anno, ognuno con la sua data (spostata al lunedì se
+   cade nel fine settimana). L'IVA della società trimestre per trimestre con l'acconto del 27
+   dicembre; un riquadro per la società (INAIL in 4 rate, IRAP) e uno per ogni socio (INPS fisso
+   in 4 rate, anche del collaboratore familiare, e IRPEF, addizionali e INPS sul reddito a giugno
+   e novembre dell'anno dopo, già al netto dei crediti); in fondo il totale per trimestre della
+   società e dei soci.
 2. **Fatture Emesse**: scorporo IVA 22% e regimi non imponibili (art. 8 Svizzera/extra-UE,
    art. 41 UE).
 3. **Corrispettivi**: incassi del registratore telematico, con scorporo IVA; caricamento dei PDF

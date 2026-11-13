@@ -1931,7 +1931,7 @@ function renderAll() {
     (risultato < 0
       ? barra('Perdita fiscale SNC (costi oltre i ricavi)', risultato, -risultato / Math.max(totCostiDeducibili, 1) * 100, 'bg-rose-500', 'text-rose-600')
       : barra('Utile fiscale SNC (base imponibile)', utileSnc, utileSnc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700')) +
-    barra('Utile netto residuo (dopo IRPEF, IRAP e INPS)', nettoTasca, nettoTasca / maxVal * 100, 'bg-indigo-600', 'text-indigo-700');
+    barra(`Utile netto residuo (dopo IRPEF, IRAP e INPS del ${appState.anno})`, nettoTasca, nettoTasca / maxVal * 100, 'bg-indigo-600', 'text-indigo-700');
 
   const scheda = (nome, quota, utile, irpef, inps, netto, collab = 0) => `
     <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
@@ -2876,7 +2876,7 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
     rigaT('Totale soci', () => true, 'bg-slate-50 font-bold', 'font-bold text-slate-900'));
   $('dash-trimestri').innerHTML =
     `<h2 class="text-base font-bold text-slate-900">Totale da pagare per scadenza: il ${anno}</h2>
-    <p class="text-xs text-slate-500">Gli stessi versamenti del riquadro sopra, alle date ufficiali dell'F24 (se la scadenza cade di sabato o domenica si paga il lunedì). Sotto l'IVA è indicato il trimestre a cui si riferisce.</p>
+    <p class="text-xs text-slate-500">Gli stessi versamenti del riquadro sopra (acconti ${annoDopo} compresi, crediti già tolti), alle date ufficiali dell'F24 (se la scadenza cade di sabato o domenica si paga il lunedì). Sotto l'IVA è indicato il trimestre a cui si riferisce.</p>
     <div class="mt-4 p-4 rounded-xl border border-slate-200">
       <p class="text-sm font-bold text-slate-900">Società</p>${tabSoc}</div>
     <div class="mt-4 p-4 rounded-xl border border-slate-200">
@@ -2885,6 +2885,15 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
   $('dash-versamenti').innerHTML =
     `<h2 class="text-base font-bold text-slate-900">Cosa pagare e quando: il ${anno}</h2>
     <p class="text-xs text-slate-500">Tutti i versamenti dovuti per il ${anno}, ognuno con la sua data. Se la scadenza cade di sabato o domenica, si paga il lunedì.</p>
+    <div class="mt-3 p-3 rounded-xl bg-indigo-50 border border-indigo-100 text-xs text-indigo-900">
+      <p class="font-bold">Perché questi importi non coincidono con il «Carico fiscale» in alto</p>
+      <p class="mt-1">Il Carico fiscale è quanto costano, in imposte e INPS, i redditi del ${anno}. Qui invece c'è quanto si versa davvero con gli F24, che è diverso perché:</p>
+      <ul class="list-disc pl-5 mt-1 space-y-0.5">
+        <li>si pagano anche gli <strong>acconti ${annoDopo}</strong>, un anticipo sulle tasse dell'anno dopo che poi si scala;</li>
+        <li>si tolgono gli <strong>acconti già pagati per il ${anno}</strong> e i <strong>crediti</strong> avanzati dall'anno prima;</li>
+        <li>l'IRAP la paga la società, quindi è nel suo riquadro e non in quello dei soci.</li>
+      </ul>
+    </div>
     <div class="mt-5">
       <div class="flex justify-between items-baseline gap-2"><p class="text-sm font-bold text-slate-800">IVA della società ${anno}</p><p class="text-xs text-slate-500">totale <strong class="text-slate-900">${fmtEuro(totIva)}</strong></p></div>
       <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-2">${caselleIva}</div>

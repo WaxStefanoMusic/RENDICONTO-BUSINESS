@@ -73,6 +73,7 @@ const STATO_VUOTO = () => ({
   accontoIva: {},              // anno -> acconto IVA versato a dicembre (vuoto = calcolato)
   socio2Inps: true,
   collabInps: false,
+  inpsS2DaS1: false,           // il contributo fisso del 2° socio lo paga di tasca sua il 1° socio
   collabDeduci: false,         // INPS del collaboratore dedotto dal reddito del titolare (se non c'è rivalsa)
   inpsAnte96: { s1: false, s2: false },   // socio con contributi versati prima del 1996 (massimale più basso)
   inail: {},                   // anno -> premio INAIL annuo dei soci { s1, s2 }
@@ -156,6 +157,7 @@ function normalizza(s) {
   st.cartaEstratti = Array.isArray(st.cartaEstratti) ? st.cartaEstratti : [];
   st.scalari = Array.isArray(st.scalari) ? st.scalari : [];
   st.inpsAnte96 = { s1: !!st.inpsAnte96?.s1, s2: !!st.inpsAnte96?.s2 };
+  st.inpsS2DaS1 = !!st.inpsS2DaS1;
   if (typeof st.inail !== 'object' || st.inail === null || Array.isArray(st.inail)) st.inail = {};
   if (typeof st.accontoIva !== 'object' || st.accontoIva === null || Array.isArray(st.accontoIva)) st.accontoIva = {};
   if (typeof st.fiscale !== 'object' || st.fiscale === null || Array.isArray(st.fiscale)) st.fiscale = {};
@@ -1400,6 +1402,7 @@ function syncControlsFromState() {
   $('iva-credito-prec').value = appState.creditoIvaPrec[appState.anno] || 0;
   $('toggle-socio2-inps').checked = !!appState.socio2Inps;
   $('toggle-collab-inps').checked = !!appState.collabInps;
+  $('inps-s2-da-s1').checked = !!appState.inpsS2DaS1;
   $('collab-deduci').checked = !!appState.collabDeduci;
   for (const k of ['s1', 's2']) {
     $('ante96-' + k).checked = !!appState.inpsAnte96[k];
@@ -1433,6 +1436,7 @@ $('iva-credito-prec').addEventListener('change', () => {
 });
 $('toggle-socio2-inps').addEventListener('change', () => { appState.socio2Inps = $('toggle-socio2-inps').checked; saveState(); renderAll(); });
 $('toggle-collab-inps').addEventListener('change', () => { appState.collabInps = $('toggle-collab-inps').checked; saveState(); renderAll(); });
+$('inps-s2-da-s1').addEventListener('change', () => { appState.inpsS2DaS1 = $('inps-s2-da-s1').checked; saveState(); renderAll(); });
 $('collab-deduci').addEventListener('change', () => { appState.collabDeduci = $('collab-deduci').checked; saveState(); renderAll(); });
 document.querySelectorAll('[data-fx]').forEach((el) => el.addEventListener('change', () => {
   const [k, campo] = el.dataset.fx.split('.');
@@ -1786,7 +1790,9 @@ function renderAll() {
   // imposte personali e la sua parte dell'IRAP pagata dalla società
   const [irapS1, irapS2] = dividi(irapSocieta);
   const [inailS1, inailS2] = dividi(inailTot);
-  const nettoS1 = q1 - totS1 - irapS1, nettoS2 = q2 - totS2 - irapS2;
+  // se il contributo fisso del 2° socio lo paga il 1°, passa dal netto dell'uno a quello dell'altro
+  const inpsS2PagatoDaS1 = appState.inpsS2DaS1 ? inpsS2.fisso : 0;
+  const nettoS1 = cent(q1 - totS1 - irapS1 - inpsS2PagatoDaS1), nettoS2 = cent(q2 - totS2 - irapS2 + inpsS2PagatoDaS1);
 
   const righeAddiz = (x) =>
     riga('Addizionale regionale (a scaglioni):', fmtEuro(x.regionale)) +
@@ -1868,9 +1874,10 @@ function renderAll() {
     titoloInps(!s.collabNome || /^collaborat/i.test(s.collabNome) ? 'INPS del collaboratore familiare' : `INPS di ${s.collabNome} (collaboratore familiare)`) +
     riga('Contributo fisso (minimale), pagato dal titolare:', '- ' + fmtEuro(inpsCollab), 'font-semibold text-rose-600') +
     riga('Totale INPS collaboratore:', '- ' + fmtEuro(inpsCollab), 'font-bold text-rose-700', 'pt-1 border-t border-slate-100');
-  const righeNetto = (quota, irap, netto, inailSocio) =>
+  const righeNetto = (quota, irap, netto, inailSocio, extra = '') =>
     `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
     riga(`Quota IRAP della società (${fmtPct(quota)}):`, '- ' + fmtEuro(irap), 'font-semibold text-rose-600') +
+    extra +
     (inailSocio > 0 ? riga(`INAIL della società, quota del ${fmtPct(quota)} (già tolta dall'utile):`, fmtEuro(inailSocio), 'text-slate-500') : '') +
     `<div class="flex justify-between gap-3 text-sm"><span class="font-bold text-slate-900">Netto in tasca nell'anno:</span><span class="font-extrabold ${netto < 0 ? 'text-rose-600' : 'text-emerald-700'} whitespace-nowrap">${fmtEuro(netto)}</span></div>` +
     `<div class="flex justify-between gap-3 text-sm"><span class="font-semibold text-slate-700">Netto al mese (÷ 12):</span><span class="font-bold ${netto < 0 ? 'text-rose-600' : 'text-emerald-700'} whitespace-nowrap">${fmtEuro(netto / 12)}</span></div>` +
@@ -1885,7 +1892,7 @@ function renderAll() {
     riga('IRPEF netta stimata:', fmtEuro(irpefS1)) +
     righeAddiz(addizS1) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
-    righeNetto(quotaS1(), irapS1, nettoS1, inailS1) +
+    righeNetto(quotaS1(), irapS1, nettoS1, inailS1, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso di ${esc(s.s2Nome)} pagato da te:`, '- ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-rose-600') : '') +
     righeVersamenti('s1', irpefS1, inpsS1.eccedenza, addizS1, ritS1);
 
   $('dettaglio-socio2').innerHTML =
@@ -1896,7 +1903,7 @@ function renderAll() {
     riga('IRPEF netta stimata:', fmtEuro(irpefS2)) +
     righeAddiz(addizS2) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>` +
-    righeNetto(quotaS2(), irapS2, nettoS2, inailS2) +
+    righeNetto(quotaS2(), irapS2, nettoS2, inailS2, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso pagato da ${esc(s.s1Nome)}:`, '+ ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-emerald-700') : '') +
     righeVersamenti('s2', irpefS2, inpsS2.eccedenza, addizS2, ritS2);
 
   $('dettaglio-societa').innerHTML =
@@ -1953,7 +1960,7 @@ function renderAll() {
       : barra('Utile fiscale SNC (base imponibile)', utileSnc, utileSnc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700')) +
     barra(`Utile netto residuo (dopo IRPEF, IRAP e INPS del ${appState.anno})`, nettoTasca, nettoTasca / maxVal * 100, 'bg-indigo-600', 'text-indigo-700');
 
-  const scheda = (nome, quota, utile, irpef, inps, netto, collab = 0) => `
+  const scheda = (nome, quota, utile, irpef, inps, netto, collab = 0, altro = '') => `
     <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
       <div class="flex justify-between items-center gap-2">
         <span class="text-xs font-bold text-slate-800">${esc(nome)} (${fmtPct(quota)})</span>
@@ -1962,11 +1969,14 @@ function renderAll() {
       <div class="mt-2 flex justify-between text-xs text-slate-600"><span>IRPEF + addizionali:</span><span class="font-semibold text-slate-900">${fmtEuro(irpef)}</span></div>
       <div class="flex justify-between text-xs text-slate-600"><span>INPS ${esc(nome)}:</span><span class="font-semibold text-slate-900">${fmtEuro(inps)}</span></div>
       ${collab ? `<div class="flex justify-between text-xs text-slate-600"><span>INPS collaboratore familiare:</span><span class="font-semibold text-slate-900">${fmtEuro(collab)}</span></div>` : ''}
+      ${altro}
       <div class="mt-1 pt-1.5 border-t border-slate-200 flex justify-between text-xs"><span class="font-semibold text-slate-700">Netto in tasca:</span><span class="font-bold ${netto < 0 ? 'text-rose-600' : 'text-emerald-700'} whitespace-nowrap">${fmtEuro(netto)} · ${fmtEuro(netto / 12)}/mese</span></div>
     </div>`;
   $('dash-soci').innerHTML =
-    scheda(s.s1Nome, quotaS1(), q1, irpefS1 + addS1, inpsS1.totale, nettoS1, inpsCollab) +
-    scheda(s.s2Nome, quotaS2(), q2, irpefS2 + addS2, inpsS2.totale, nettoS2) +
+    scheda(s.s1Nome, quotaS1(), q1, irpefS1 + addS1, inpsS1.totale, nettoS1, inpsCollab,
+      inpsS2PagatoDaS1 > 0 ? `<div class="flex justify-between text-xs text-slate-600"><span>INPS fisso di ${esc(s.s2Nome)}:</span><span class="font-semibold text-slate-900">${fmtEuro(inpsS2PagatoDaS1)}</span></div>` : '') +
+    scheda(s.s2Nome, quotaS2(), q2, irpefS2 + addS2, inpsS2.totale, nettoS2, 0,
+      inpsS2PagatoDaS1 > 0 ? `<div class="flex justify-between text-xs text-slate-600"><span>di cui pagato da ${esc(s.s1Nome)}:</span><span class="font-semibold text-emerald-700">+ ${fmtEuro(inpsS2PagatoDaS1)}</span></div>` : '') +
     `<div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
       <div class="flex justify-between items-center gap-2">
         <span class="text-xs font-bold text-slate-800">${esc(s.collabNome || 'Collaboratore familiare')}</span>
@@ -1975,7 +1985,7 @@ function renderAll() {
       <p class="text-[11px] text-slate-500 mt-1">Nessun compenso. I contributi INPS si attivano nel tab Imposte Soci &amp; INPS.</p>
     </div>`;
   disegnaVersamentiDash(versamenti, annoDopo, s, ivaVers, {
-    inps: { s1: inpsS1.fisso, s2: inpsS2.fisso, collab: inpsCollab },
+    inps: { s1: inpsS1.fisso, s2: inpsS2.fisso, collab: inpsCollab, s2DaS1: inpsS2PagatoDaS1 > 0 },
     inail: { s1: +inail.s1 || 0, s2: +inail.s2 || 0 },
   });
   disegnaAvvisiPolizze();
@@ -2850,15 +2860,19 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
     imposte('soc', v.soc, `IRAP ${anno}`, 'IRAP');
   const schedaSoc = scheda('soc', 'Società', 'INAIL e IRAP', contSoc);
 
-  const schedaSocio = (chi, nome, fisso, collab, x) => {
+  const schedaSocio = (chi, nome, fisso, collab, x, altro = null) => {
+    const pagatoDaAltri = chi === 's2' && extra.inps.s2DaS1 && extra.inps.s2 > 0;
+    if (pagatoDaAltri) fisso = 0;
     const cont =
       (fisso > 0 ? gruppo(`INPS ${anno}, contributo fisso`, 'Sul minimale, in 4 rate uguali.', rate4(chi, RATE, fisso, NOMI_INPS, 'INPS contributo fisso')) : '') +
       (collab > 0 ? gruppo(`INPS ${anno} del collaboratore familiare`, 'Pagato dal titolare, in 4 rate uguali.', rate4(chi, RATE, collab, NOMI_INPS, 'INPS del collaboratore familiare')) : '') +
+      (altro ? gruppo(`INPS ${anno} di ${esc(altro.nome)}, contributo fisso`, `Pagato da ${esc(nome)}, in 4 rate uguali.`, rate4(chi, RATE, altro.importo, NOMI_INPS, `INPS fisso di ${esc(altro.nome)}`)) : '') +
+      (pagatoDaAltri ? gruppo(`INPS ${anno}, contributo fisso`, `Lo paga ${esc(s.s1Nome)}: le rate sono nel suo riquadro.`, '') : '') +
       imposte(chi, x, 'IRPEF, addizionali e INPS sul reddito', 'IRPEF, addizionali e INPS sul reddito');
-    return scheda(chi, nome, fisso > 0 ? 'INPS, IRPEF e addizionali' : 'IRPEF e addizionali (INPS non dovuto)', cont);
+    return scheda(chi, nome, fisso > 0 || altro ? 'INPS, IRPEF e addizionali' : pagatoDaAltri ? `IRPEF e addizionali (INPS pagato da ${esc(s.s1Nome)})` : 'IRPEF e addizionali (INPS non dovuto)', cont);
   };
   const schede = schedaSoc +
-    schedaSocio('s1', s.s1Nome, extra.inps.s1, extra.inps.collab, v.s1) +
+    schedaSocio('s1', s.s1Nome, extra.inps.s1, extra.inps.collab, v.s1, extra.inps.s2DaS1 && extra.inps.s2 > 0 ? { nome: s.s2Nome, importo: extra.inps.s2 } : null) +
     schedaSocio('s2', s.s2Nome, extra.inps.s2, 0, v.s2);
 
   // 3. totali per scadenza: in colonna le date ufficiali di pagamento (già

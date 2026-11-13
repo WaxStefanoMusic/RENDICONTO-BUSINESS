@@ -1919,6 +1919,10 @@ function renderAll() {
     : risultato < 0 ? 'Perdita fiscale stimata SNC' : 'Utile fiscale stimato SNC';
   if (risultato < 0) $('kpi-utile-sub').textContent = 'I costi superano i ricavi: niente IRPEF né IRAP sul reddito, l\'INPS minimale resta dovuto.';
   $('kpi-tasse').textContent = fmtEuro(totaleTasse);
+  // quota dell'utile della SNC che se ne va in imposte e INPS
+  $('kpi-tasse-pct').textContent = risultato > 0
+    ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(totaleTasse / risultato * 100)}% dell'utile ${redditoDich != null ? 'dichiarato' : 'stimato'}`
+    : 'Nessun utile su cui calcolare la percentuale';
 
   const maxVal = Math.max(totRicaviImp, 1);
   $('bars').innerHTML =

@@ -153,8 +153,20 @@
             <label class="block text-xs font-semibold text-slate-700">INPS: contributo fisso (€/anno)
               <input id="set-inps-fisso" type="number" min="0" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
             </label>
-            <label class="block text-xs font-semibold text-slate-700">INPS: aliquota eccedenza (%)
+            <label class="block text-xs font-semibold text-slate-700">INPS: aliquota fino alla 1ª fascia (%)
               <input id="set-inps-aliq" type="number" min="0" max="100" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">INPS: limite 1ª fascia di reddito (€)
+              <input id="set-inps-fascia" type="number" min="0" step="1" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">INPS: aliquota oltre la 1ª fascia (%)
+              <input id="set-inps-aliq2" type="number" min="0" step="0.01" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">INPS: massimale con contributi prima del 1996 (€)
+              <input id="set-inps-mass-vecchi" type="number" min="0" step="1" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">INPS: massimale per chi ha iniziato dal 1996 (€)
+              <input id="set-inps-mass-nuovi" type="number" min="0" step="1" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm text-right" />
             </label>
           </div>
         </details>
@@ -903,8 +915,8 @@
     <!-- TAB 8: IMPOSTE -->
     <section id="tab-imposte" class="tab-content hidden space-y-6">
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-        <h2 class="text-lg font-bold text-slate-900 mb-1">Posizioni previdenziali (INPS commercianti)</h2>
-        <p class="text-xs text-slate-500 mb-5">Stato contributivo dei soci e del collaboratore familiare. I contributi INPS si deducono dal reddito imponibile IRPEF.</p>
+        <h2 class="text-lg font-bold text-slate-900 mb-1">Posizioni previdenziali (INPS e INAIL)</h2>
+        <p class="text-xs text-slate-500 mb-5">Stato contributivo dei soci e del collaboratore familiare. L'INPS si calcola sulla quota di reddito di ogni socio, anche se non la preleva, e si deduce dal reddito IRPEF. Il premio INAIL dei soci lo paga la società: si toglie dall'utile e dalla base IRAP (se lo registri già tra le spese, lascia 0 qui).</p>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
             <div class="flex items-center justify-between gap-2">
@@ -912,6 +924,10 @@
               <span class="px-2 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-800">Attivo INPS</span>
             </div>
             <p id="txt-inps-s1" class="text-xs text-slate-600"></p>
+            <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer"><input type="checkbox" id="ante96-s1" class="mt-0.5 rounded border-slate-300"><span><strong>Contributi versati prima del 1996</strong><br><span id="txt-mass-s1" class="text-slate-500"></span></span></label>
+            <label class="block text-xs font-semibold text-slate-700">Premio INAIL <span data-anno></span> (€/anno)
+              <input id="inail-s1" type="number" min="0" step="0.01" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+            </label>
           </div>
           <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
             <div class="flex items-center justify-between gap-2">
@@ -923,6 +939,10 @@
               </label>
             </div>
             <p class="text-xs text-slate-600">Attivo se il socio lavora abitualmente in negozio; disattivo se è socio di capitale o già assicurato altrove come dipendente a tempo pieno.</p>
+            <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer"><input type="checkbox" id="ante96-s2" class="mt-0.5 rounded border-slate-300"><span><strong>Contributi versati prima del 1996</strong><br><span id="txt-mass-s2" class="text-slate-500"></span></span></label>
+            <label class="block text-xs font-semibold text-slate-700">Premio INAIL <span data-anno></span> (€/anno)
+              <input id="inail-s2" type="number" min="0" step="0.01" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+            </label>
           </div>
           <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
             <div class="flex items-center justify-between gap-2">
@@ -962,9 +982,10 @@
           <div class="pt-3 border-t border-slate-100">
             <h4 class="text-xs font-bold uppercase text-slate-500 mb-2">Principali scadenze F24</h4>
             <ul class="text-xs text-slate-600 space-y-1.5">
-              <li>• <strong>16 mag / 20 ago / 16 nov / 16 feb:</strong> rate fisse INPS commercianti.</li>
-              <li>• <strong>30 giugno:</strong> saldo IRPEF, addizionali, IRAP e INPS eccedenza + 1° acconto (40%).</li>
-              <li>• <strong>30 novembre:</strong> 2° acconto IRPEF, IRAP e INPS eccedenza (60%).</li>
+              <li>• <strong>16 feb:</strong> autoliquidazione INAIL (oppure in 4 rate: 16 feb, 16 mag, 20 ago, 16 nov).</li>
+              <li>• <strong>16 mag / 20 ago / 16 nov / 16 feb:</strong> rate fisse INPS sul minimale.</li>
+              <li>• <strong>30 giugno:</strong> saldo IRPEF, addizionali, IRAP e INPS oltre il minimale + 1° acconto (40%).</li>
+              <li>• <strong>30 novembre:</strong> 2° acconto IRPEF, IRAP e INPS oltre il minimale (60%).</li>
             </ul>
           </div>
         </div>

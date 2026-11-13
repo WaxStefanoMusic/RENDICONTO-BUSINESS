@@ -202,6 +202,8 @@ const imp = () => appState.impostazioni;
    sotto i 10.000 («5000,00 €»), che in contabilità confonde */
 const EURO = new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', useGrouping: 'always' });
 const fmtEuro = (n) => EURO.format(n || 0);
+// arrotonda al centesimo, come negli F24: ogni importo mostrato è quello usato nei conti
+const cent = (n) => Math.round(((+n || 0) + (n >= 0 ? Number.EPSILON : -Number.EPSILON)) * 100) / 100;
 const fmtPct = (n) => new Intl.NumberFormat('it-IT', { maximumFractionDigits: 2 }).format(n || 0) + '%';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtData = (iso) => { const [y, m, d] = String(iso || '').split('-'); return d ? `${d}/${m}/${y}` : iso; };
@@ -516,7 +518,7 @@ function calcolaIrpefScaglioni(imponibile) {
   if (imponibile <= 5500) detrazione = 1265;
   else if (imponibile <= 28000) detrazione = 500 + 765 * ((28000 - imponibile) / 22500);
   else if (imponibile <= 50000) detrazione = 500 * ((50000 - imponibile) / 22000);
-  return Math.max(0, irpef - detrazione);
+  return cent(Math.max(0, irpef - detrazione));
 }
 
 /* INPS artigiani e commercianti sulla quota di reddito del socio:
@@ -539,7 +541,8 @@ function calcolaAddizionali(imponibile) {
   }
   const esente = r <= (+s.addComEsenz || 0);
   const comunale = esente ? 0 : r * ((+s.addCom || 0) / 100);
-  return { regionale, comunale, esente, totale: regionale + comunale };
+  regionale = cent(regionale);
+  return { regionale, comunale: cent(comunale), esente, totale: cent(regionale + cent(comunale)) };
 }
 
 function calcolaInpsCommercianti(redditoQuota, attivo, ante96 = false) {
@@ -552,8 +555,8 @@ function calcolaInpsCommercianti(redditoQuota, attivo, ante96 = false) {
   const base = Math.min(Math.max(0, redditoQuota), massimale);
   const fascia1 = Math.max(0, Math.min(base, fascia) - min) * ((+s.inpsAliq || 0) / 100);
   const fascia2 = Math.max(0, base - fascia) * ((+s.inpsAliq2 || +s.inpsAliq || 0) / 100);
-  const eccedenza = fascia1 + fascia2;
-  return { fisso, fascia1, fascia2, eccedenza, totale: fisso + eccedenza, massimale, oltreMassimale: redditoQuota > massimale };
+  const eccedenza = cent(cent(fascia1) + cent(fascia2));
+  return { fisso, fascia1: cent(fascia1), fascia2: cent(fascia2), eccedenza, totale: cent(fisso + eccedenza), massimale, oltreMassimale: redditoQuota > massimale };
 }
 const inailAnno = () => appState.inail[appState.anno] || { s1: 0, s2: 0 };
 
@@ -1677,7 +1680,7 @@ function renderAll() {
   let riporto = +appState.creditoIvaPrec[anno] || 0;
   const accIvaInserito = appState.accontoIva[anno];
   const baseAccIva = ivaQ4Anno[anno - 1] || 0;
-  const accIvaCalc = baseAccIva * 0.88 >= 103.29 ? baseAccIva * 0.88 : 0;
+  const accIvaCalc = cent(baseAccIva * 0.88) >= 103.29 ? cent(baseAccIva * 0.88) : 0;
   const accontoIva = accIvaInserito === '' || accIvaInserito == null ? accIvaCalc : +accIvaInserito || 0;
   const TRIM = [
     { q: 1, nome: '1° trimestre (gen-mar)', scad: scadenza(anno, 5, 16), cod: '6031' },
@@ -1695,7 +1698,7 @@ function renderAll() {
     const acc = t.q === 4 ? accontoIva : 0;                 // l'acconto di dicembre si scala dal 4° trimestre
     const netto = diff - acc;
     let daVersare = 0, interessi = 0;
-    if (netto > 0) { interessi = netto * 0.01; daVersare = netto + interessi; riporto = 0; }
+    if (netto > 0) { interessi = cent(netto * 0.01); daVersare = cent(netto + interessi); riporto = 0; }
     else riporto = Math.abs(netto);
     const debito = daVersare > 0;
     ivaVers.push({ q: t.q, daVersare, credito: debito ? 0 : riporto });
@@ -1735,41 +1738,54 @@ function renderAll() {
   const inail = inailAnno();
   const inailTot = (+inail.s1 || 0) + (+inail.s2 || 0);
   totCostiDeducibili += inailTot;
+  /* Deduzione forfettaria del 10% dell'IRAP (art. 6 DL 185/2008): spetta se ci
+     sono interessi passivi e si calcola sull'IRAP VERSATA nell'anno, cioè il
+     saldo dell'anno prima più gli acconti dell'anno (anche se pagati con crediti
+     in compensazione). Riduce il reddito d'impresa, non la base IRAP. */
+  const irapVersataAnno = (() => {
+    const valIrap = fiscaleAnno().irap, prec = precedente && precedente.soc;
+    const acconti = valIrap === '' || valIrap == null ? (prec ? prec.acc1 + prec.acc2 : 0) : +valIrap || 0;
+    return (prec ? prec.saldo : 0) + acconti;
+  })();
+  const dedIrap = interessiPassivi > 0 ? cent(Math.min(irapVersataAnno * 0.1, interessiPassivi)) : 0;
+  totCostiDeducibili += dedIrap;
   /* Se la dichiarazione dell'anno è già stata presentata, il reddito della
      società (quadro RN, rigo RN1 o RN2) è quello vero: vale al posto di quello
      calcolato dalle registrazioni, che a volte non sono complete. */
   const dich = fiscaleAnno().soc || {};
   const redditoDich = dich.reddito === '' || dich.reddito == null ? null : +dich.reddito;
-  const risultatoConti = totRicaviImp - totCostiDeducibili;
+  const risultatoConti = cent(totRicaviImp - totCostiDeducibili);
   const risultato = redditoDich != null ? redditoDich : risultatoConti;
   const ritenute = +dich.ritenute || 0;               // ritenute subite dalla società, divise tra i soci
-  const ritS1 = ritenute * quotaS1() / 100, ritS2 = ritenute * quotaS2() / 100;
+  const dividi = (tot) => { const a = cent(tot * quotaS1() / 100); return [a, quotaS1() + quotaS2() === 100 ? cent(tot - a) : cent(tot * quotaS2() / 100)]; };
+  const [ritS1, ritS2] = dividi(ritenute);
   const utileSnc = Math.max(0, risultato);
-  const q1 = utileSnc * quotaS1() / 100;
-  const q2 = utileSnc * quotaS2() / 100;
+  const [q1, q2] = dividi(utileSnc);
   const inpsS1 = calcolaInpsCommercianti(q1, true, appState.inpsAnte96.s1);
   const inpsS2 = calcolaInpsCommercianti(q2, appState.socio2Inps, appState.inpsAnte96.s2);
   const inpsCollab = appState.collabInps ? (+s.inpsFisso || 0) : 0;   // a carico del socio titolare
 
-  const impIrpefS1 = Math.max(0, q1 - inpsS1.totale - (appState.collabDeduci ? inpsCollab : 0));
+  const impIrpefS1 = cent(Math.max(0, q1 - inpsS1.totale - (appState.collabDeduci ? inpsCollab : 0)));
   const detrS1 = detrazioniSocio('s1').importo, detrS2 = detrazioniSocio('s2').importo;
-  const irpefS1 = Math.max(0, calcolaIrpefScaglioni(impIrpefS1) - detrS1);
+  const irpefS1 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS1) - detrS1));
   const addizS1 = calcolaAddizionali(impIrpefS1), addS1 = addizS1.totale;
-  const totS1 = irpefS1 + addS1 + inpsS1.totale + inpsCollab;
+  const totS1 = cent(irpefS1 + addS1 + inpsS1.totale + inpsCollab);
 
-  const impIrpefS2 = Math.max(0, q2 - inpsS2.totale);
-  const irpefS2 = Math.max(0, calcolaIrpefScaglioni(impIrpefS2) - detrS2);
+  const impIrpefS2 = cent(Math.max(0, q2 - inpsS2.totale));
+  const irpefS2 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS2) - detrS2));
   const addizS2 = calcolaAddizionali(impIrpefS2), addS2 = addizS2.totale;
-  const totS2 = irpefS2 + addS2 + inpsS2.totale;
+  const totS2 = cent(irpefS2 + addS2 + inpsS2.totale);
 
   // per l'IRAP gli interessi passivi non si deducono: si riaggiungono
-  const baseIrap = Math.max(0, risultato + interessiPassivi);
-  const irapSocieta = Math.max(0, baseIrap - (+s.irapDed || 0)) * (s.irap / 100);
-  const totaleTasse = totS1 + totS2 + irapSocieta;
+  // e la deduzione del 10% dell'IRAP vale solo per IRPEF, non per l'IRAP stessa
+  const baseIrap = Math.max(0, risultato + interessiPassivi + (redditoDich == null ? dedIrap : 0));
+  const irapSocieta = cent(Math.max(0, baseIrap - (+s.irapDed || 0)) * (s.irap / 100));
+  const totaleTasse = cent(totS1 + totS2 + irapSocieta);
   const nettoTasca = Math.max(0, utileSnc - totaleTasse);
   // netto in tasca di ogni socio: la sua quota di utile meno contributi,
   // imposte personali e la sua parte dell'IRAP pagata dalla società
-  const irapS1 = irapSocieta * quotaS1() / 100, irapS2 = irapSocieta * quotaS2() / 100;
+  const [irapS1, irapS2] = dividi(irapSocieta);
+  const [inailS1, inailS2] = dividi(inailTot);
   const nettoS1 = q1 - totS1 - irapS1, nettoS2 = q2 - totS2 - irapS2;
 
   const righeAddiz = (x) =>
@@ -1793,13 +1809,14 @@ function renderAll() {
     const accIrpef = +(stimati || a).irpef || 0, accInps = +(stimati || a).inps || 0, accCom = +(stimati || a).com || 0;
     const sIrpef = irpef - accIrpef, sInps = inpsEcc - accInps, sCom = add.comunale - accCom;
     const baseAcc = Math.max(0, irpef);
-    const acc1 = baseAcc * 0.5 + inpsEcc * 0.5 + add.comunale * 0.3;
-    const acc2 = baseAcc * 0.5 + inpsEcc * 0.5;
+    const meta = (x) => cent(x * 0.5);
+    const acc1 = cent(meta(baseAcc) + meta(inpsEcc) + cent(add.comunale * 0.3));
+    const acc2 = cent(baseAcc - meta(baseAcc) + inpsEcc - meta(inpsEcc));
     const giugno = Math.max(0, sIrpef) + Math.max(0, sInps) + add.regionale + Math.max(0, sCom) + acc1;
     const riporto = prec ? prec.resto : 0;               // credito avanzato dall'anno prima
     const crediti = Math.max(0, -sIrpef) + Math.max(0, -sInps) + Math.max(0, -sCom) + riporto;
     versamenti[k] = { saldo: giugno - acc1, acc1, acc2, riporto, stimati: !!stimati,
-      dett: { irpef: baseAcc, inps: inpsEcc, com: add.comunale * 0.3 }, ...compensa(giugno, acc2, crediti) };
+      dett: { irpef: baseAcc, inps: inpsEcc, com: cent(add.comunale * 0.3) }, ...compensa(giugno, acc2, crediti) };
     return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
       titoloInps(`Versamenti F24 per il ${appState.anno}`) +
       (rit > 0 ? riga('Ritenute d\'acconto attribuite:', '- ' + fmtEuro(rit), 'text-emerald-700') : '') +
@@ -1854,7 +1871,7 @@ function renderAll() {
   const righeNetto = (quota, irap, netto, inailSocio) =>
     `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
     riga(`Quota IRAP della società (${fmtPct(quota)}):`, '- ' + fmtEuro(irap), 'font-semibold text-rose-600') +
-    (inailSocio > 0 ? riga('INAIL (già tolto dall\'utile):', fmtEuro(inailSocio), 'text-slate-500') : '') +
+    (inailSocio > 0 ? riga(`INAIL della società, quota del ${fmtPct(quota)} (già tolta dall'utile):`, fmtEuro(inailSocio), 'text-slate-500') : '') +
     `<div class="flex justify-between gap-3 text-sm"><span class="font-bold text-slate-900">Netto in tasca nell'anno:</span><span class="font-extrabold ${netto < 0 ? 'text-rose-600' : 'text-emerald-700'} whitespace-nowrap">${fmtEuro(netto)}</span></div>` +
     `<div class="flex justify-between gap-3 text-sm"><span class="font-semibold text-slate-700">Netto al mese (÷ 12):</span><span class="font-bold ${netto < 0 ? 'text-rose-600' : 'text-emerald-700'} whitespace-nowrap">${fmtEuro(netto / 12)}</span></div>` +
     `</div>`;
@@ -1868,7 +1885,7 @@ function renderAll() {
     riga('IRPEF netta stimata:', fmtEuro(irpefS1)) +
     righeAddiz(addizS1) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
-    righeNetto(quotaS1(), irapS1, nettoS1, +inail.s1 || 0) +
+    righeNetto(quotaS1(), irapS1, nettoS1, inailS1) +
     righeVersamenti('s1', irpefS1, inpsS1.eccedenza, addizS1, ritS1);
 
   $('dettaglio-socio2').innerHTML =
@@ -1879,13 +1896,15 @@ function renderAll() {
     riga('IRPEF netta stimata:', fmtEuro(irpefS2)) +
     righeAddiz(addizS2) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>` +
-    righeNetto(quotaS2(), irapS2, nettoS2, +inail.s2 || 0) +
+    righeNetto(quotaS2(), irapS2, nettoS2, inailS2) +
     righeVersamenti('s2', irpefS2, inpsS2.eccedenza, addizS2, ritS2);
 
   $('dettaglio-societa').innerHTML =
     riga(risultato < 0 ? 'Perdita fiscale SNC:' : 'Utile fiscale SNC:', fmtEuro(risultato), risultato < 0 ? 'font-bold text-rose-600' : 'font-bold text-slate-900') +
     (redditoDich != null ? riga('Dalle registrazioni sarebbe (non usato):', fmtEuro(risultatoConti), 'text-slate-500') : '') +
     (inailTot > 0 && redditoDich == null ? riga('di cui INAIL soci già dedotto:', fmtEuro(inailTot), 'text-slate-500') : '') +
+    (dedIrap > 0 && redditoDich == null ? riga(`di cui 10% dell'IRAP versata nel ${appState.anno} (${fmtEuro(irapVersataAnno)}) già dedotto:`, fmtEuro(dedIrap), 'text-slate-500') : '') +
+    (dedIrap > 0 && redditoDich == null ? riga('Deduzione 10% IRAP (riaggiunta: vale solo per IRPEF):', '+ ' + fmtEuro(dedIrap), 'font-semibold text-slate-700') : '') +
     (interessiPassivi > 0 ? riga('Interessi passivi (non deducibili IRAP):', '+ ' + fmtEuro(interessiPassivi), 'font-semibold text-slate-700') : '') +
     riga('Deduzione base IRAP stimata:', '- ' + fmtEuro(s.irapDed), 'font-semibold text-emerald-700') +
     riga(`IRAP (${fmtPct(s.irap)}):`, fmtEuro(irapSocieta), 'font-bold text-slate-900') +
@@ -1893,19 +1912,20 @@ function renderAll() {
     (() => {
       const valIrap = fiscaleAnno().irap, prec = precedente && precedente.soc;
       const stimato = (valIrap === '' || valIrap == null) && prec;
-      const acc = stimato ? prec.acc1 + prec.acc2 : +valIrap || 0, saldo = irapSocieta - acc;
+      const acc = stimato ? cent(prec.acc1 + prec.acc2) : +valIrap || 0, saldo = cent(irapSocieta - acc);
+      const irapAcc1 = cent(irapSocieta * 0.5), irapAcc2 = cent(irapSocieta - irapAcc1);
       const riporto = prec ? prec.resto : 0, crediti = Math.max(0, -saldo) + riporto;
-      versamenti.soc = { saldo: Math.max(0, saldo), acc1: irapSocieta * 0.5, acc2: irapSocieta * 0.5, riporto, stimati: !!stimato,
-        ...compensa(Math.max(0, saldo) + irapSocieta * 0.5, irapSocieta * 0.5, crediti) };
+      versamenti.soc = { saldo: Math.max(0, saldo), acc1: irapAcc1, acc2: irapAcc2, riporto, stimati: !!stimato,
+        ...compensa(cent(Math.max(0, saldo) + irapAcc1), irapAcc2, crediti) };
       return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
         titoloInps(`IRAP: versamenti F24 per il ${appState.anno}`) +
         (stimato ? riga(`Acconti IRAP del ${appState.anno} (dovuti in base al ${appState.anno - 1}):`, fmtEuro(acc), 'text-slate-500')
           : acc > 0 ? riga(`Acconti IRAP versati nel ${appState.anno}:`, fmtEuro(acc), 'text-slate-500') : riga(`Acconti IRAP versati nel ${appState.anno}:`, 'non inseriti', 'text-amber-700')) +
         (riporto > 0 ? riga(`Credito IRAP avanzato dal ${appState.anno - 1}:`, fmtEuro(riporto), 'text-emerald-700') : '') +
         riga(`Saldo IRAP (giugno ${annoDopo}):`, importoSaldo(saldo), clsSaldo(saldo)) +
-        riga(`1° acconto IRAP ${annoDopo} (giugno):`, fmtEuro(irapSocieta * 0.5)) +
-        riga(`2° acconto IRAP ${annoDopo} (novembre):`, fmtEuro(irapSocieta * 0.5)) +
-        righeCompensazione(Math.max(0, saldo) + irapSocieta * 0.5, irapSocieta * 0.5, crediti, false);
+        riga(`1° acconto IRAP ${annoDopo} (giugno):`, fmtEuro(irapAcc1)) +
+        riga(`2° acconto IRAP ${annoDopo} (novembre):`, fmtEuro(irapAcc2)) +
+        righeCompensazione(cent(Math.max(0, saldo) + irapAcc1), irapAcc2, crediti, false);
     })();
   versamentiAnno[anno] = versamenti;
 
@@ -2807,7 +2827,7 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
   const gruppo = (titolo, nota, righe) => `<div class="pt-3">
       <p class="text-xs font-bold text-slate-800">${titolo}</p>${nota ? `<p class="text-[11px] text-slate-500">${nota}</p>` : ''}
       <div class="mt-1 divide-y divide-slate-100">${righe}</div></div>`;
-  const rate4 = (chi, date, totale, nomi, voce) => date.map((d, i) => riga(d, nomi[i], paga(chi, d, totale / 4, voce))).join('');
+  const rate4 = (chi, date, totale, nomi, voce) => date.map((d, i) => riga(d, nomi[i], paga(chi, d, i < 3 ? cent(totale / 4) : cent(totale - 3 * cent(totale / 4)), voce))).join('');
   const NOMI_INPS = ['1ª rata', '2ª rata', '3ª rata', '4ª rata'];
   const imposte = (chi, x, lbl, voce) => !x ? '' : gruppo(lbl, `Saldo ${anno} e acconti ${annoDopo}, già tolti i crediti compensati nell'F24.`,
     riga(GIUGNO, 'saldo e 1° acconto', paga(chi, GIUGNO, x.daGiu, voce)) + riga(NOVEMBRE, '2° acconto', paga(chi, NOVEMBRE, x.daNov, voce)) +

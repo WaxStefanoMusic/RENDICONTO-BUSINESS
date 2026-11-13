@@ -33,7 +33,9 @@ S.N.C.:
     INPS artigiani/commercianti (contributo fisso sul minimale, aliquota della prima fascia e
     un punto in più oltre, massimale più basso per chi ha contributi prima del 1996), premio
     INAIL dei soci (costo della società, deducibile anche IRAP), IRAP e netto in tasca di ogni
-    socio dopo imposte, contributi e quota IRAP, all'anno e al mese.
+    socio dopo imposte, contributi e quota IRAP, all'anno e al mese. Per ogni anno si inseriscono le altre
+    detrazioni IRPEF dei soci e gli acconti già versati (IRPEF, INPS, addizionale comunale, IRAP):
+    l'app mostra saldo, 1° e 2° acconto dell'anno dopo e quanto versare a giugno.
 13. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
 
 ### Importazione delle fatture elettroniche

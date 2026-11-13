@@ -73,6 +73,7 @@ const STATO_VUOTO = () => ({
   collabInps: false,
   inpsAnte96: { s1: false, s2: false },   // socio con contributi versati prima del 1996 (massimale più basso)
   inail: {},                   // anno -> premio INAIL annuo dei soci { s1, s2 }
+  fiscale: {},                 // anno -> { s1/s2: { detr, irpef, inps, com }, irap }: altre detrazioni IRPEF e acconti versati nell'anno
   impostazioni: IMPOSTAZIONI_BASE(),
   entrate: [],                 // tipo 'Fattura' → Fatture emesse, 'Corrispettivi' → Corrispettivi
   acquisti: [],                // sezione 'fornitori' → Fatture ricevute, 'estero' → Autofatture/Fatture estere, 'spese' → Abbonamenti/Acquisti/Spese, 'polizze' → Polizze/Assicurazioni
@@ -153,6 +154,7 @@ function normalizza(s) {
   st.scalari = Array.isArray(st.scalari) ? st.scalari : [];
   st.inpsAnte96 = { s1: !!st.inpsAnte96?.s1, s2: !!st.inpsAnte96?.s2 };
   if (typeof st.inail !== 'object' || st.inail === null || Array.isArray(st.inail)) st.inail = {};
+  if (typeof st.fiscale !== 'object' || st.fiscale === null || Array.isArray(st.fiscale)) st.fiscale = {};
   if (typeof st.cartaCategorie !== 'object' || st.cartaCategorie === null || Array.isArray(st.cartaCategorie)) st.cartaCategorie = {};
   // il credito IVA prima era un numero unico: diventa per anno
   if (typeof st.creditoIvaPrec !== 'object' || st.creditoIvaPrec === null) {
@@ -550,6 +552,19 @@ function calcolaInpsCommercianti(redditoQuota, attivo, ante96 = false) {
   return { fisso, fascia1, fascia2, eccedenza, totale: fisso + eccedenza, massimale, oltreMassimale: redditoQuota > massimale };
 }
 const inailAnno = () => appState.inail[appState.anno] || { s1: 0, s2: 0 };
+
+/* Detrazioni personali e acconti già versati, anno per anno. Le altre
+   detrazioni IRPEF (familiari, spese, ecc.) cambiano poco: se nell'anno
+   mancano si usano quelle dell'ultimo anno in cui ci sono. */
+const fiscaleAnno = (anno = appState.anno) => appState.fiscale[anno] || {};
+const accontiVersati = (k) => fiscaleAnno()[k] || {};
+function detrazioniSocio(k) {
+  for (let a = appState.anno; a >= appState.anno - 10; a--) {
+    const v = appState.fiscale[a]?.[k]?.detr;
+    if (v != null && v !== '') return { importo: +v || 0, anno: a };
+  }
+  return { importo: 0, anno: null };
+}
 
 // ---------------------------------------------------------------------------
 // Anteprime e inserimento: un modulo per tab
@@ -1380,6 +1395,15 @@ function syncControlsFromState() {
     $('ante96-' + k).checked = !!appState.inpsAnte96[k];
     $('inail-' + k).value = inailAnno()[k] || '';
   }
+  document.querySelectorAll('[data-fx]').forEach((el) => {
+    const [k, campo] = el.dataset.fx.split('.');
+    const v = campo ? fiscaleAnno()[k]?.[campo] : fiscaleAnno()[k];
+    el.value = v == null || v === '' ? '' : v;
+    if (campo === 'detr') {
+      const d = detrazioniSocio(k);
+      el.placeholder = d.anno && d.anno !== appState.anno ? `${fmtEuro(d.importo)} (dal ${d.anno})` : '0,00';
+    }
+  });
 }
 
 $('sel-anno').addEventListener('change', () => {
@@ -1394,6 +1418,14 @@ $('iva-credito-prec').addEventListener('change', () => {
 });
 $('toggle-socio2-inps').addEventListener('change', () => { appState.socio2Inps = $('toggle-socio2-inps').checked; saveState(); renderAll(); });
 $('toggle-collab-inps').addEventListener('change', () => { appState.collabInps = $('toggle-collab-inps').checked; saveState(); renderAll(); });
+document.querySelectorAll('[data-fx]').forEach((el) => el.addEventListener('change', () => {
+  const [k, campo] = el.dataset.fx.split('.');
+  const anno = appState.anno;
+  const v = el.value.trim() === '' ? '' : Math.max(0, parseFloat(el.value) || 0);
+  const f = (appState.fiscale[anno] = { ...fiscaleAnno(anno) });
+  if (campo) f[k] = { ...(f[k] || {}), [campo]: v }; else f[k] = v;
+  saveState(); syncControlsFromState(); renderAll();
+}));
 for (const k of ['s1', 's2']) {
   $('ante96-' + k).addEventListener('change', () => { appState.inpsAnte96[k] = $('ante96-' + k).checked; saveState(); renderAll(); });
   $('inail-' + k).addEventListener('change', () => {
@@ -1662,12 +1694,13 @@ function renderAll() {
   const inpsCollab = appState.collabInps ? (+s.inpsFisso || 0) : 0;   // a carico del socio titolare
 
   const impIrpefS1 = Math.max(0, q1 - inpsS1.totale - inpsCollab);
-  const irpefS1 = calcolaIrpefScaglioni(impIrpefS1);
+  const detrS1 = detrazioniSocio('s1').importo, detrS2 = detrazioniSocio('s2').importo;
+  const irpefS1 = Math.max(0, calcolaIrpefScaglioni(impIrpefS1) - detrS1);
   const addizS1 = calcolaAddizionali(impIrpefS1), addS1 = addizS1.totale;
   const totS1 = irpefS1 + addS1 + inpsS1.totale + inpsCollab;
 
   const impIrpefS2 = Math.max(0, q2 - inpsS2.totale);
-  const irpefS2 = calcolaIrpefScaglioni(impIrpefS2);
+  const irpefS2 = Math.max(0, calcolaIrpefScaglioni(impIrpefS2) - detrS2);
   const addizS2 = calcolaAddizionali(impIrpefS2), addS2 = addizS2.totale;
   const totS2 = irpefS2 + addS2 + inpsS2.totale;
 
@@ -1684,6 +1717,34 @@ function renderAll() {
   const righeAddiz = (x) =>
     riga('Addizionale regionale (a scaglioni):', fmtEuro(x.regionale)) +
     riga(`Addizionale comunale (${fmtPct(s.addCom)}):`, x.esente && x.comunale === 0 && +s.addComEsenz > 0 ? 'esente' : fmtEuro(x.comunale));
+  /* Saldo e acconti col metodo storico: a giugno dell'anno dopo il saldo
+     (imposta dell'anno meno gli acconti versati) e il 1° acconto, a novembre
+     il 2°. Acconti IRPEF, INPS oltre il minimale e IRAP: 50% + 50%;
+     addizionale comunale: 30% tutto a giugno; la regionale non ha acconti. */
+  const annoDopo = appState.anno + 1;
+  const importoSaldo = (v) => v < 0 ? `credito ${fmtEuro(-v)}` : fmtEuro(v);
+  const clsSaldo = (v) => v < 0 ? 'font-semibold text-emerald-700' : 'font-semibold text-slate-900';
+  const righeVersamenti = (k, irpef, inpsEcc, add) => {
+    const a = accontiVersati(k);
+    const accIrpef = +a.irpef || 0, accInps = +a.inps || 0, accCom = +a.com || 0;
+    const sIrpef = irpef - accIrpef, sInps = inpsEcc - accInps, sCom = add.comunale - accCom;
+    const acc1 = irpef * 0.5 + inpsEcc * 0.5 + add.comunale * 0.3;
+    const acc2 = irpef * 0.5 + inpsEcc * 0.5;
+    const giugno = Math.max(0, sIrpef) + Math.max(0, sInps) + add.regionale + Math.max(0, sCom) + acc1;
+    return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
+      titoloInps(`Versamenti F24 per il ${appState.anno}`) +
+      (accIrpef + accInps + accCom > 0
+        ? riga(`Acconti già versati nel ${appState.anno}:`, fmtEuro(accIrpef + accInps + accCom), 'text-slate-500')
+        : riga(`Acconti versati nel ${appState.anno}:`, 'non inseriti', 'text-amber-700')) +
+      riga(`Saldo IRPEF (giugno ${annoDopo}):`, importoSaldo(sIrpef), clsSaldo(sIrpef)) +
+      (inpsEcc > 0 || accInps > 0 ? riga('Saldo INPS oltre il minimale:', importoSaldo(sInps), clsSaldo(sInps)) : '') +
+      riga('Addizionale regionale (solo a saldo):', fmtEuro(add.regionale)) +
+      riga('Saldo addizionale comunale:', importoSaldo(sCom), clsSaldo(sCom)) +
+      riga(`1° acconto ${annoDopo} (giugno):`, fmtEuro(acc1)) +
+      riga(`2° acconto ${annoDopo} (novembre):`, fmtEuro(acc2)) +
+      `<div class="flex justify-between gap-3 text-sm"><span class="font-bold text-slate-900">Da versare a giugno ${annoDopo}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(giugno)}</span></div>` +
+      `</div>`;
+  };
   const titoloInps = (t) => `<p class="pt-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">${esc(t)}</p>`;
   const righeInps = (x, nome) => !x.totale ? riga(`INPS di ${esc(nome)}:`, 'non dovuto', 'text-slate-500') :
     titoloInps(`INPS di ${nome}`) +
@@ -1710,19 +1771,23 @@ function renderAll() {
     righeInps(inpsS1, s.s1Nome) +
     righeCollab() +
     riga('Imponibile netto IRPEF:', fmtEuro(impIrpefS1), 'font-bold text-slate-800', 'pt-2 border-t border-slate-100') +
+    (detrS1 > 0 ? riga('Altre detrazioni IRPEF:', '- ' + fmtEuro(detrS1), 'text-emerald-700') : '') +
     riga('IRPEF netta stimata:', fmtEuro(irpefS1)) +
     righeAddiz(addizS1) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
-    righeNetto(quotaS1(), irapS1, nettoS1, +inail.s1 || 0);
+    righeNetto(quotaS1(), irapS1, nettoS1, +inail.s1 || 0) +
+    righeVersamenti('s1', irpefS1, inpsS1.eccedenza, addizS1);
 
   $('dettaglio-socio2').innerHTML =
     riga(`Quota utile SNC (${fmtPct(quotaS2())}):`, fmtEuro(q2), 'font-bold text-slate-900') +
     righeInps(inpsS2, s.s2Nome) +
     riga('Imponibile netto IRPEF:', fmtEuro(impIrpefS2), 'font-bold text-slate-800', 'pt-2 border-t border-slate-100') +
+    (detrS2 > 0 ? riga('Altre detrazioni IRPEF:', '- ' + fmtEuro(detrS2), 'text-emerald-700') : '') +
     riga('IRPEF netta stimata:', fmtEuro(irpefS2)) +
     righeAddiz(addizS2) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>` +
-    righeNetto(quotaS2(), irapS2, nettoS2, +inail.s2 || 0);
+    righeNetto(quotaS2(), irapS2, nettoS2, +inail.s2 || 0) +
+    righeVersamenti('s2', irpefS2, inpsS2.eccedenza, addizS2);
 
   $('dettaglio-societa').innerHTML =
     riga(risultato < 0 ? 'Perdita fiscale SNC:' : 'Utile fiscale SNC:', fmtEuro(risultato), risultato < 0 ? 'font-bold text-rose-600' : 'font-bold text-slate-900') +
@@ -1730,7 +1795,16 @@ function renderAll() {
     (interessiPassivi > 0 ? riga('Interessi passivi (non deducibili IRAP):', '+ ' + fmtEuro(interessiPassivi), 'font-semibold text-slate-700') : '') +
     riga('Deduzione base IRAP stimata:', '- ' + fmtEuro(s.irapDed), 'font-semibold text-emerald-700') +
     riga(`IRAP (${fmtPct(s.irap)}):`, fmtEuro(irapSocieta), 'font-bold text-slate-900') +
-    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Carico complessivo (soci + IRAP):</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totaleTasse)}</span></div>`;
+    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Carico complessivo (soci + IRAP):</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totaleTasse)}</span></div>` +
+    (() => {
+      const acc = +fiscaleAnno().irap || 0, saldo = irapSocieta - acc;
+      return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
+        titoloInps(`IRAP: versamenti F24 per il ${appState.anno}`) +
+        (acc > 0 ? riga(`Acconti IRAP versati nel ${appState.anno}:`, fmtEuro(acc), 'text-slate-500') : riga(`Acconti IRAP versati nel ${appState.anno}:`, 'non inseriti', 'text-amber-700')) +
+        riga(`Saldo IRAP (giugno ${annoDopo}):`, importoSaldo(saldo), clsSaldo(saldo)) +
+        riga(`1° acconto IRAP ${annoDopo} (giugno):`, fmtEuro(irapSocieta * 0.5)) +
+        riga(`2° acconto IRAP ${annoDopo} (novembre):`, fmtEuro(irapSocieta * 0.5)) + '</div>';
+    })();
 
   // 6. Cruscotto
   $('kpi-ricavi').textContent = fmtEuro(totRicaviImp);

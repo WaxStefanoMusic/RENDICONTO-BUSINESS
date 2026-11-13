@@ -72,6 +72,7 @@ const STATO_VUOTO = () => ({
   creditoIvaPrec: {},          // anno -> credito IVA dell'anno precedente
   socio2Inps: true,
   collabInps: false,
+  collabDeduci: false,         // INPS del collaboratore dedotto dal reddito del titolare (se non c'è rivalsa)
   inpsAnte96: { s1: false, s2: false },   // socio con contributi versati prima del 1996 (massimale più basso)
   inail: {},                   // anno -> premio INAIL annuo dei soci { s1, s2 }
   fiscale: {},                 // anno -> { s1/s2: { detr, irpef, inps, com }, irap }: altre detrazioni IRPEF e acconti versati nell'anno
@@ -1383,6 +1384,8 @@ function disegnaControlloRegistro(anno) {
 function popolaAnni() {
   const anni = new Set([new Date().getFullYear(), new Date().getFullYear() - 1, appState.anno]);
   for (const x of [...appState.entrate, ...appState.acquisti, ...appState.parcelle]) if (annoDi(x.data)) anni.add(annoDi(x.data));
+  // anche gli anni di cui si è inserita solo la dichiarazione o gli acconti
+  for (const a of Object.keys(appState.fiscale)) if (+a) anni.add(+a);
   $('sel-anno').innerHTML = [...anni].sort((a, b) => b - a).map((a) => `<option value="${a}">${a}</option>`).join('');
   $('sel-anno').value = appState.anno;
 }
@@ -1392,6 +1395,7 @@ function syncControlsFromState() {
   $('iva-credito-prec').value = appState.creditoIvaPrec[appState.anno] || 0;
   $('toggle-socio2-inps').checked = !!appState.socio2Inps;
   $('toggle-collab-inps').checked = !!appState.collabInps;
+  $('collab-deduci').checked = !!appState.collabDeduci;
   for (const k of ['s1', 's2']) {
     $('ante96-' + k).checked = !!appState.inpsAnte96[k];
     $('inail-' + k).value = inailAnno()[k] || '';
@@ -1419,6 +1423,7 @@ $('iva-credito-prec').addEventListener('change', () => {
 });
 $('toggle-socio2-inps').addEventListener('change', () => { appState.socio2Inps = $('toggle-socio2-inps').checked; saveState(); renderAll(); });
 $('toggle-collab-inps').addEventListener('change', () => { appState.collabInps = $('toggle-collab-inps').checked; saveState(); renderAll(); });
+$('collab-deduci').addEventListener('change', () => { appState.collabDeduci = $('collab-deduci').checked; saveState(); renderAll(); });
 document.querySelectorAll('[data-fx]').forEach((el) => el.addEventListener('change', () => {
   const [k, campo] = el.dataset.fx.split('.');
   const anno = appState.anno;
@@ -1471,7 +1476,7 @@ function renderTesti() {
     ? `Solo per il ${anno}: ogni anno ha il suo premio.`
     : `Nessun premio INAIL nel ${anno} (lascia vuoto se il socio non è più assicurato).`;
   for (const k of ['s1', 's2']) $('txt-mass-' + k).textContent = `Massimale ${fmtEuro(appState.inpsAnte96[k] ? s.inpsMassVecchi : s.inpsMassNuovi)}: oltre non si paga INPS.`;
-  $('txt-inps-collab').textContent = `Nessuno stipendio. Se attivo, conta i contributi INPS minimali (~${fmtEuro(s.inpsFisso)}/anno), deducibili dal reddito di ${s.s1Nome}.`;
+  $('txt-inps-collab').textContent = `Nessuno stipendio. Se attivo, conta i contributi INPS minimali (~${fmtEuro(s.inpsFisso)}/anno), pagati da ${s.s1Nome}.`;
   $('lbl-socio2-inps').textContent = appState.socio2Inps ? 'INPS attivo' : 'Non attivo';
   $('lbl-collab-inps').textContent = appState.collabInps ? 'INPS attivo' : 'Cessato';
 
@@ -1703,7 +1708,7 @@ function renderAll() {
   const inpsS2 = calcolaInpsCommercianti(q2, appState.socio2Inps, appState.inpsAnte96.s2);
   const inpsCollab = appState.collabInps ? (+s.inpsFisso || 0) : 0;   // a carico del socio titolare
 
-  const impIrpefS1 = Math.max(0, q1 - inpsS1.totale - inpsCollab);
+  const impIrpefS1 = Math.max(0, q1 - inpsS1.totale - (appState.collabDeduci ? inpsCollab : 0));
   const detrS1 = detrazioniSocio('s1').importo, detrS2 = detrazioniSocio('s2').importo;
   const irpefS1 = Math.max(0, calcolaIrpefScaglioni(impIrpefS1) - detrS1);
   const addizS1 = calcolaAddizionali(impIrpefS1), addS1 = addizS1.totale;

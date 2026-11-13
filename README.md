@@ -38,7 +38,8 @@ S.N.C.:
     l'app mostra saldo, 1° e 2° acconto dell'anno dopo e quanto versare a giugno. Quando la dichiarazione della società è
     presentata se ne inseriscono il reddito e le ritenute d'acconto (quadro RN): valgono al posto
     del reddito calcolato dalle registrazioni. Il regime contabile (semplificato o ordinario) si
-    sceglie nelle impostazioni.
+    sceglie nelle impostazioni. I contributi INPS del collaboratore familiare si deducono dal
+    reddito del titolare solo se lo si spunta (come nella sua dichiarazione).
 13. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
 
 ### Importazione delle fatture elettroniche

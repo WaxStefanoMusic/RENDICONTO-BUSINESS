@@ -45,6 +45,7 @@ const IMPOSTAZIONI_BASE = () => ({
   ragione: 'La mia S.N.C.',
   piva: '',
   attivita: 'Vendita al dettaglio • 2 soci + collaboratore familiare',
+  regime: 'semplificata',      // contabilità semplificata (quadro RG) o ordinaria (quadro RF)
   s1Nome: 'Socio 1',
   s1Quota: 50,
   s2Nome: 'Socio 2',
@@ -346,7 +347,7 @@ $('restore-input').addEventListener('change', async (e) => {
 // Impostazioni
 // ---------------------------------------------------------------------------
 const CAMPI_IMP = [
-  ['set-ragione', 'ragione', 't'], ['set-piva', 'piva', 't'], ['set-attivita', 'attivita', 't'],
+  ['set-ragione', 'ragione', 't'], ['set-piva', 'piva', 't'], ['set-attivita', 'attivita', 't'], ['set-regime', 'regime', 't'],
   ['set-s1-nome', 's1Nome', 't'], ['set-s1-quota', 's1Quota', 'n'],
   ['set-s2-nome', 's2Nome', 't'], ['set-collab-nome', 'collabNome', 't'],
   ['set-comm-lordo', 'commLordo', 'n'], ['set-comm-imp', 'commImp', 'n'], ['set-comm-sw', 'commSw', 'n'],
@@ -1421,7 +1422,8 @@ $('toggle-collab-inps').addEventListener('change', () => { appState.collabInps =
 document.querySelectorAll('[data-fx]').forEach((el) => el.addEventListener('change', () => {
   const [k, campo] = el.dataset.fx.split('.');
   const anno = appState.anno;
-  const v = el.value.trim() === '' ? '' : Math.max(0, parseFloat(el.value) || 0);
+  const n = parseFloat(el.value) || 0;
+  const v = el.value.trim() === '' ? '' : campo === 'reddito' ? n : Math.max(0, n);
   const f = (appState.fiscale[anno] = { ...fiscaleAnno(anno) });
   if (campo) f[k] = { ...(f[k] || {}), [campo]: v }; else f[k] = v;
   saveState(); syncControlsFromState(); renderAll();
@@ -1456,7 +1458,7 @@ function renderTesti() {
   document.title = `${s.ragione} — Contabilità & Fisco ${anno}`;
   $('hdr-ragione').textContent = `${s.ragione} — Contabilità & Fisco`;
   $('hdr-attivita').textContent = s.attivita || '';
-  $('hdr-badge').textContent = `Semplificata ${anno}`;
+  $('hdr-badge').textContent = `${s.regime === 'ordinaria' ? 'Ordinaria' : 'Semplificata'} ${anno}`;
   document.querySelectorAll('[data-anno]').forEach((el) => { el.textContent = anno; });
   document.querySelectorAll('[data-s1-nome]').forEach((el) => { el.textContent = s.s1Nome; });
   document.querySelectorAll('[data-s2-nome]').forEach((el) => { el.textContent = s.s2Nome; });
@@ -1685,7 +1687,15 @@ function renderAll() {
   const inail = inailAnno();
   const inailTot = (+inail.s1 || 0) + (+inail.s2 || 0);
   totCostiDeducibili += inailTot;
-  const risultato = totRicaviImp - totCostiDeducibili;
+  /* Se la dichiarazione dell'anno è già stata presentata, il reddito della
+     società (quadro RN, rigo RN1 o RN2) è quello vero: vale al posto di quello
+     calcolato dalle registrazioni, che a volte non sono complete. */
+  const dich = fiscaleAnno().soc || {};
+  const redditoDich = dich.reddito === '' || dich.reddito == null ? null : +dich.reddito;
+  const risultatoConti = totRicaviImp - totCostiDeducibili;
+  const risultato = redditoDich != null ? redditoDich : risultatoConti;
+  const ritenute = +dich.ritenute || 0;               // ritenute subite dalla società, divise tra i soci
+  const ritS1 = ritenute * quotaS1() / 100, ritS2 = ritenute * quotaS2() / 100;
   const utileSnc = Math.max(0, risultato);
   const q1 = utileSnc * quotaS1() / 100;
   const q2 = utileSnc * quotaS2() / 100;
@@ -1724,15 +1734,19 @@ function renderAll() {
   const annoDopo = appState.anno + 1;
   const importoSaldo = (v) => v < 0 ? `credito ${fmtEuro(-v)}` : fmtEuro(v);
   const clsSaldo = (v) => v < 0 ? 'font-semibold text-emerald-700' : 'font-semibold text-slate-900';
-  const righeVersamenti = (k, irpef, inpsEcc, add) => {
+  const righeVersamenti = (k, irpef, inpsEcc, add, rit = 0) => {
+    // le ritenute subite riducono l'IRPEF da versare, e quindi anche gli acconti
+    irpef = irpef - rit;
     const a = accontiVersati(k);
     const accIrpef = +a.irpef || 0, accInps = +a.inps || 0, accCom = +a.com || 0;
     const sIrpef = irpef - accIrpef, sInps = inpsEcc - accInps, sCom = add.comunale - accCom;
-    const acc1 = irpef * 0.5 + inpsEcc * 0.5 + add.comunale * 0.3;
-    const acc2 = irpef * 0.5 + inpsEcc * 0.5;
+    const baseAcc = Math.max(0, irpef);
+    const acc1 = baseAcc * 0.5 + inpsEcc * 0.5 + add.comunale * 0.3;
+    const acc2 = baseAcc * 0.5 + inpsEcc * 0.5;
     const giugno = Math.max(0, sIrpef) + Math.max(0, sInps) + add.regionale + Math.max(0, sCom) + acc1;
     return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
       titoloInps(`Versamenti F24 per il ${appState.anno}`) +
+      (rit > 0 ? riga('Ritenute d\'acconto attribuite:', '- ' + fmtEuro(rit), 'text-emerald-700') : '') +
       (accIrpef + accInps + accCom > 0
         ? riga(`Acconti già versati nel ${appState.anno}:`, fmtEuro(accIrpef + accInps + accCom), 'text-slate-500')
         : riga(`Acconti versati nel ${appState.anno}:`, 'non inseriti', 'text-amber-700')) +
@@ -1776,7 +1790,7 @@ function renderAll() {
     righeAddiz(addizS1) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
     righeNetto(quotaS1(), irapS1, nettoS1, +inail.s1 || 0) +
-    righeVersamenti('s1', irpefS1, inpsS1.eccedenza, addizS1);
+    righeVersamenti('s1', irpefS1, inpsS1.eccedenza, addizS1, ritS1);
 
   $('dettaglio-socio2').innerHTML =
     riga(`Quota utile SNC (${fmtPct(quotaS2())}):`, fmtEuro(q2), 'font-bold text-slate-900') +
@@ -1787,11 +1801,12 @@ function renderAll() {
     righeAddiz(addizS2) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>` +
     righeNetto(quotaS2(), irapS2, nettoS2, +inail.s2 || 0) +
-    righeVersamenti('s2', irpefS2, inpsS2.eccedenza, addizS2);
+    righeVersamenti('s2', irpefS2, inpsS2.eccedenza, addizS2, ritS2);
 
   $('dettaglio-societa').innerHTML =
     riga(risultato < 0 ? 'Perdita fiscale SNC:' : 'Utile fiscale SNC:', fmtEuro(risultato), risultato < 0 ? 'font-bold text-rose-600' : 'font-bold text-slate-900') +
-    (inailTot > 0 ? riga('di cui INAIL soci già dedotto:', fmtEuro(inailTot), 'text-slate-500') : '') +
+    (redditoDich != null ? riga('Dalle registrazioni sarebbe (non usato):', fmtEuro(risultatoConti), 'text-slate-500') : '') +
+    (inailTot > 0 && redditoDich == null ? riga('di cui INAIL soci già dedotto:', fmtEuro(inailTot), 'text-slate-500') : '') +
     (interessiPassivi > 0 ? riga('Interessi passivi (non deducibili IRAP):', '+ ' + fmtEuro(interessiPassivi), 'font-semibold text-slate-700') : '') +
     riga('Deduzione base IRAP stimata:', '- ' + fmtEuro(s.irapDed), 'font-semibold text-emerald-700') +
     riga(`IRAP (${fmtPct(s.irap)}):`, fmtEuro(irapSocieta), 'font-bold text-slate-900') +
@@ -1812,7 +1827,8 @@ function renderAll() {
   $('kpi-utile').textContent = fmtEuro(risultato);
   $('kpi-utile').classList.toggle('text-rose-600', risultato < 0);
   $('kpi-utile').classList.toggle('text-emerald-600', risultato >= 0);
-  $('kpi-utile-titolo').textContent = risultato < 0 ? 'Perdita fiscale stimata SNC' : 'Utile fiscale stimato SNC';
+  $('kpi-utile-titolo').textContent = redditoDich != null ? (risultato < 0 ? 'Perdita fiscale dichiarata SNC' : 'Utile fiscale dichiarato SNC')
+    : risultato < 0 ? 'Perdita fiscale stimata SNC' : 'Utile fiscale stimato SNC';
   if (risultato < 0) $('kpi-utile-sub').textContent = 'I costi superano i ricavi: niente IRPEF né IRAP sul reddito, l\'INPS minimale resta dovuto.';
   $('kpi-tasse').textContent = fmtEuro(totaleTasse);
 

@@ -35,7 +35,10 @@ S.N.C.:
     INAIL dei soci (costo della società, deducibile anche IRAP), IRAP e netto in tasca di ogni
     socio dopo imposte, contributi e quota IRAP, all'anno e al mese. Per ogni anno si inseriscono le altre
     detrazioni IRPEF dei soci e gli acconti già versati (IRPEF, INPS, addizionale comunale, IRAP):
-    l'app mostra saldo, 1° e 2° acconto dell'anno dopo e quanto versare a giugno.
+    l'app mostra saldo, 1° e 2° acconto dell'anno dopo e quanto versare a giugno. Quando la dichiarazione della società è
+    presentata se ne inseriscono il reddito e le ritenute d'acconto (quadro RN): valgono al posto
+    del reddito calcolato dalle registrazioni. Il regime contabile (semplificato o ordinario) si
+    sceglie nelle impostazioni.
 13. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
 
 ### Importazione delle fatture elettroniche

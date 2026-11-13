@@ -70,6 +70,7 @@ const STATO_VUOTO = () => ({
   isDemo: false,
   anno: new Date().getFullYear(),
   creditoIvaPrec: {},          // anno -> credito IVA dell'anno precedente
+  accontoIva: {},              // anno -> acconto IVA versato a dicembre (vuoto = calcolato)
   socio2Inps: true,
   collabInps: false,
   collabDeduci: false,         // INPS del collaboratore dedotto dal reddito del titolare (se non c'è rivalsa)
@@ -156,6 +157,7 @@ function normalizza(s) {
   st.scalari = Array.isArray(st.scalari) ? st.scalari : [];
   st.inpsAnte96 = { s1: !!st.inpsAnte96?.s1, s2: !!st.inpsAnte96?.s2 };
   if (typeof st.inail !== 'object' || st.inail === null || Array.isArray(st.inail)) st.inail = {};
+  if (typeof st.accontoIva !== 'object' || st.accontoIva === null || Array.isArray(st.accontoIva)) st.accontoIva = {};
   if (typeof st.fiscale !== 'object' || st.fiscale === null || Array.isArray(st.fiscale)) st.fiscale = {};
   if (typeof st.cartaCategorie !== 'object' || st.cartaCategorie === null || Array.isArray(st.cartaCategorie)) st.cartaCategorie = {};
   // il credito IVA prima era un numero unico: diventa per anno
@@ -1417,6 +1419,11 @@ $('sel-anno').addEventListener('change', () => {
   for (const id of CAMPI_DATA) $(id).value = dataDefault();
   renderAll();
 });
+$('iva-acconto').addEventListener('change', () => {
+  const el = $('iva-acconto');
+  appState.accontoIva[appState.anno] = el.value.trim() === '' ? '' : Math.max(0, parseFloat(el.value) || 0);
+  saveState(); renderAll();
+});
 $('iva-credito-prec').addEventListener('change', () => {
   appState.creditoIvaPrec[appState.anno] = parseFloat($('iva-credito-prec').value) || 0;
   saveState(); renderAll();
@@ -1494,6 +1501,7 @@ function renderTesti() {
 /* Per saldo e acconti serve l'anno prima: gli acconti dovuti (se non inseriti)
    e il credito avanzato. Si calcola prima quello, fino a 3 anni indietro. */
 let profonditaCalcolo = 0;
+const ivaQ4Anno = {};   // IVA dovuta per il 4° trimestre di ogni anno (base dell'acconto di dicembre)
 const versamentiAnno = {};
 const annoConDati = (a) => Object.keys(appState.fiscale[a] || {}).length > 0 ||
   appState.entrate.some((x) => annoDi(x.data) === a) || appState.acquisti.some((x) => annoDi(x.data) === a);
@@ -1661,13 +1669,21 @@ function renderAll() {
       + '. Se le hai già pagate spunta «Versata»; altrimenti versale subito con il ravvedimento operoso, che riduce la sanzione.';
   } else avviso.classList.add('hidden');
 
-  // 4. Liquidazione IVA trimestrale
+  /* 4. Liquidazione IVA trimestrale (trimestrali per opzione): ogni trimestre
+     a debito paga l'1% di interessi, anche il 4° che si versa a marzo con la
+     dichiarazione annuale. Il 27 dicembre si versa l'acconto (metodo storico:
+     88% dell'IVA dovuta per il 4° trimestre dell'anno prima; sotto 103,29 €
+     non è dovuto) che poi si scala dal 4° trimestre. */
   let riporto = +appState.creditoIvaPrec[anno] || 0;
+  const accIvaInserito = appState.accontoIva[anno];
+  const baseAccIva = ivaQ4Anno[anno - 1] || 0;
+  const accIvaCalc = baseAccIva * 0.88 >= 103.29 ? baseAccIva * 0.88 : 0;
+  const accontoIva = accIvaInserito === '' || accIvaInserito == null ? accIvaCalc : +accIvaInserito || 0;
   const TRIM = [
-    { q: 1, nome: '1° trimestre (gen-mar)', scad: scadenza(anno, 5, 16), cod: '6031', magg: true },
-    { q: 2, nome: '2° trimestre (apr-giu)', scad: scadenza(anno, 8, 20), cod: '6032', magg: true },
-    { q: 3, nome: '3° trimestre (lug-set)', scad: scadenza(anno, 11, 16), cod: '6033', magg: true },
-    { q: 4, nome: '4° trimestre (ott-dic)', scad: scadenza(anno + 1, 3, 16) + ' (dich. IVA)', cod: '6099', magg: false },
+    { q: 1, nome: '1° trimestre (gen-mar)', scad: scadenza(anno, 5, 16), cod: '6031' },
+    { q: 2, nome: '2° trimestre (apr-giu)', scad: scadenza(anno, 8, 20), cod: '6032' },
+    { q: 3, nome: '3° trimestre (lug-set)', scad: scadenza(anno, 11, 16), cod: '6033' },
+    { q: 4, nome: '4° trimestre (ott-dic)', scad: scadenza(anno + 1, 3, 16) + ' (con la dichiarazione IVA)', cod: '6099' },
   ];
   html = '';
   const ivaVers = [];   // per il riquadro del cruscotto
@@ -1675,32 +1691,43 @@ function renderAll() {
     const deb = ivaTrim[t.q].debito;
     const credTot = ivaTrim[t.q].credito + riporto;
     const diff = deb - credTot;
+    if (t.q === 4) ivaQ4Anno[anno] = Math.max(0, diff);     // base dell'acconto dell'anno dopo
+    const acc = t.q === 4 ? accontoIva : 0;                 // l'acconto di dicembre si scala dal 4° trimestre
+    const netto = diff - acc;
     let daVersare = 0, interessi = 0;
-    if (diff > 0) { interessi = t.magg ? diff * 0.01 : 0; daVersare = diff + interessi; riporto = 0; }
-    else riporto = Math.abs(diff);
+    if (netto > 0) { interessi = netto * 0.01; daVersare = netto + interessi; riporto = 0; }
+    else riporto = Math.abs(netto);
     const debito = daVersare > 0;
-    ivaVers.push({ q: t.q, scad: t.scad.replace(' (dich. IVA)', ''), daVersare, credito: debito ? 0 : riporto });
+    ivaVers.push({ q: t.q, daVersare, credito: debito ? 0 : riporto });
     html += `<div class="p-5 rounded-2xl border ${debito ? 'border-rose-200 bg-rose-50/30' : 'border-emerald-200 bg-emerald-50/30'} flex flex-col justify-between space-y-4">
       <div>
         <div class="flex items-center justify-between gap-2">
           <span class="text-xs font-bold uppercase text-slate-500">Cod. F24: ${t.cod}</span>
-          <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full ${debito ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'}">${debito ? 'A debito' : 'A credito'}</span>
+          <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full ${debito ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'}">${debito ? 'A debito' : riporto > 0 ? 'A credito' : 'Niente da versare'}</span>
         </div>
         <h3 class="text-base font-bold text-slate-900 mt-1">${t.nome}</h3>
         <p class="text-[11px] text-slate-500">Scadenza: ${t.scad}</p>
         <div class="mt-4 space-y-1.5 text-xs">
           ${riga('IVA a debito (+ RC):', fmtEuro(deb))}
           ${riga('IVA a credito (+ riporto):', fmtEuro(credTot), 'font-semibold text-emerald-700')}
-          ${interessi > 0 ? riga('Interessi trim. 1%:', fmtEuro(interessi), 'font-semibold text-slate-700') : ''}
+          ${acc > 0 ? riga(`Acconto versato a dicembre:`, '- ' + fmtEuro(acc), 'font-semibold text-emerald-700') : ''}
+          ${interessi > 0 ? riga('Interessi 1%:', fmtEuro(interessi), 'font-semibold text-slate-700') : ''}
         </div>
       </div>
       <div class="pt-3 border-t border-slate-200/80 flex justify-between items-baseline gap-2">
-        <span class="text-xs font-bold text-slate-700">${debito ? 'Da versare F24:' : 'Credito riportato:'}</span>
+        <span class="text-xs font-bold text-slate-700">${debito || !riporto ? 'Da versare F24:' : 'Credito riportato:'}</span>
         <span class="text-lg font-extrabold ${debito ? 'text-rose-600' : 'text-emerald-700'} whitespace-nowrap">${fmtEuro(debito ? daVersare : riporto)}</span>
       </div>
     </div>`;
   }
   $('cards-trimestri-iva').innerHTML = html;
+  $('iva-acconto').value = accIvaInserito === '' || accIvaInserito == null ? '' : accIvaInserito;
+  $('iva-acconto').placeholder = accIvaCalc.toFixed(2);
+  $('txt-iva-acconto').textContent = accIvaCalc > 0
+    ? `Calcolato: 88% di ${fmtEuro(baseAccIva)} (IVA del 4° trimestre ${anno - 1}). Scrivi un importo solo se hai versato una cifra diversa.`
+    : baseAccIva > 0 ? `Non dovuto: l'88% del 4° trimestre ${anno - 1} è sotto 103,29 €.`
+    : `Non dovuto: il 4° trimestre ${anno - 1} non era a debito (o non è registrato nell'app).`;
+  ivaVers.splice(3, 0, { acconto: true, daVersare: accontoIva, credito: 0 });
 
   // 5. Utile, imposte dei soci e INPS
   // il risultato può essere una perdita; le imposte si calcolano solo sull'utile
@@ -2738,7 +2765,7 @@ function disegnaVersamentiDash(v, annoDopo, s, iva) {
   const anno = annoDopo - 1;
   const SCAD = { 1: '16 maggio', 2: '20 agosto', 3: '16 novembre', 4: `16 marzo ${annoDopo}` };
   const casella = (x) => `<div class="p-3 rounded-xl border ${x.daVersare > 0 ? 'border-slate-200 bg-slate-50' : 'border-emerald-200 bg-emerald-50/50'}">
-      <p class="text-[11px] font-semibold text-slate-500">${x.q}° trimestre · ${SCAD[x.q]}</p>
+      <p class="text-[11px] font-semibold text-slate-500">${x.acconto ? `Acconto · 27 dicembre` : `${x.q}° trimestre · ${SCAD[x.q]}`}</p>
       <p class="text-lg font-extrabold whitespace-nowrap ${x.daVersare > 0 ? 'text-slate-900' : 'text-emerald-700'}">${x.daVersare > 0 ? fmtEuro(x.daVersare) : 'niente'}</p>
       ${x.daVersare > 0 || !x.credito ? '' : `<p class="text-[11px] text-emerald-700">credito ${fmtEuro(x.credito)}</p>`}
     </div>`;
@@ -2751,7 +2778,8 @@ function disegnaVersamentiDash(v, annoDopo, s, iva) {
     `<h2 class="text-base font-bold text-slate-900">Cosa pagare e quando</h2>
     <div class="mt-4">
       <div class="flex justify-between items-baseline gap-2"><p class="text-sm font-bold text-slate-800">IVA della società ${anno}</p><p class="text-xs text-slate-500">totale <strong class="text-slate-900">${fmtEuro(totIva)}</strong></p></div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">${iva.map(casella).join('')}</div>
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-2">${iva.map(casella).join('')}</div>
+      ${iva.some((x) => x.acconto && x.daVersare > 0) ? `<p class="text-[11px] text-slate-500 mt-2">Il 4° trimestre è già al netto dell'acconto di dicembre.</p>` : ''}
     </div>
     <div class="mt-6">
       <p class="text-sm font-bold text-slate-800">Imposte sui redditi del ${anno}, da pagare nel ${annoDopo}</p>

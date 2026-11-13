@@ -5,7 +5,8 @@ S.N.C.:
 
 1. **Dashboard**: ricavi, costi deducibili, utile fiscale, carico di imposte e INPS, ripartizione
    tra i soci con il netto in tasca di ognuno (all'anno e al mese) e il riquadro «Cosa pagare e
-   quando»: l'IVA della società trimestre per trimestre e le imposte sui redditi dell'anno da
+   quando»: l'IVA della società trimestre per trimestre (con l'acconto del 27 dicembre) e le
+   imposte sui redditi dell'anno da
    pagare l'anno dopo, a giugno e a novembre, per la società e per ogni socio (già al netto dei
    crediti; se gli acconti dell'anno non sono inseriti usa quelli dovuti in base all'anno prima).
 2. **Fatture Emesse**: scorporo IVA 22% e regimi non imponibili (art. 8 Svizzera/extra-UE,
@@ -29,7 +30,9 @@ S.N.C.:
 10. **Commercialista**: parcelle con cassa, IVA e ritenuta d'acconto 20%, scadenze F24 codice
    1040 da spuntare, riepilogo dell'anno in CSV per Excel.
 11. **Liquidazione IVA trimestrale (LIPE)**: debito/credito per trimestre, interessi 1%, riporto
-   del credito, scadenze F24.
+   del credito, scadenze F24. L'1% vale anche per il 4° trimestre (versato a marzo con la
+   dichiarazione IVA), da cui si toglie l'acconto del 27 dicembre: calcolato col metodo storico
+   (88% del 4° trimestre dell'anno prima, non dovuto sotto 103,29 €) o inserito a mano.
 12. **Imposte dei soci & INPS**: imputazione per trasparenza, IRPEF a scaglioni, addizionale regionale a
     scaglioni e comunale con la sua soglia di esenzione (da impostare per la propria regione e il
     proprio comune),

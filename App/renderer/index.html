@@ -922,10 +922,19 @@
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div>
             <h2 class="text-lg font-bold text-slate-900">Liquidazione periodica IVA trimestrale (LIPE <span data-anno></span>)</h2>
-            <p class="text-xs text-slate-500">Le SNC in semplificata liquidano l'IVA ogni trimestre, con interessi dell'1% se a debito; il 4° trimestre va nella dichiarazione annuale.</p>
+            <p class="text-xs text-slate-500">L'IVA di ogni trimestre si versa nell'anno stesso, con l'1% di interessi se a debito. Il 4° trimestre si versa a marzo dell'anno dopo con la dichiarazione IVA (anche lui con l'1%), togliendo l'acconto pagato il 27 dicembre.</p>
           </div>
           <label class="flex items-center gap-2 bg-slate-100 px-3 py-2 rounded-xl text-xs font-semibold text-slate-700">Credito IVA anno precedente (€)
             <input type="number" step="0.01" min="0" id="iva-credito-prec" value="0" class="w-28 px-2 py-1 rounded-lg border border-slate-300 text-xs font-bold text-right bg-white" />
+          </label>
+        </div>
+        <div class="mb-6 p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <p class="text-sm font-bold text-slate-900">Acconto IVA del 27 dicembre <span data-anno></span> <span class="font-normal text-slate-500">(cod. F24 6035)</span></p>
+            <p id="txt-iva-acconto" class="text-xs text-slate-500 mt-0.5"></p>
+          </div>
+          <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 shrink-0">Versato (€)
+            <input type="number" step="0.01" min="0" id="iva-acconto" class="w-28 px-2 py-1 rounded-lg border border-slate-300 text-xs font-bold text-right bg-white" />
           </label>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" id="cards-trimestri-iva"></div>

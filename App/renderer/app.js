@@ -2780,12 +2780,12 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
 
   // elenco dei pagamenti: { chi: 'iva' | 'soc' | 's1' | 's2', data, importo } (l'IVA è della società)
   const pagamenti = [];
-  const paga = (chi, data, importo) => { if (importo > 0.005) pagamenti.push({ chi, data, importo }); return importo; };
+  const paga = (chi, data, importo, voce) => { if (importo > 0.005) pagamenti.push({ chi, data, importo, voce }); return importo; };
 
   // 1. IVA
   const casella = (x) => {
     const d = x.acconto ? DATE_IVA.acc : DATE_IVA[x.q];
-    paga('iva', d, x.daVersare);
+    paga('soc', d, x.daVersare, 'IVA');
     return `<div class="p-3 rounded-xl border ${x.daVersare > 0 ? 'border-slate-200 bg-slate-50' : 'border-emerald-200 bg-emerald-50/50'}">
       <p class="text-[11px] font-semibold text-slate-500">${x.acconto ? 'Acconto IVA' : `${x.q}° trimestre`}</p>
       <p class="text-[11px] text-slate-500">${fmtData(d)}</p>
@@ -2803,12 +2803,12 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
   const gruppo = (titolo, nota, righe) => `<div class="pt-3">
       <p class="text-xs font-bold text-slate-800">${titolo}</p>${nota ? `<p class="text-[11px] text-slate-500">${nota}</p>` : ''}
       <div class="mt-1 divide-y divide-slate-100">${righe}</div></div>`;
-  const rate4 = (chi, date, totale, nomi) => date.map((d, i) => riga(d, nomi[i], paga(chi, d, totale / 4))).join('');
+  const rate4 = (chi, date, totale, nomi, voce) => date.map((d, i) => riga(d, nomi[i], paga(chi, d, totale / 4, voce))).join('');
   const NOMI_INPS = ['1ª rata', '2ª rata', '3ª rata', '4ª rata'];
-  const imposte = (chi, x, lbl) => !x ? '' : gruppo(lbl, `Saldo ${anno} e acconti ${annoDopo}, già tolti i crediti compensati nell'F24.`,
-    riga(GIUGNO, 'saldo e 1° acconto', paga(chi, GIUGNO, x.daGiu)) + riga(NOVEMBRE, '2° acconto', paga(chi, NOVEMBRE, x.daNov)) +
+  const imposte = (chi, x, lbl, voce) => !x ? '' : gruppo(lbl, `Saldo ${anno} e acconti ${annoDopo}, già tolti i crediti compensati nell'F24.`,
+    riga(GIUGNO, 'saldo e 1° acconto', paga(chi, GIUGNO, x.daGiu, voce)) + riga(NOVEMBRE, '2° acconto', paga(chi, NOVEMBRE, x.daNov, voce)) +
     (x.resto > 0 ? `<p class="text-[11px] text-emerald-700 pt-1">Credito che avanza: ${fmtEuro(x.resto)}</p>` : ''));
-  const totaleDi = (chi) => pagamenti.filter((p) => p.chi === chi).reduce((t, p) => t + p.importo, 0);
+  const totaleDi = (chi) => pagamenti.filter((p) => p.chi === chi && p.voce !== 'IVA').reduce((t, p) => t + p.importo, 0);
   const scheda = (chi, titolo, sotto, contenuto) => {
     const tot = totaleDi(chi);
     return `<div class="p-4 rounded-xl bg-white border border-slate-200 flex flex-col">
@@ -2822,32 +2822,51 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
   const inailTot = extra.inail.s1 + extra.inail.s2;
   const contSoc =
     (inailTot > 0 ? gruppo(`INAIL ${anno}`, 'Premio per i soci: in un\'unica volta a febbraio oppure in 4 rate (dalla 2ª con piccoli interessi).',
-      rate4('soc', RATE_INAIL, inailTot, NOMI_INPS)) : gruppo(`INAIL ${anno}`, 'Nessun premio inserito: si inserisce nel tab Imposte Soci &amp; INPS.', '')) +
-    imposte('soc', v.soc, `IRAP ${anno}`);
+      rate4('soc', RATE_INAIL, inailTot, NOMI_INPS, 'INAIL')) : gruppo(`INAIL ${anno}`, 'Nessun premio inserito: si inserisce nel tab Imposte Soci &amp; INPS.', '')) +
+    imposte('soc', v.soc, `IRAP ${anno}`, 'IRAP');
   const schedaSoc = scheda('soc', 'Società', 'INAIL e IRAP', contSoc);
 
   const schedaSocio = (chi, nome, fisso, collab, x) => {
     const cont =
-      (fisso > 0 ? gruppo(`INPS ${anno}, contributo fisso`, 'Sul minimale, in 4 rate uguali.', rate4(chi, RATE, fisso, NOMI_INPS)) : '') +
-      (collab > 0 ? gruppo(`INPS ${anno} del collaboratore familiare`, 'Pagato dal titolare, in 4 rate uguali.', rate4(chi, RATE, collab, NOMI_INPS)) : '') +
-      imposte(chi, x, 'IRPEF, addizionali e INPS sul reddito');
+      (fisso > 0 ? gruppo(`INPS ${anno}, contributo fisso`, 'Sul minimale, in 4 rate uguali.', rate4(chi, RATE, fisso, NOMI_INPS, 'INPS contributo fisso')) : '') +
+      (collab > 0 ? gruppo(`INPS ${anno} del collaboratore familiare`, 'Pagato dal titolare, in 4 rate uguali.', rate4(chi, RATE, collab, NOMI_INPS, 'INPS del collaboratore familiare')) : '') +
+      imposte(chi, x, 'IRPEF, addizionali e INPS sul reddito', 'IRPEF, addizionali e INPS sul reddito');
     return scheda(chi, nome, fisso > 0 ? 'INPS, IRPEF e addizionali' : 'IRPEF e addizionali (INPS non dovuto)', cont);
   };
   const schede = schedaSoc +
     schedaSocio('s1', s.s1Nome, extra.inps.s1, extra.inps.collab, v.s1) +
     schedaSocio('s2', s.s2Nome, extra.inps.s2, 0, v.s2);
 
-  // 3. totali per trimestre, in base alla data di pagamento
-  const trimestri = new Map();
-  for (const p of [...pagamenti].sort((a, b) => a.data - b.data)) {
-    const q = Math.floor(p.data.getMonth() / 3) + 1, a = p.data.getFullYear();
-    const k = `${a}-${q}`;
-    if (!trimestri.has(k)) trimestri.set(k, { nome: `${q}° trimestre ${a}`, mesi: ['gen-mar', 'apr-giu', 'lug-set', 'ott-dic'][q - 1], soc: 0, soci: 0 });
-    trimestri.get(k)[p.chi === 'soc' || p.chi === 'iva' ? 'soc' : 'soci'] += p.importo;
-  }
-  const cella = (n, cls = '') => `<td class="py-2 text-right whitespace-nowrap ${cls}">${fmtEuro(n)}</td>`;
-  const tq = [...trimestri.values()];
-  const somma = tq.reduce((t, x) => ({ soc: t.soc + x.soc, soci: t.soci + x.soci }), { soc: 0, soci: 0 });
+  // 3. totali per trimestre (in base alla data di pagamento): trimestri in
+  //    colonna, voci in riga, una tabella per la società e una per i soci
+  const chiaveQ = (d) => d.getFullYear() * 10 + Math.floor(d.getMonth() / 3) + 1;
+  const colonne = [...new Set(pagamenti.map((p) => chiaveQ(p.data)))].sort((x, y) => x - y);
+  const MESI_Q = ['gen-mar', 'apr-giu', 'lug-set', 'ott-dic'];
+  const somme = (filtro) => colonne.map((k) => pagamenti.filter((p) => filtro(p) && chiaveQ(p.data) === k).reduce((t, p) => t + p.importo, 0));
+  const td = (n, cls = '') => `<td class="px-3 py-2 text-right whitespace-nowrap ${cls}">${n > 0.005 ? fmtEuro(n) : '<span class="text-slate-300">—</span>'}</td>`;
+  const rigaT = (lbl, valori, cls = '', clsLbl = 'text-slate-700') => `<tr class="border-b border-slate-100 ${cls}"><td class="py-2 pr-3 ${clsLbl}">${lbl}</td>${valori.map((n) => td(n)).join('')}${td(valori.reduce((t, n) => t + n, 0), 'font-bold')}</tr>`;
+  const voci = (chi) => [...new Set(pagamenti.filter((p) => p.chi === chi).map((p) => p.voce))];
+  const tabella = (corpo) => `<div class="overflow-x-auto mt-2"><table class="w-full min-w-[760px] table-fixed text-sm">
+      <thead><tr class="border-b border-slate-200 text-slate-500">
+        <th class="w-64 py-2 pr-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">Voce</th>
+        ${colonne.map((k) => `<th class="px-3 py-2 text-right whitespace-nowrap"><span class="block text-xs font-bold text-slate-800">${k % 10}° trim. ${Math.floor(k / 10)}</span><span class="block text-[11px] font-normal">${MESI_Q[k % 10 - 1]}</span></th>`).join('')}
+        <th class="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-400">Totale</th></tr></thead>
+      <tbody>${corpo}</tbody></table></div>`;
+  const corpoSoc = voci('soc').map((vo) => rigaT(vo, somme((p) => p.chi === 'soc' && p.voce === vo))).join('') +
+    rigaT('Totale società', somme((p) => p.chi === 'soc'), 'bg-slate-50 font-bold', 'font-bold text-slate-900');
+  const corpoSocio = (chi, nome) => !voci(chi).length ? '' :
+    `<tr><td colspan="${colonne.length + 2}" class="pt-4 pb-1 text-xs font-bold uppercase tracking-wider text-slate-500">${esc(nome)}</td></tr>` +
+    voci(chi).map((vo) => rigaT(vo, somme((p) => p.chi === chi && p.voce === vo))).join('') +
+    rigaT(`Totale ${esc(nome)}`, somme((p) => p.chi === chi), 'font-semibold', 'font-semibold text-slate-900');
+  const corpoSoci = corpoSocio('s1', s.s1Nome) + corpoSocio('s2', s.s2Nome) +
+    rigaT('Totale soci', somme((p) => p.chi !== 'soc'), 'bg-slate-50 font-bold', 'font-bold text-slate-900');
+  $('dash-trimestri').innerHTML =
+    `<h2 class="text-base font-bold text-slate-900">Totale da pagare per trimestre: il ${anno}</h2>
+    <p class="text-xs text-slate-500">Gli stessi versamenti del riquadro sopra, sommati per trimestre in base alla data in cui si pagano.</p>
+    <div class="mt-4 p-4 rounded-xl border border-slate-200">
+      <p class="text-sm font-bold text-slate-900">Società</p>${tabella(corpoSoc)}</div>
+    <div class="mt-4 p-4 rounded-xl border border-slate-200">
+      <p class="text-sm font-bold text-slate-900">Soci</p>${tabella(corpoSoci)}</div>`;
 
   $('dash-versamenti').innerHTML =
     `<h2 class="text-base font-bold text-slate-900">Cosa pagare e quando: il ${anno}</h2>
@@ -2858,17 +2877,7 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
       ${iva.some((x) => x.acconto && x.daVersare > 0) ? `<p class="text-[11px] text-slate-500 mt-2">Il 4° trimestre è già al netto dell'acconto di dicembre.</p>` : ''}
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-6">${schede}</div>
-    <div class="mt-6">
-      <p class="text-sm font-bold text-slate-800">Totale da pagare per trimestre</p>
-      <p class="text-[11px] text-slate-500">In base alla data di ogni versamento. Società: IVA, INAIL e IRAP. Soci: INPS, IRPEF e addizionali.</p>
-      <table class="w-full mt-1 text-sm">
-        <thead><tr class="text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-200">
-          <th class="py-2 text-left font-semibold">Trimestre</th><th class="py-2 text-right font-semibold">Società</th><th class="py-2 text-right font-semibold">Soci</th><th class="py-2 text-right font-semibold">Totale</th></tr></thead>
-        <tbody>${tq.map((x) => `<tr class="border-b border-slate-100"><td class="py-2 font-semibold text-slate-800">${x.nome} <span class="font-normal text-slate-500">(${x.mesi})</span></td>${cella(x.soc)}${cella(x.soci)}${cella(x.soc + x.soci, 'font-bold')}</tr>`).join('')}
-          <tr><td class="py-2 font-bold text-slate-900">Totale</td>${cella(somma.soc, 'font-bold')}${cella(somma.soci, 'font-bold')}${cella(somma.soc + somma.soci, 'font-extrabold text-rose-600')}</tr></tbody>
-      </table>
-      <p class="text-[11px] text-slate-500 mt-2">Il dettaglio dei calcoli è nei tab Liquidazione IVA e Imposte Soci &amp; INPS.</p>
-    </div>`;
+    <p class="text-[11px] text-slate-500 mt-4">Il dettaglio dei calcoli è nei tab Liquidazione IVA e Imposte Soci &amp; INPS.</p>`;
 }
 
 function disegnaAvvisiPolizze() {

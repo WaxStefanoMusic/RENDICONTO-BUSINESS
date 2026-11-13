@@ -39,7 +39,9 @@ S.N.C.:
     presentata se ne inseriscono il reddito e le ritenute d'acconto (quadro RN): valgono al posto
     del reddito calcolato dalle registrazioni. Il regime contabile (semplificato o ordinario) si
     sceglie nelle impostazioni. I contributi INPS del collaboratore familiare si deducono dal
-    reddito del titolare solo se lo si spunta (come nella sua dichiarazione).
+    reddito del titolare solo se lo si spunta (come nella sua dichiarazione). I crediti dei saldi
+    (IRPEF, INPS, addizionale comunale, IRAP) si usano in compensazione nell'F24: l'app mostra
+    quanto resta da versare a giugno e a novembre e il credito che avanza.
 13. **Guida**: strumenti gratuiti dell'Agenzia delle Entrate e adempimenti con l'estero.
 
 ### Importazione delle fatture elettroniche

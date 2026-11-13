@@ -1749,6 +1749,7 @@ function renderAll() {
     const acc1 = baseAcc * 0.5 + inpsEcc * 0.5 + add.comunale * 0.3;
     const acc2 = baseAcc * 0.5 + inpsEcc * 0.5;
     const giugno = Math.max(0, sIrpef) + Math.max(0, sInps) + add.regionale + Math.max(0, sCom) + acc1;
+    const crediti = Math.max(0, -sIrpef) + Math.max(0, -sInps) + Math.max(0, -sCom);
     return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
       titoloInps(`Versamenti F24 per il ${appState.anno}`) +
       (rit > 0 ? riga('Ritenute d\'acconto attribuite:', '- ' + fmtEuro(rit), 'text-emerald-700') : '') +
@@ -1761,8 +1762,24 @@ function renderAll() {
       riga('Saldo addizionale comunale:', importoSaldo(sCom), clsSaldo(sCom)) +
       riga(`1° acconto ${annoDopo} (giugno):`, fmtEuro(acc1)) +
       riga(`2° acconto ${annoDopo} (novembre):`, fmtEuro(acc2)) +
-      `<div class="flex justify-between gap-3 text-sm"><span class="font-bold text-slate-900">Da versare a giugno ${annoDopo}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(giugno)}</span></div>` +
-      `</div>`;
+      righeCompensazione(giugno, acc2, crediti, -sIrpef > 5000);
+  };
+  /* I crediti dei saldi si usano nell'F24 (compensazione) per pagare quanto
+     dovuto a giugno; quello che avanza copre il 2° acconto di novembre e poi
+     resta disponibile. Ogni contribuente compensa solo i propri crediti. */
+  const righeCompensazione = (giugno, novembre, crediti, avvisoVisto) => {
+    const usatoGiu = Math.min(crediti, giugno), restoGiu = crediti - usatoGiu;
+    const usatoNov = Math.min(restoGiu, novembre), resto = restoGiu - usatoNov;
+    const totale = (lbl, v, cls) => `<div class="flex justify-between gap-3 text-sm"><span class="font-bold text-slate-900">${lbl}</span><span class="font-extrabold ${cls} whitespace-nowrap">${fmtEuro(v)}</span></div>`;
+    if (crediti <= 0) return totale(`Da versare a giugno ${annoDopo}:`, giugno, 'text-indigo-600') + '</div>';
+    return riga(`Dovuto a giugno ${annoDopo} prima della compensazione:`, fmtEuro(giugno), 'text-slate-500') +
+      riga('Crediti usati in compensazione nell\'F24:', '- ' + fmtEuro(usatoGiu), 'text-emerald-700') +
+      totale(`Da versare a giugno ${annoDopo}:`, giugno - usatoGiu, 'text-indigo-600') +
+      (usatoNov > 0 ? riga(`Credito usato per il 2° acconto di novembre:`, '- ' + fmtEuro(usatoNov), 'text-emerald-700') : '') +
+      riga(`Da versare a novembre ${annoDopo}:`, fmtEuro(novembre - usatoNov), 'font-semibold text-slate-900') +
+      (resto > 0 ? totale('Credito che resta ancora da usare:', resto, 'text-emerald-700') : '') +
+      (avvisoVisto ? `<p class="text-[11px] text-slate-500">Per usare oltre 5.000 € di crediti IRPEF per pagare altre imposte o contributi serve il visto di conformità sulla dichiarazione; tra IRPEF e IRPEF (saldo con acconto) non serve.</p>` : '') +
+      '</div>';
   };
   const titoloInps = (t) => `<p class="pt-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">${esc(t)}</p>`;
   const righeInps = (x, nome) => !x.totale ? riga(`INPS di ${esc(nome)}:`, 'non dovuto', 'text-slate-500') :
@@ -1823,7 +1840,8 @@ function renderAll() {
         (acc > 0 ? riga(`Acconti IRAP versati nel ${appState.anno}:`, fmtEuro(acc), 'text-slate-500') : riga(`Acconti IRAP versati nel ${appState.anno}:`, 'non inseriti', 'text-amber-700')) +
         riga(`Saldo IRAP (giugno ${annoDopo}):`, importoSaldo(saldo), clsSaldo(saldo)) +
         riga(`1° acconto IRAP ${annoDopo} (giugno):`, fmtEuro(irapSocieta * 0.5)) +
-        riga(`2° acconto IRAP ${annoDopo} (novembre):`, fmtEuro(irapSocieta * 0.5)) + '</div>';
+        riga(`2° acconto IRAP ${annoDopo} (novembre):`, fmtEuro(irapSocieta * 0.5)) +
+        righeCompensazione(Math.max(0, saldo) + irapSocieta * 0.5, irapSocieta * 0.5, Math.max(0, -saldo), false);
     })();
 
   // 6. Cruscotto

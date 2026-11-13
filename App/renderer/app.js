@@ -1670,6 +1670,7 @@ function renderAll() {
     { q: 4, nome: '4° trimestre (ott-dic)', scad: scadenza(anno + 1, 3, 16) + ' (dich. IVA)', cod: '6099', magg: false },
   ];
   html = '';
+  const ivaVers = [];   // per il riquadro del cruscotto
   for (const t of TRIM) {
     const deb = ivaTrim[t.q].debito;
     const credTot = ivaTrim[t.q].credito + riporto;
@@ -1678,6 +1679,7 @@ function renderAll() {
     if (diff > 0) { interessi = t.magg ? diff * 0.01 : 0; daVersare = diff + interessi; riporto = 0; }
     else riporto = Math.abs(diff);
     const debito = daVersare > 0;
+    ivaVers.push({ q: t.q, scad: t.scad.replace(' (dich. IVA)', ''), daVersare, credito: debito ? 0 : riporto });
     html += `<div class="p-5 rounded-2xl border ${debito ? 'border-rose-200 bg-rose-50/30' : 'border-emerald-200 bg-emerald-50/30'} flex flex-col justify-between space-y-4">
       <div>
         <div class="flex items-center justify-between gap-2">
@@ -1921,7 +1923,7 @@ function renderAll() {
       </div>
       <p class="text-[11px] text-slate-500 mt-1">Nessun compenso. I contributi INPS si attivano nel tab Imposte Soci &amp; INPS.</p>
     </div>`;
-  disegnaVersamentiDash(versamenti, annoDopo, s);
+  disegnaVersamentiDash(versamenti, annoDopo, s, ivaVers);
   disegnaAvvisiPolizze();
   applicaRicerche();
 }
@@ -2729,36 +2731,37 @@ function polizzeDaRinnovare() {
     .sort((a, b) => a.st.giorni - b.st.giorni);
 }
 
-/* Cruscotto: quanto pagheranno la società e i soci l'anno dopo per le imposte
-   dell'anno scelto (saldo + acconti), già al netto dei crediti in compensazione. */
-function disegnaVersamentiDash(v, annoDopo, s) {
+/* Cruscotto: in poche righe cosa si paga e quando. Sopra l'IVA della società
+   trimestre per trimestre, sotto le imposte sul reddito dell'anno che si
+   pagano l'anno dopo (giugno e novembre), già al netto dei crediti. */
+function disegnaVersamentiDash(v, annoDopo, s, iva) {
   const anno = annoDopo - 1;
-  const r = (lbl, val, cls = 'text-slate-900') => `<div class="flex justify-between gap-3 text-xs"><span class="text-slate-600">${lbl}</span><span class="font-semibold whitespace-nowrap ${cls}">${val}</span></div>`;
-  const scheda = (titolo, sotto, x) => !x ? '' :
-    `<div class="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-      <div><p class="text-sm font-bold text-slate-900">${esc(titolo)}</p><p class="text-[11px] text-slate-500">${sotto}</p></div>
-      ${r(`Saldo ${anno} (giugno):`, fmtEuro(x.saldo))}
-      ${r(`1° acconto ${annoDopo} (giugno):`, fmtEuro(x.acc1))}
-      ${x.usatoGiu > 0 ? r('Crediti usati nell\'F24:', '- ' + fmtEuro(x.usatoGiu), 'text-emerald-700') : ''}
-      <div class="flex justify-between gap-3 text-sm pt-1 border-t border-slate-200"><span class="font-bold text-slate-900">Giugno ${annoDopo}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(x.daGiu)}</span></div>
-      ${r(`2° acconto (novembre ${annoDopo}):`, fmtEuro(x.daNov) + (x.usatoNov > 0 ? ` <span class="font-normal text-emerald-700">(- ${fmtEuro(x.usatoNov)} di credito)</span>` : ''))}
-      <div class="flex justify-between gap-3 text-sm pt-1 border-t border-slate-200"><span class="font-bold text-slate-900">Totale ${annoDopo}:</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(x.daGiu + x.daNov)}</span></div>
-      ${x.resto > 0 ? r('Credito che avanza:', fmtEuro(x.resto), 'text-emerald-700') : ''}
-      ${x.riporto > 0 || x.stimati ? `<p class="text-[11px] text-slate-500">${[x.riporto > 0 ? `Comprende ${fmtEuro(x.riporto)} di credito avanzato dal ${anno - 1}.` : '', x.stimati ? `Acconti ${anno} non inseriti: uso quelli dovuti in base al ${anno - 1}.` : ''].filter(Boolean).join(' ')}</p>` : ''}
+  const SCAD = { 1: '16 maggio', 2: '20 agosto', 3: '16 novembre', 4: `16 marzo ${annoDopo}` };
+  const casella = (x) => `<div class="p-3 rounded-xl border ${x.daVersare > 0 ? 'border-slate-200 bg-slate-50' : 'border-emerald-200 bg-emerald-50/50'}">
+      <p class="text-[11px] font-semibold text-slate-500">${x.q}° trimestre · ${SCAD[x.q]}</p>
+      <p class="text-lg font-extrabold whitespace-nowrap ${x.daVersare > 0 ? 'text-slate-900' : 'text-emerald-700'}">${x.daVersare > 0 ? fmtEuro(x.daVersare) : 'niente'}</p>
+      ${x.daVersare > 0 || !x.credito ? '' : `<p class="text-[11px] text-emerald-700">credito ${fmtEuro(x.credito)}</p>`}
     </div>`;
-  const tot = ['soc', 's1', 's2'].reduce((t, k) => t + (v[k] ? v[k].daGiu + v[k].daNov : 0), 0);
+  const totIva = iva.reduce((t, x) => t + x.daVersare, 0);
+  const righe = [['Società (IRAP)', v.soc], [s.s1Nome, v.s1], [s.s2Nome, v.s2]].filter(([, x]) => x);
+  const cella = (n, cls = '') => `<td class="py-2 text-right whitespace-nowrap ${cls}">${fmtEuro(n)}</td>`;
+  const tot = righe.reduce((t, [, x]) => ({ giu: t.giu + x.daGiu, nov: t.nov + x.daNov }), { giu: 0, nov: 0 });
+  const avanzi = righe.filter(([, x]) => x.resto > 0).map(([n, x]) => `${esc(n)} ${fmtEuro(x.resto)}`);
   $('dash-versamenti').innerHTML =
-    `<div class="flex flex-wrap items-start justify-between gap-2">
-      <div>
-        <h2 class="text-base font-bold text-slate-900">Imposte del ${anno} da pagare nel ${annoDopo}</h2>
-        <p class="text-xs text-slate-500">Saldo e acconti con l'F24 di giugno e novembre, già al netto dei crediti in compensazione. L'INPS fisso sul minimale si paga a rate nell'anno stesso e qui non c'è.</p>
-      </div>
-      <div class="text-right"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Totale ${annoDopo}</p><p class="text-xl font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(tot)}</p></div>
+    `<h2 class="text-base font-bold text-slate-900">Cosa pagare e quando</h2>
+    <div class="mt-4">
+      <div class="flex justify-between items-baseline gap-2"><p class="text-sm font-bold text-slate-800">IVA della società ${anno}</p><p class="text-xs text-slate-500">totale <strong class="text-slate-900">${fmtEuro(totIva)}</strong></p></div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">${iva.map(casella).join('')}</div>
     </div>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-      ${scheda('Società', 'IRAP', v.soc)}
-      ${scheda(s.s1Nome, 'IRPEF, addizionali e INPS oltre il minimale', v.s1)}
-      ${scheda(s.s2Nome, 'IRPEF, addizionali e INPS oltre il minimale', v.s2)}
+    <div class="mt-6">
+      <p class="text-sm font-bold text-slate-800">Imposte sui redditi del ${anno}, da pagare nel ${annoDopo}</p>
+      <table class="w-full mt-1 text-sm">
+        <thead><tr class="text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-200">
+          <th class="py-2 text-left font-semibold"></th><th class="py-2 text-right font-semibold">Giugno</th><th class="py-2 text-right font-semibold">Novembre</th><th class="py-2 text-right font-semibold">Totale</th></tr></thead>
+        <tbody>${righe.map(([n, x]) => `<tr class="border-b border-slate-100"><td class="py-2 font-semibold text-slate-800">${esc(n)}</td>${cella(x.daGiu)}${cella(x.daNov)}${cella(x.daGiu + x.daNov, 'font-bold')}</tr>`).join('')}
+          <tr><td class="py-2 font-bold text-slate-900">Totale</td>${cella(tot.giu, 'font-bold')}${cella(tot.nov, 'font-bold')}${cella(tot.giu + tot.nov, 'font-extrabold text-rose-600')}</tr></tbody>
+      </table>
+      <p class="text-[11px] text-slate-500 mt-2">Saldo più acconti, già tolti i crediti che si possono compensare nell'F24.${avanzi.length ? ` Credito che avanza: ${avanzi.join(', ')}.` : ''} Il dettaglio è nel tab Imposte Soci &amp; INPS.</p>
     </div>`;
 }
 

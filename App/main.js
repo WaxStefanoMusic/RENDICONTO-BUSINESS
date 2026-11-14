@@ -259,6 +259,32 @@ function createWindow() {
     if (!url.startsWith('file://')) { e.preventDefault(); if (/^https?:\/\//i.test(url)) shell.openExternal(url); }
   });
 
+  /* tasto destro: menu come in Windows (Taglia, Copia, Incolla…). Nei campi
+     di testo tutte le voci; sul resto della pagina solo Copia e Seleziona tutto.
+     Le voci non possibili in quel momento restano grigie. */
+  win.webContents.on('context-menu', (_e, p) => {
+    const f = p.editFlags || {};
+    const testo = !!(p.selectionText && p.selectionText.trim());
+    const voci = p.isEditable ? [
+      { label: 'Annulla', role: 'undo', accelerator: 'CommandOrControl+Z', enabled: !!f.canUndo },
+      { label: 'Ripeti', role: 'redo', accelerator: 'CommandOrControl+Y', enabled: !!f.canRedo },
+      { type: 'separator' },
+      { label: 'Taglia', role: 'cut', accelerator: 'CommandOrControl+X', enabled: !!f.canCut },
+      { label: 'Copia', role: 'copy', accelerator: 'CommandOrControl+C', enabled: !!f.canCopy },
+      { label: 'Incolla', role: 'paste', accelerator: 'CommandOrControl+V', enabled: !!f.canPaste },
+      { label: 'Elimina', role: 'delete', accelerator: 'Delete', enabled: !!f.canDelete },
+      { type: 'separator' },
+      { label: 'Seleziona tutto', role: 'selectAll', accelerator: 'CommandOrControl+A', enabled: f.canSelectAll !== false },
+    ] : [
+      { label: 'Taglia', role: 'cut', accelerator: 'CommandOrControl+X', enabled: false },
+      { label: 'Copia', role: 'copy', accelerator: 'CommandOrControl+C', enabled: testo },
+      { label: 'Incolla', role: 'paste', accelerator: 'CommandOrControl+V', enabled: false },
+      { type: 'separator' },
+      { label: 'Seleziona tutto', role: 'selectAll', accelerator: 'CommandOrControl+A' },
+    ];
+    Menu.buildFromTemplate(voci).popup({ window: win });
+  });
+
   // Ctrl+rotellina: zoom dell'interfaccia
   win.webContents.on('zoom-changed', (_e, dir) => applyUiZoom(uiZoom + (dir === 'in' ? 0.1 : -0.1)));
 

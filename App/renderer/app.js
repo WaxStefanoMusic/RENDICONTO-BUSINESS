@@ -1821,7 +1821,7 @@ function renderAll() {
     const giugno = Math.max(0, sIrpef) + Math.max(0, sInps) + add.regionale + Math.max(0, sCom) + acc1;
     const riporto = prec ? prec.resto : 0;               // credito avanzato dall'anno prima
     const crediti = Math.max(0, -sIrpef) + Math.max(0, -sInps) + Math.max(0, -sCom) + riporto;
-    versamenti[k] = { saldo: giugno - acc1, acc1, acc2, riporto, stimati: !!stimati,
+    versamenti[k] = { saldo: giugno - acc1, acc1, acc2, riporto, stimati: !!stimati, rit, accVersati: cent(accIrpef + accInps + accCom),
       dett: { irpef: baseAcc, inps: inpsEcc, com: cent(add.comunale * 0.3) }, ...compensa(giugno, acc2, crediti) };
     return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
       titoloInps(`Versamenti F24 per il ${appState.anno}`) +
@@ -1922,7 +1922,7 @@ function renderAll() {
       const acc = stimato ? cent(prec.acc1 + prec.acc2) : +valIrap || 0, saldo = cent(irapSocieta - acc);
       const irapAcc1 = cent(irapSocieta * 0.5), irapAcc2 = cent(irapSocieta - irapAcc1);
       const riporto = prec ? prec.resto : 0, crediti = Math.max(0, -saldo) + riporto;
-      versamenti.soc = { saldo: Math.max(0, saldo), acc1: irapAcc1, acc2: irapAcc2, riporto, stimati: !!stimato,
+      versamenti.soc = { saldo: Math.max(0, saldo), acc1: irapAcc1, acc2: irapAcc2, riporto, stimati: !!stimato, rit: 0, accVersati: acc,
         ...compensa(cent(Math.max(0, saldo) + irapAcc1), irapAcc2, crediti) };
       return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
         titoloInps(`IRAP: versamenti F24 per il ${appState.anno}`) +
@@ -1992,6 +1992,7 @@ function renderAll() {
   disegnaVersamentiDash(versamenti, annoDopo, s, ivaVers, {
     inps: { s1: inpsS1.fisso, s2: inpsS2.fisso, collab: inpsCollab, s2DaS1: inpsS2PagatoDaS1 > 0 },
     inail: { s1: +inail.s1 || 0, s2: +inail.s2 || 0 },
+    carico: totaleTasse,
   });
   disegnaAvvisiPolizze();
   applicaRicerche();
@@ -2921,18 +2922,40 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
     <div class="mt-4 p-4 rounded-xl border border-slate-200">
       <p class="text-sm font-bold text-slate-900">Soci</p>${tabSoci}</div>`;
 
+  /* 4. Dal «Carico fiscale» in alto ai versamenti F24 di imposte e INPS (IVA e
+     INAIL a parte): ogni voce è calcolata, non scritta a mano, e il risultato
+     si confronta con la somma dei versamenti elencati nei riquadri. */
+  const parti = ['s1', 's2', 'soc'].map((k) => v[k]).filter(Boolean);
+  const somma = (f) => cent(parti.reduce((t, x) => t + (+f(x) || 0), 0));
+  const rit = somma((x) => x.rit), accPrima = somma((x) => x.accVersati), accDopo = somma((x) => cent(x.acc1 + x.acc2));
+  const credPrima = somma((x) => x.riporto), credResta = somma((x) => x.resto);
+  const atteso = cent(extra.carico - rit - accPrima + accDopo - credPrima + credResta);
+  const versSoci = cent(pagamenti.filter((p) => p.chi !== 'soc').reduce((t, p) => t + p.importo, 0));
+  const versIrap = cent(pagamenti.filter((p) => p.voce === 'IRAP').reduce((t, p) => t + p.importo, 0));
+  const versato = cent(versSoci + versIrap);
+  const rp = (lbl, val, segno = '', cls = '') => `<div class="flex justify-between gap-3 py-1 ${cls}"><span>${lbl}</span><span class="font-semibold whitespace-nowrap">${segno}${fmtEuro(val)}</span></div>`;
+  const ponte = `<div class="mt-3 p-4 rounded-xl bg-indigo-50 border border-indigo-100 text-xs text-indigo-900">
+      <p class="font-bold">Dal «Carico fiscale» in alto a quanto si versa con gli F24</p>
+      <p class="mt-1">Il Carico fiscale è quanto costano, in imposte e INPS, i redditi del ${anno}. Con gli F24 si versa un'altra cifra: ecco il passaggio, voce per voce.</p>
+      <div class="mt-2 max-w-xl divide-y divide-indigo-100">
+        ${rp(`Carico fiscale + INPS soci del ${anno} (in alto)`, extra.carico, '', 'font-bold')}
+        ${rit > 0.005 ? rp("Ritenute d'acconto subite dalla società", rit, '− ') : ''}
+        ${accPrima > 0.005 ? rp(`Acconti ${anno} già versati a giugno e novembre ${anno} (soci e IRAP)`, accPrima, '− ') : ''}
+        ${accDopo > 0.005 ? rp(`Acconti ${annoDopo}: anticipo sulle tasse dell'anno dopo (soci e IRAP)`, accDopo, '+ ') : ''}
+        ${credPrima > 0.005 ? rp(`Crediti avanzati dal ${anno - 1}, usati nell'F24`, credPrima, '− ') : ''}
+        ${credResta > 0.005 ? rp('Crediti che restano da usare (non scalati qui)', credResta, '+ ') : ''}
+        ${rp('Da versare con gli F24 per imposte e INPS', atteso, '= ', 'font-bold text-sm')}
+        ${rp(`di cui nei riquadri dei soci`, versSoci, '', 'pl-4 text-indigo-800')}
+        ${rp(`di cui IRAP nel riquadro della società`, versIrap, '', 'pl-4 text-indigo-800')}
+      </div>
+      ${Math.abs(atteso - versato) > 0.005 ? `<p class="mt-2 font-bold text-rose-700">Attenzione: i versamenti elencati sommano ${fmtEuro(versato)}, ${fmtEuro(Math.abs(atteso - versato))} ${atteso > versato ? 'in meno' : 'in più'} del conto qui sopra. Controlla i dati inseriti.</p>` : ''}
+      <p class="mt-2 text-[11px] text-indigo-800">IVA e INAIL non sono nel Carico fiscale: sono a parte, qui sotto.</p>
+    </div>`;
+
   $('dash-versamenti').innerHTML =
     `<h2 class="text-base font-bold text-slate-900">Cosa pagare e quando: il ${anno}</h2>
     <p class="text-xs text-slate-500">Tutti i versamenti dovuti per il ${anno}, ognuno con la sua data. Se la scadenza cade di sabato o domenica, si paga il lunedì.</p>
-    <div class="mt-3 p-3 rounded-xl bg-indigo-50 border border-indigo-100 text-xs text-indigo-900">
-      <p class="font-bold">Perché questi importi non coincidono con il «Carico fiscale» in alto</p>
-      <p class="mt-1">Il Carico fiscale è quanto costano, in imposte e INPS, i redditi del ${anno}. Qui invece c'è quanto si versa davvero con gli F24, che è diverso perché:</p>
-      <ul class="list-disc pl-5 mt-1 space-y-0.5">
-        <li>si pagano anche gli <strong>acconti ${annoDopo}</strong>, un anticipo sulle tasse dell'anno dopo che poi si scala;</li>
-        <li>si tolgono gli <strong>acconti già pagati per il ${anno}</strong> e i <strong>crediti</strong> avanzati dall'anno prima;</li>
-        <li>l'IRAP la paga la società, quindi è nel suo riquadro e non in quello dei soci.</li>
-      </ul>
-    </div>
+    ${ponte}
     <div class="mt-5">
       <div class="flex justify-between items-baseline gap-2"><p class="text-sm font-bold text-slate-800">IVA della società ${anno}</p><p class="text-xs text-slate-500">totale <strong class="text-slate-900">${fmtEuro(totIva)}</strong></p></div>
       <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-2">${caselleIva}</div>

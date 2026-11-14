@@ -1950,6 +1950,10 @@ function renderAll() {
   $('kpi-tasse-pct').textContent = risultato > 0
     ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(totaleTasse / risultato * 100)}% dell'utile ${redditoDich != null ? 'dichiarato' : 'stimato'}`
     : 'Nessun utile su cui calcolare la percentuale';
+  $('kpi-netto').textContent = fmtEuro(nettoTasca);
+  $('kpi-netto-pct').textContent = risultato > 0
+    ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(nettoTasca / risultato * 100)}% dell'utile ${redditoDich != null ? 'dichiarato' : 'stimato'}`
+    : '';
 
   const maxVal = Math.max(totRicaviImp, 1);
   $('bars').innerHTML =
@@ -1958,7 +1962,8 @@ function renderAll() {
     (risultato < 0
       ? barra('Perdita fiscale SNC (costi oltre i ricavi)', risultato, -risultato / Math.max(totCostiDeducibili, 1) * 100, 'bg-rose-500', 'text-rose-600')
       : barra('Utile fiscale SNC (base imponibile)', utileSnc, utileSnc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700')) +
-    barra(`Utile netto residuo (dopo IRPEF, IRAP e INPS del ${appState.anno})`, nettoTasca, nettoTasca / maxVal * 100, 'bg-indigo-600', 'text-indigo-700');
+    barra(`Carico fiscale + INPS soci del ${appState.anno}`, totaleTasse, totaleTasse / maxVal * 100, 'bg-indigo-600', 'text-indigo-700') +
+    barra(`Utile netto residuo (dopo IRPEF, IRAP e INPS del ${appState.anno})`, nettoTasca, nettoTasca / maxVal * 100, 'bg-emerald-300', 'text-emerald-500');
 
   const scheda = (nome, quota, utile, irpef, inps, netto, collab = 0, altro = '') => `
     <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">

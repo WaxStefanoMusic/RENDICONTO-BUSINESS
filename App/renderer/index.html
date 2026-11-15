@@ -267,7 +267,7 @@
         </div>
       </div>
 
-      <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7 gap-4">
         <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Ricavi lordi <span data-anno></span></p>
           <p id="kpi-ricavi" class="text-2xl font-extrabold text-slate-900 mt-1 break-words">0,00 €</p>
@@ -276,24 +276,36 @@
         <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Costi deducibili fiscali</p>
           <p id="kpi-costi" class="text-2xl font-extrabold text-slate-900 mt-1 break-words">0,00 €</p>
-          <p class="text-xs text-slate-500 mt-1">Al netto delle quote indeducibili</p>
+          <p class="text-xs text-slate-500 mt-1">Al netto delle quote indeducibili. IRAP e INAIL sono più avanti.</p>
         </div>
         <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-          <p id="kpi-utile-titolo" class="text-xs font-semibold uppercase tracking-wider text-slate-400">Utile lordo</p>
+          <p id="kpi-utile-titolo" class="text-xs font-semibold uppercase tracking-wider text-slate-400">Utile lordo società</p>
           <p id="kpi-utile" class="text-2xl font-extrabold text-emerald-600 mt-1 break-words">0,00 €</p>
           <p id="kpi-utile-sub" class="text-xs text-slate-500 mt-1"></p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Imposte della società</p>
+          <p id="kpi-soc" class="text-2xl font-extrabold text-rose-600 mt-1 break-words">0,00 €</p>
+          <p id="kpi-soc-pct" class="text-sm font-semibold text-rose-600 mt-0.5"></p>
+          <p id="kpi-soc-sub" class="text-xs text-slate-500 mt-1"></p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Utile netto società / Utile lordo soci</p>
+          <p id="kpi-uns" class="text-2xl font-extrabold text-teal-600 mt-1 break-words">0,00 €</p>
+          <p class="text-xs text-slate-500 mt-1">Utile lordo società - imposte della società.</p>
+          <p id="kpi-uns-sub" class="text-xs text-slate-500 mt-1"></p>
         </div>
         <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Carico fiscale + INPS soci</p>
           <p id="kpi-tasse" class="text-2xl font-extrabold text-indigo-600 mt-1 break-words">0,00 €</p>
           <p id="kpi-tasse-pct" class="text-sm font-semibold text-indigo-700 mt-0.5"></p>
-          <p class="text-xs text-slate-500 mt-1">IRPEF + addizionali + INPS + IRAP che maturano sul <span data-anno></span>. Quanto si versa con gli F24 (acconti compresi) è in «Cosa pagare e quando».</p>
+          <p class="text-xs text-slate-500 mt-1">IRPEF + addizionali + INPS dei soci del <span data-anno></span>. Per legge si calcolano sul reddito fiscale della SNC (<span id="kpi-tasse-base"></span>), cioè prima dell'IRAP. Quanto si versa con gli F24 (acconti compresi) è in «Cosa pagare e quando».</p>
         </div>
         <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Utile netto</p>
+          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Utile netto soci</p>
           <p id="kpi-netto" class="text-2xl font-extrabold text-emerald-500 mt-1 break-words">0,00 €</p>
           <p id="kpi-netto-pct" class="text-sm font-semibold text-emerald-500 mt-0.5"></p>
-          <p class="text-xs text-slate-500 mt-1">Utile della SNC meno carico fiscale + INPS soci del <span data-anno></span>, per tutti i soci insieme.</p>
+          <p class="text-xs text-slate-500 mt-1">Utile lordo soci - carico fiscale + INPS soci del <span data-anno></span>, per tutti i soci insieme.</p>
         </div>
       </div>
 
@@ -302,7 +314,7 @@
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 class="text-base font-bold text-slate-900">Andamento economico &amp; fiscale <span data-anno></span></h2>
-              <p class="text-xs text-slate-500">Ricavi lordi, costi deducibili, utile lordo e utile netto dopo tasse e INPS</p>
+              <p class="text-xs text-slate-500">Dai ricavi lordi all'utile netto dei soci, un passo alla volta</p>
             </div>
             <span id="dash-regime" class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700">Contabilità semplificata</span>
           </div>
@@ -319,8 +331,11 @@
 
         <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between space-y-5">
           <div>
+            <h2 class="text-base font-bold text-slate-900">Imposte della società</h2>
+            <p class="text-xs text-slate-500 mb-3">IRAP e INAIL, pagate dalla società prima di dividere l'utile</p>
+            <div id="dash-societa" class="mb-5"></div>
             <h2 class="text-base font-bold text-slate-900">Ripartizione soci (trasparenza)</h2>
-            <p class="text-xs text-slate-500 mb-4">Utile e imposte stimati per quota societaria</p>
+            <p class="text-xs text-slate-500 mb-4">Utile lordo soci e imposte dei soci, per quota</p>
             <div id="dash-soci" class="space-y-3"></div>
           </div>
           <button data-tab="imposte" class="w-full py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition">Apri dettaglio imposte &amp; INPS →</button>

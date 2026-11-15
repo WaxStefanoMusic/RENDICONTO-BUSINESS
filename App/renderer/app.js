@@ -1485,7 +1485,6 @@ function renderTesti() {
   document.querySelectorAll('[data-collab-nome]').forEach((el) => { el.textContent = s.collabNome || 'Collaboratore familiare'; });
   document.querySelectorAll('[data-s1-quota]').forEach((el) => { el.textContent = fmtPct(quotaS1()); });
   document.querySelectorAll('[data-s2-quota]').forEach((el) => { el.textContent = fmtPct(quotaS2()); });
-  $('kpi-utile-sub').textContent = `Imputato ${fmtPct(quotaS1())} a ${s.s1Nome} / ${fmtPct(quotaS2())} a ${s.s2Nome}`;
   $('txt-inps-s1').textContent = `Socio amministratore che lavora in negozio. Contributo fisso sul minimale (~${fmtEuro(s.inpsFisso)}/anno) + ${fmtPct(s.inpsAliq)} sul reddito da ${fmtEuro(s.inpsMin)} a ${fmtEuro(s.inpsFascia)}, ${fmtPct(s.inpsAliq2)} oltre, fino al massimale.`;
   for (const k of ['s1', 's2']) $('txt-inail-' + k).textContent = +inailAnno()[k] > 0
     ? `Solo per il ${anno}: ogni anno ha il suo premio.`
@@ -1784,15 +1783,29 @@ function renderAll() {
   // e la deduzione del 10% dell'IRAP vale solo per IRPEF, non per l'IRAP stessa
   const baseIrap = Math.max(0, risultato + interessiPassivi + (redditoDich == null ? dedIrap : 0));
   const irapSocieta = cent(Math.max(0, baseIrap - (+s.irapDed || 0)) * (s.irap / 100));
-  const totaleTasse = cent(totS1 + totS2 + irapSocieta);
-  const nettoTasca = Math.max(0, utileSnc - totaleTasse);
-  // netto in tasca di ogni socio: la sua quota di utile meno contributi,
-  // imposte personali e la sua parte dell'IRAP pagata dalla società
   const [irapS1, irapS2] = dividi(irapSocieta);
   const [inailS1, inailS2] = dividi(inailTot);
   // se il contributo fisso del 2° socio lo paga il 1°, passa dal netto dell'uno a quello dell'altro
   const inpsS2PagatoDaS1 = appState.inpsS2DaS1 ? inpsS2.fisso : 0;
-  const nettoS1 = cent(q1 - totS1 - irapS1 - inpsS2PagatoDaS1), nettoS2 = cent(q2 - totS2 - irapS2 + inpsS2PagatoDaS1);
+  /* Dai ricavi all'utile netto dei soci, un passo alla volta:
+       utile lordo società  = ricavi lordi - costi deducibili (senza IRAP e INAIL)
+       imposte società      = IRAP + INAIL
+       utile netto società  = utile lordo società - imposte società = utile lordo soci
+       utile netto soci     = utile lordo soci - carico fiscale + INPS dei soci
+     IRPEF, addizionali e INPS dei soci restano calcolati sul reddito fiscale
+     (prima dell'IRAP: per legge l'IRAP non si deduce, salvo il 10%). La
+     deduzione del 10% dell'IRAP abbassa solo il reddito fiscale: non è una
+     spesa, quindi qui non toglie soldi. */
+  const dedApplicata = redditoDich == null ? dedIrap : 0;
+  const costiReali = cent(totCostiDeducibili - inailTot - dedIrap);
+  const utileLordoSoc = cent(risultato + inailTot + dedApplicata);
+  const impSocieta = cent(irapSocieta + inailTot);
+  const utileNettoSoc = cent(utileLordoSoc - impSocieta);
+  const [dedS1, dedS2] = dividi(dedApplicata);
+  const [l1, l2] = risultato >= 0 ? [cent(q1 - irapS1 + dedS1), cent(q2 - irapS2 + dedS2)] : dividi(utileNettoSoc);
+  const caricoSoci = cent(totS1 + totS2);
+  const utileNettoSoci = cent(utileNettoSoc - caricoSoci);
+  const nettoS1 = cent(l1 - totS1 - inpsS2PagatoDaS1), nettoS2 = cent(l2 - totS2 + inpsS2PagatoDaS1);
 
   const righeAddiz = (x) =>
     riga('Addizionale regionale (a scaglioni):', fmtEuro(x.regionale)) +
@@ -1874,17 +1887,24 @@ function renderAll() {
     titoloInps(!s.collabNome || /^collaborat/i.test(s.collabNome) ? 'INPS del collaboratore familiare' : `INPS di ${s.collabNome} (collaboratore familiare)`) +
     riga('Contributo fisso (minimale), pagato dal titolare:', '- ' + fmtEuro(inpsCollab), 'font-semibold text-rose-600') +
     riga('Totale INPS collaboratore:', '- ' + fmtEuro(inpsCollab), 'font-bold text-rose-700', 'pt-1 border-t border-slate-100');
-  const righeNetto = (quota, irap, netto, inailSocio, extra = '') =>
+  const righeNetto = (quota, q, irap, ded, lq, tot, netto, inailSocio, extra = '') =>
     `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
-    riga(`Quota IRAP della società (${fmtPct(quota)}):`, '- ' + fmtEuro(irap), 'font-semibold text-rose-600') +
+    titoloInps('Dal reddito fiscale al netto in tasca') +
+    (risultato >= 0
+      ? riga(`Quota del reddito fiscale SNC (${fmtPct(quota)}):`, fmtEuro(q), 'text-slate-700') +
+        (inailSocio > 0 ? riga(`di cui INAIL della società già tolto (quota del ${fmtPct(quota)}):`, fmtEuro(inailSocio), 'text-slate-500') : '') +
+        riga(`Quota IRAP della società (${fmtPct(quota)}):`, '- ' + fmtEuro(irap), 'font-semibold text-rose-600') +
+        (ded > 0 ? riga('Deduzione 10% IRAP riaggiunta (non è una spesa):', '+ ' + fmtEuro(ded), 'font-semibold text-slate-700') : '')
+      : '') +
+    riga(`Quota dell'utile lordo soci (${fmtPct(quota)}):`, fmtEuro(lq), 'font-bold text-slate-900', 'pt-1 border-t border-slate-100') +
+    riga('Totale imposte + INPS (sopra):', '- ' + fmtEuro(tot), 'font-semibold text-rose-600') +
     extra +
-    (inailSocio > 0 ? riga(`INAIL della società, quota del ${fmtPct(quota)} (già tolta dall'utile):`, fmtEuro(inailSocio), 'text-slate-500') : '') +
     `<div class="flex justify-between gap-3 text-sm"><span class="font-bold text-slate-900">Netto in tasca nell'anno:</span><span class="font-extrabold ${netto < 0 ? 'text-rose-600' : 'text-emerald-700'} whitespace-nowrap">${fmtEuro(netto)}</span></div>` +
     `<div class="flex justify-between gap-3 text-sm"><span class="font-semibold text-slate-700">Netto al mese (÷ 12):</span><span class="font-bold ${netto < 0 ? 'text-rose-600' : 'text-emerald-700'} whitespace-nowrap">${fmtEuro(netto / 12)}</span></div>` +
     `</div>`;
 
   $('dettaglio-socio1').innerHTML =
-    riga(`Quota utile SNC (${fmtPct(quotaS1())}):`, fmtEuro(q1), 'font-bold text-slate-900') +
+    riga(`Quota del reddito fiscale SNC (${fmtPct(quotaS1())}):`, fmtEuro(q1), 'font-bold text-slate-900') +
     righeInps(inpsS1, s.s1Nome) +
     righeCollab() +
     riga('Imponibile netto IRPEF:', fmtEuro(impIrpefS1), 'font-bold text-slate-800', 'pt-2 border-t border-slate-100') +
@@ -1892,22 +1912,22 @@ function renderAll() {
     riga('IRPEF netta stimata:', fmtEuro(irpefS1)) +
     righeAddiz(addizS1) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
-    righeNetto(quotaS1(), irapS1, nettoS1, inailS1, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso di ${esc(s.s2Nome)} pagato da te:`, '- ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-rose-600') : '') +
+    righeNetto(quotaS1(), q1, irapS1, dedS1, l1, totS1, nettoS1, inailS1, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso di ${esc(s.s2Nome)} pagato da te:`, '- ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-rose-600') : '') +
     righeVersamenti('s1', irpefS1, inpsS1.eccedenza, addizS1, ritS1);
 
   $('dettaglio-socio2').innerHTML =
-    riga(`Quota utile SNC (${fmtPct(quotaS2())}):`, fmtEuro(q2), 'font-bold text-slate-900') +
+    riga(`Quota del reddito fiscale SNC (${fmtPct(quotaS2())}):`, fmtEuro(q2), 'font-bold text-slate-900') +
     righeInps(inpsS2, s.s2Nome) +
     riga('Imponibile netto IRPEF:', fmtEuro(impIrpefS2), 'font-bold text-slate-800', 'pt-2 border-t border-slate-100') +
     (detrS2 > 0 ? riga('Altre detrazioni IRPEF:', '- ' + fmtEuro(detrS2), 'text-emerald-700') : '') +
     riga('IRPEF netta stimata:', fmtEuro(irpefS2)) +
     righeAddiz(addizS2) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>` +
-    righeNetto(quotaS2(), irapS2, nettoS2, inailS2, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso pagato da ${esc(s.s1Nome)}:`, '+ ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-emerald-700') : '') +
+    righeNetto(quotaS2(), q2, irapS2, dedS2, l2, totS2, nettoS2, inailS2, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso pagato da ${esc(s.s1Nome)}:`, '+ ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-emerald-700') : '') +
     righeVersamenti('s2', irpefS2, inpsS2.eccedenza, addizS2, ritS2);
 
   $('dettaglio-societa').innerHTML =
-    riga(risultato < 0 ? 'Perdita fiscale SNC:' : 'Utile fiscale SNC:', fmtEuro(risultato), risultato < 0 ? 'font-bold text-rose-600' : 'font-bold text-slate-900') +
+    riga(risultato < 0 ? 'Perdita fiscale SNC (reddito fiscale):' : 'Reddito fiscale SNC (base di IRPEF e INPS dei soci):', fmtEuro(risultato), risultato < 0 ? 'font-bold text-rose-600' : 'font-bold text-slate-900') +
     (redditoDich != null ? riga('Dalle registrazioni sarebbe (non usato):', fmtEuro(risultatoConti), 'text-slate-500') : '') +
     (inailTot > 0 && redditoDich == null ? riga('di cui INAIL soci già dedotto:', fmtEuro(inailTot), 'text-slate-500') : '') +
     (dedIrap > 0 && redditoDich == null ? riga(`di cui 10% dell'IRAP versata nel ${appState.anno} (${fmtEuro(irapVersataAnno)}) già dedotto:`, fmtEuro(dedIrap), 'text-slate-500') : '') +
@@ -1915,7 +1935,8 @@ function renderAll() {
     (interessiPassivi > 0 ? riga('Interessi passivi (non deducibili IRAP):', '+ ' + fmtEuro(interessiPassivi), 'font-semibold text-slate-700') : '') +
     riga('Deduzione base IRAP stimata:', '- ' + fmtEuro(s.irapDed), 'font-semibold text-emerald-700') +
     riga(`IRAP (${fmtPct(s.irap)}):`, fmtEuro(irapSocieta), 'font-bold text-slate-900') +
-    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Carico complessivo (soci + IRAP):</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totaleTasse)}</span></div>` +
+    (inailTot > 0 ? riga(`INAIL ${appState.anno} dei soci:`, fmtEuro(inailTot), 'font-bold text-slate-900') : '') +
+    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Imposte della società (IRAP + INAIL):</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(impSocieta)}</span></div>` +
     (() => {
       const valIrap = fiscaleAnno().irap, prec = precedente && precedente.soc;
       const stimato = (valIrap === '' || valIrap == null) && prec;
@@ -1938,37 +1959,48 @@ function renderAll() {
 
   // 6. Cruscotto
   $('kpi-ricavi').textContent = fmtEuro(totRicaviImp);
-  $('kpi-costi').textContent = fmtEuro(totCostiDeducibili);
-  $('kpi-utile').textContent = fmtEuro(risultato);
-  $('kpi-utile').classList.toggle('text-rose-600', risultato < 0);
-  $('kpi-utile').classList.toggle('text-emerald-600', risultato >= 0);
-  $('kpi-utile-titolo').textContent = risultato < 0 ? 'Perdita lorda' : 'Utile lordo';
-  if (risultato < 0) $('kpi-utile-sub').textContent = 'I costi superano i ricavi: niente IRPEF né IRAP sul reddito, l\'INPS minimale resta dovuto.';
-  $('kpi-tasse').textContent = fmtEuro(totaleTasse);
-  // quota dell'utile della SNC che se ne va in imposte e INPS
-  $('kpi-tasse-pct').textContent = risultato > 0
-    ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(totaleTasse / risultato * 100)}% dell'utile lordo ${redditoDich != null ? 'dichiarato' : 'stimato'}`
+  const colore = (id, v) => { $(id).classList.toggle('text-rose-600', v < 0); };
+  $('kpi-costi').textContent = fmtEuro(costiReali);
+  $('kpi-utile').textContent = fmtEuro(utileLordoSoc);
+  $('kpi-utile').classList.toggle('text-emerald-600', utileLordoSoc >= 0); colore('kpi-utile', utileLordoSoc);
+  $('kpi-utile-titolo').textContent = utileLordoSoc < 0 ? 'Perdita lorda società' : 'Utile lordo società';
+  $('kpi-utile-sub').textContent = redditoDich != null
+    ? `Reddito dichiarato (${fmtEuro(risultato)})${inailTot > 0 ? ' + INAIL già dedotto' : ''}`
+    : 'Ricavi lordi - costi deducibili';
+  $('kpi-soc').textContent = fmtEuro(impSocieta);
+  $('kpi-soc-pct').textContent = utileLordoSoc > 0 ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(impSocieta / utileLordoSoc * 100)}% dell'utile lordo società` : '';
+  $('kpi-soc-sub').textContent = `IRAP ${fmtEuro(irapSocieta)} + INAIL ${fmtEuro(inailTot)}, pagate dalla società.`;
+  $('kpi-uns').textContent = fmtEuro(utileNettoSoc);
+  $('kpi-uns').classList.toggle('text-emerald-600', utileNettoSoc >= 0); colore('kpi-uns', utileNettoSoc);
+  $('kpi-uns-sub').textContent = risultato < 0
+    ? 'I costi superano i ricavi: niente IRPEF né IRAP sul reddito, l\'INPS minimale resta dovuto.'
+    : `Diviso ${fmtPct(quotaS1())} a ${s.s1Nome} e ${fmtPct(quotaS2())} a ${s.s2Nome}.`;
+  $('kpi-tasse').textContent = fmtEuro(caricoSoci);
+  // quota dell'utile lordo dei soci che se ne va in imposte e INPS
+  $('kpi-tasse-pct').textContent = utileNettoSoc > 0
+    ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(caricoSoci / utileNettoSoc * 100)}% dell'utile lordo soci`
     : 'Nessun utile su cui calcolare la percentuale';
-  $('kpi-netto').textContent = fmtEuro(nettoTasca);
-  $('kpi-netto-pct').textContent = risultato > 0
-    ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(nettoTasca / risultato * 100)}% dell'utile lordo ${redditoDich != null ? 'dichiarato' : 'stimato'}`
-    : '';
+  $('kpi-tasse-base').textContent = fmtEuro(risultato);
+  $('kpi-netto').textContent = fmtEuro(utileNettoSoci); colore('kpi-netto', utileNettoSoci);
+  $('kpi-netto-pct').textContent = utileNettoSoc > 0 ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(utileNettoSoci / utileNettoSoc * 100)}% dell'utile lordo soci` : '';
 
   const maxVal = Math.max(totRicaviImp, 1);
   $('bars').innerHTML =
     barra('Ricavi lordi totali', totRicaviImp, totRicaviImp > 0 ? 100 : 0, 'bg-slate-800', 'text-slate-900') +
-    barra('Costi fiscalmente deducibili', totCostiDeducibili, totCostiDeducibili / maxVal * 100, 'bg-amber-500', 'text-amber-700') +
-    (risultato < 0
-      ? barra('Perdita lorda (costi oltre i ricavi)', risultato, -risultato / Math.max(totCostiDeducibili, 1) * 100, 'bg-rose-500', 'text-rose-600')
-      : barra('Utile lordo (base imponibile)', utileSnc, utileSnc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700')) +
-    barra(`Carico fiscale + INPS soci del ${appState.anno}`, totaleTasse, totaleTasse / maxVal * 100, 'bg-indigo-600', 'text-indigo-700') +
-    barra(`Utile netto (dopo IRPEF, IRAP e INPS del ${appState.anno})`, nettoTasca, nettoTasca / maxVal * 100, 'bg-emerald-300', 'text-emerald-500');
+    barra('Costi deducibili (IRAP e INAIL a parte)', costiReali, costiReali / maxVal * 100, 'bg-amber-500', 'text-amber-700') +
+    (utileLordoSoc < 0
+      ? barra('Perdita lorda società (costi oltre i ricavi)', utileLordoSoc, -utileLordoSoc / maxVal * 100, 'bg-rose-500', 'text-rose-600')
+      : barra('Utile lordo società', utileLordoSoc, utileLordoSoc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700')) +
+    barra(`Imposte della società (IRAP + INAIL) del ${appState.anno}`, impSocieta, impSocieta / maxVal * 100, 'bg-rose-400', 'text-rose-600') +
+    barra('Utile netto società = utile lordo soci', utileNettoSoc, Math.abs(utileNettoSoc) / maxVal * 100, utileNettoSoc < 0 ? 'bg-rose-500' : 'bg-teal-500', utileNettoSoc < 0 ? 'text-rose-600' : 'text-teal-700') +
+    barra(`Carico fiscale + INPS soci del ${appState.anno}`, caricoSoci, caricoSoci / maxVal * 100, 'bg-indigo-600', 'text-indigo-700') +
+    barra(`Utile netto soci (dopo IRPEF, addizionali e INPS del ${appState.anno})`, utileNettoSoci, Math.abs(utileNettoSoci) / maxVal * 100, utileNettoSoci < 0 ? 'bg-rose-500' : 'bg-emerald-300', utileNettoSoci < 0 ? 'text-rose-600' : 'text-emerald-500');
 
   const scheda = (nome, quota, utile, irpef, inps, netto, collab = 0, altro = '') => `
     <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
       <div class="flex justify-between items-center gap-2">
         <span class="text-xs font-bold text-slate-800">${esc(nome)} (${fmtPct(quota)})</span>
-        <span class="text-xs font-bold text-emerald-700 whitespace-nowrap">${fmtEuro(utile)} utile</span>
+        <span class="text-xs font-bold text-teal-700 whitespace-nowrap">${fmtEuro(utile)} utile lordo</span>
       </div>
       <div class="mt-2 flex justify-between text-xs text-slate-600"><span>IRPEF + addizionali:</span><span class="font-semibold text-slate-900">${fmtEuro(irpef)}</span></div>
       <div class="flex justify-between text-xs text-slate-600"><span>INPS ${esc(nome)}:</span><span class="font-semibold text-slate-900">${fmtEuro(inps)}</span></div>
@@ -1976,10 +2008,18 @@ function renderAll() {
       ${altro}
       <div class="mt-1 pt-1.5 border-t border-slate-200 flex justify-between text-xs"><span class="font-semibold text-slate-700">Netto in tasca:</span><span class="font-bold ${netto < 0 ? 'text-rose-600' : 'text-emerald-700'} whitespace-nowrap">${fmtEuro(netto)} · ${fmtEuro(netto / 12)}/mese</span></div>
     </div>`;
+  const rs = (lbl, val, cls = 'text-slate-900') => `<div class="flex justify-between gap-3 text-xs text-slate-600"><span>${lbl}</span><span class="font-semibold ${cls} whitespace-nowrap">${fmtEuro(val)}</span></div>`;
+  $('dash-societa').innerHTML = `<div class="p-3.5 rounded-xl bg-rose-50/60 border border-rose-100 space-y-1">
+      ${rs('Utile lordo società:', utileLordoSoc, 'text-slate-900')}
+      ${rs(`IRAP ${appState.anno} (${fmtPct(s.irap)}):`, irapSocieta)}
+      ${rs(`INAIL ${appState.anno} dei soci:`, inailTot)}
+      <div class="flex justify-between gap-3 text-xs"><span class="font-semibold text-slate-700">Totale imposte della società:</span><span class="font-bold text-rose-600 whitespace-nowrap">${fmtEuro(impSocieta)}</span></div>
+      <div class="pt-1.5 mt-1 border-t border-rose-100 flex justify-between gap-3 text-xs"><span class="font-bold text-slate-800">Utile netto società = utile lordo soci:</span><span class="font-bold ${utileNettoSoc < 0 ? 'text-rose-600' : 'text-teal-700'} whitespace-nowrap">${fmtEuro(utileNettoSoc)}</span></div>
+    </div>`;
   $('dash-soci').innerHTML =
-    scheda(s.s1Nome, quotaS1(), q1, irpefS1 + addS1, inpsS1.totale, nettoS1, inpsCollab,
+    scheda(s.s1Nome, quotaS1(), l1, irpefS1 + addS1, inpsS1.totale, nettoS1, inpsCollab,
       inpsS2PagatoDaS1 > 0 ? `<div class="flex justify-between text-xs text-slate-600"><span>INPS fisso di ${esc(s.s2Nome)}:</span><span class="font-semibold text-slate-900">${fmtEuro(inpsS2PagatoDaS1)}</span></div>` : '') +
-    scheda(s.s2Nome, quotaS2(), q2, irpefS2 + addS2, inpsS2.totale, nettoS2, 0,
+    scheda(s.s2Nome, quotaS2(), l2, irpefS2 + addS2, inpsS2.totale, nettoS2, 0,
       inpsS2PagatoDaS1 > 0 ? `<div class="flex justify-between text-xs text-slate-600"><span>di cui pagato da ${esc(s.s1Nome)}:</span><span class="font-semibold text-emerald-700">+ ${fmtEuro(inpsS2PagatoDaS1)}</span></div>` : '') +
     `<div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
       <div class="flex justify-between items-center gap-2">
@@ -1991,7 +2031,8 @@ function renderAll() {
   disegnaVersamentiDash(versamenti, annoDopo, s, ivaVers, {
     inps: { s1: inpsS1.fisso, s2: inpsS2.fisso, collab: inpsCollab, s2DaS1: inpsS2PagatoDaS1 > 0 },
     inail: { s1: +inail.s1 || 0, s2: +inail.s2 || 0 },
-    carico: totaleTasse,
+    carico: caricoSoci,
+    irap: irapSocieta,
   });
   disegnaAvvisiPolizze();
   applicaRicerche();
@@ -2928,16 +2969,17 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
   const somma = (f) => cent(parti.reduce((t, x) => t + (+f(x) || 0), 0));
   const rit = somma((x) => x.rit), accPrima = somma((x) => x.accVersati), accDopo = somma((x) => cent(x.acc1 + x.acc2));
   const credPrima = somma((x) => x.riporto), credResta = somma((x) => x.resto);
-  const atteso = cent(extra.carico - rit - accPrima + accDopo - credPrima + credResta);
+  const atteso = cent(extra.carico + extra.irap - rit - accPrima + accDopo - credPrima + credResta);
   const versSoci = cent(pagamenti.filter((p) => p.chi !== 'soc').reduce((t, p) => t + p.importo, 0));
   const versIrap = cent(pagamenti.filter((p) => p.voce === 'IRAP').reduce((t, p) => t + p.importo, 0));
   const versato = cent(versSoci + versIrap);
   const rp = (lbl, val, segno = '', cls = '') => `<div class="flex justify-between gap-3 py-1 ${cls}"><span>${lbl}</span><span class="font-semibold whitespace-nowrap">${segno}${fmtEuro(val)}</span></div>`;
   const ponte = `<div class="mt-3 p-4 rounded-xl bg-indigo-50 border border-indigo-100 text-xs text-indigo-900">
       <p class="font-bold">Dal «Carico fiscale» in alto a quanto si versa con gli F24</p>
-      <p class="mt-1">Il Carico fiscale è quanto costano, in imposte e INPS, i redditi del ${anno}. Con gli F24 si versa un'altra cifra: ecco il passaggio, voce per voce.</p>
+      <p class="mt-1">Il Carico fiscale è quanto costano ai soci, in imposte e INPS, i redditi del ${anno}; l'IRAP la paga la società. Con gli F24 si versa un'altra cifra: ecco il passaggio, voce per voce.</p>
       <div class="mt-2 max-w-xl divide-y divide-indigo-100">
         ${rp(`Carico fiscale + INPS soci del ${anno} (in alto)`, extra.carico, '', 'font-bold')}
+        ${extra.irap > 0.005 ? rp(`IRAP ${anno} della società (dalle imposte della società, in alto)`, extra.irap, '+ ') : ''}
         ${rit > 0.005 ? rp("Ritenute d'acconto subite dalla società", rit, '− ') : ''}
         ${accPrima > 0.005 ? rp(`Acconti ${anno} già versati a giugno e novembre ${anno} (soci e IRAP)`, accPrima, '− ') : ''}
         ${accDopo > 0.005 ? rp(`Acconti ${annoDopo}: anticipo sulle tasse dell'anno dopo (soci e IRAP)`, accDopo, '+ ') : ''}
@@ -2948,7 +2990,7 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
         ${rp(`di cui IRAP nel riquadro della società`, versIrap, '', 'pl-4 text-indigo-800')}
       </div>
       ${Math.abs(atteso - versato) > 0.005 ? `<p class="mt-2 font-bold text-rose-700">Attenzione: i versamenti elencati sommano ${fmtEuro(versato)}, ${fmtEuro(Math.abs(atteso - versato))} ${atteso > versato ? 'in meno' : 'in più'} del conto qui sopra. Controlla i dati inseriti.</p>` : ''}
-      <p class="mt-2 text-[11px] text-indigo-800">IVA e INAIL non sono nel Carico fiscale: sono a parte, qui sotto.</p>
+      <p class="mt-2 text-[11px] text-indigo-800">IVA e INAIL non sono in questo conto: sono a parte, qui sotto.</p>
     </div>`;
 
   $('dash-versamenti').innerHTML =

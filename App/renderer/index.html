@@ -247,8 +247,9 @@
         <button data-tab="carta" class="tab-btn">9. Carta Business</button>
         <button data-tab="commercialista" class="tab-btn">10. Commercialista</button>
         <button data-tab="iva" class="tab-btn">11. Liquidazione IVA (LIPE)</button>
-        <button data-tab="imposte" class="tab-btn">12. Imposte Soci &amp; INPS</button>
-        <button data-tab="guida" class="tab-btn">13. Guida &amp; Adempimenti</button>
+        <button data-tab="societa" class="tab-btn">12. Imposte Società (IRAP &amp; INAIL)</button>
+        <button data-tab="imposte" class="tab-btn">13. Imposte Soci &amp; INPS</button>
+        <button data-tab="guida" class="tab-btn">14. Guida &amp; Adempimenti</button>
       </nav>
     </div>
   </header>
@@ -333,12 +334,13 @@
           <div>
             <h2 class="text-base font-bold text-slate-900">Imposte della società</h2>
             <p class="text-xs text-slate-500 mb-3">IRAP e INAIL, pagate dalla società prima di dividere l'utile</p>
-            <div id="dash-societa" class="mb-5"></div>
+            <div id="dash-societa"></div>
+            <button data-tab="societa" class="w-full mt-2 mb-5 py-2 rounded-xl border border-rose-200 bg-white hover:bg-rose-50 text-rose-700 text-xs font-semibold transition">Apri imposte della società →</button>
             <h2 class="text-base font-bold text-slate-900">Ripartizione soci (trasparenza)</h2>
             <p class="text-xs text-slate-500 mb-4">Utile lordo soci e imposte dei soci, per quota</p>
             <div id="dash-soci" class="space-y-3"></div>
           </div>
-          <button data-tab="imposte" class="w-full py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition">Apri dettaglio imposte &amp; INPS →</button>
+          <button data-tab="imposte" class="w-full py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition">Apri imposte soci &amp; INPS →</button>
         </div>
       </div>
 
@@ -970,10 +972,70 @@
     </section>
 
     <!-- TAB 8: IMPOSTE -->
+    <section id="tab-societa" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <h2 class="text-lg font-bold text-slate-900 mb-1">Dati della società (<span data-anno></span>)</h2>
+        <p class="text-xs text-slate-500 mb-5">Le imposte che paga la società, prima di dividere l'utile tra i soci: IRAP e INAIL. Il premio INAIL si toglie dall'utile e dalla base IRAP (se lo registri già tra le spese, lascia 0 qui). Quando la dichiarazione della società è presentata, il suo reddito (quadro RN) prende il posto di quello calcolato dalle registrazioni. Gli acconti IRAP sono quelli pagati con l'F24 nell'anno (giugno e novembre).</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+            <span class="text-sm font-bold text-slate-900">INAIL <span data-anno></span></span>
+            <label class="block text-xs font-semibold text-slate-700">Premio INAIL di <span data-s1-nome></span> (€/anno)
+              <input id="inail-s1" type="number" min="0" step="0.01" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+              <span id="txt-inail-s1" class="block mt-1 font-normal text-slate-500"></span>
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">Premio INAIL di <span data-s2-nome></span> (€/anno)
+              <input id="inail-s2" type="number" min="0" step="0.01" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+              <span id="txt-inail-s2" class="block mt-1 font-normal text-slate-500"></span>
+            </label>
+          </div>
+          <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+            <span class="text-sm font-bold text-slate-900">Dichiarazione della società</span>
+              <label class="block text-xs font-semibold text-slate-700">Reddito dichiarato (quadro RN, rigo RN1/RN2)
+                <input data-fx="soc.reddito" type="number" step="1" placeholder="dalle registrazioni" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+              </label>
+              <label class="block text-xs font-semibold text-slate-700">Ritenute d'acconto subite (RN1/RN2, col. 2)
+                <input data-fx="soc.ritenute" type="number" min="0" step="1" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+              </label>
+          </div>
+          <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+            <span class="text-sm font-bold text-slate-900">IRAP</span>
+              <label class="block text-xs font-semibold text-slate-700">Acconti IRAP versati nel <span data-anno></span> (1° + 2°)
+                <input data-fx="irap" type="number" min="0" step="0.01" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+              </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div class="border-b border-slate-100 pb-3">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-rose-600">Prima di dividere l'utile</span>
+            <h3 class="text-lg font-bold text-slate-900">Dall'utile lordo all'utile netto della società</h3>
+          </div>
+          <div class="space-y-2.5 text-xs sm:text-sm" id="societa-catena"></div>
+        </div>
+        <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div class="border-b border-slate-100 pb-3">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-indigo-600">Imposta regionale &amp; scadenze</span>
+            <h3 class="text-lg font-bold text-slate-900">IRAP della società &amp; versamenti F24</h3>
+          </div>
+          <div class="space-y-2.5 text-xs sm:text-sm" id="dettaglio-societa"></div>
+          <div class="pt-3 border-t border-slate-100">
+            <h4 class="text-xs font-bold uppercase text-slate-500 mb-2">Principali scadenze della società</h4>
+            <ul class="text-xs text-slate-600 space-y-1.5">
+              <li>• <strong>16 feb:</strong> autoliquidazione INAIL (oppure in 4 rate: 16 feb, 16 mag, 20 ago, 16 nov).</li>
+              <li>• <strong>30 giugno:</strong> saldo IRAP + 1° acconto.</li>
+              <li>• <strong>30 novembre:</strong> 2° acconto IRAP.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="tab-imposte" class="tab-content hidden space-y-6">
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-        <h2 class="text-lg font-bold text-slate-900 mb-1">Posizioni previdenziali (INPS e INAIL)</h2>
-        <p class="text-xs text-slate-500 mb-5">Stato contributivo dei soci e del collaboratore familiare. L'INPS si calcola sulla quota di reddito di ogni socio, anche se non la preleva, e si deduce dal reddito IRPEF. Il premio INAIL dei soci lo paga la società: si toglie dall'utile e dalla base IRAP (se lo registri già tra le spese, lascia 0 qui).</p>
+        <h2 class="text-lg font-bold text-slate-900 mb-1">Posizioni previdenziali (INPS)</h2>
+        <p class="text-xs text-slate-500 mb-5">Stato contributivo dei soci e del collaboratore familiare. L'INPS si calcola sulla quota di reddito di ogni socio, anche se non la preleva, e si deduce dal reddito IRPEF. Il premio INAIL lo paga la società: si inserisce nel tab Imposte Società.</p>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
             <div class="flex items-center justify-between gap-2">
@@ -982,10 +1044,6 @@
             </div>
             <p id="txt-inps-s1" class="text-xs text-slate-600"></p>
             <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer"><input type="checkbox" id="ante96-s1" class="mt-0.5 rounded border-slate-300"><span><strong>Contributi versati prima del 1996</strong><br><span id="txt-mass-s1" class="text-slate-500"></span></span></label>
-            <label class="block text-xs font-semibold text-slate-700">Premio INAIL <span data-anno></span> (€/anno)
-              <input id="inail-s1" type="number" min="0" step="0.01" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
-              <span id="txt-inail-s1" class="block mt-1 font-normal text-slate-500"></span>
-            </label>
           </div>
           <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
             <div class="flex items-center justify-between gap-2">
@@ -999,10 +1057,6 @@
             <p class="text-xs text-slate-600">Attivo se il socio lavora abitualmente in negozio; disattivo se è socio di capitale o già assicurato altrove come dipendente a tempo pieno.</p>
             <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer"><input type="checkbox" id="inps-s2-da-s1" class="mt-0.5 rounded border-slate-300"><span><strong>Contributo fisso pagato da <span data-s1-nome></span></strong><br><span class="text-slate-500">Spunta se lo paga di tasca sua l'altro socio: passa dal netto di questo socio al suo, e le rate vanno nei suoi versamenti.</span></span></label>
             <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer"><input type="checkbox" id="ante96-s2" class="mt-0.5 rounded border-slate-300"><span><strong>Contributi versati prima del 1996</strong><br><span id="txt-mass-s2" class="text-slate-500"></span></span></label>
-            <label class="block text-xs font-semibold text-slate-700">Premio INAIL <span data-anno></span> (€/anno)
-              <input id="inail-s2" type="number" min="0" step="0.01" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
-              <span id="txt-inail-s2" class="block mt-1 font-normal text-slate-500"></span>
-            </label>
           </div>
           <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
             <div class="flex items-center justify-between gap-2">
@@ -1021,8 +1075,8 @@
 
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
         <h2 class="text-lg font-bold text-slate-900 mb-1">Dichiarazione, detrazioni e acconti (<span data-anno></span>)</h2>
-        <p class="text-xs text-slate-500 mb-5">Le altre detrazioni IRPEF sono quelle personali (familiari a carico, spese mediche, ristrutturazioni…): si ricavano dalla dichiarazione dell'anno prima e, se un anno manca, vale l'ultimo inserito. Gli acconti sono quelli pagati con l'F24 nell'anno (giugno e novembre): servono a calcolare il saldo dell'anno dopo. Quando la dichiarazione della società è presentata, il suo reddito (quadro RN) prende il posto di quello calcolato dalle registrazioni.</p>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <p class="text-xs text-slate-500 mb-5">Le altre detrazioni IRPEF sono quelle personali (familiari a carico, spese mediche, ristrutturazioni…): si ricavano dalla dichiarazione dell'anno prima e, se un anno manca, vale l'ultimo inserito. Gli acconti sono quelli pagati con l'F24 nell'anno (giugno e novembre): servono a calcolare il saldo dell'anno dopo. I dati della società (reddito dichiarato, ritenute, acconti IRAP) sono nel tab Imposte Società.</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
             <span class="text-sm font-bold text-slate-900"><span data-s1-nome></span></span>
               <label class="block text-xs font-semibold text-slate-700">Altre detrazioni IRPEF (€/anno)
@@ -1055,22 +1109,10 @@
                 <input data-fx="s2.com" type="number" min="0" step="0.01" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
               </label>
           </div>
-          <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
-            <span class="text-sm font-bold text-slate-900">Società</span>
-              <label class="block text-xs font-semibold text-slate-700">Reddito dichiarato (quadro RN, rigo RN1/RN2)
-                <input data-fx="soc.reddito" type="number" step="1" placeholder="dalle registrazioni" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
-              </label>
-              <label class="block text-xs font-semibold text-slate-700">Ritenute d'acconto subite (RN1/RN2, col. 2)
-                <input data-fx="soc.ritenute" type="number" min="0" step="1" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
-              </label>
-              <label class="block text-xs font-semibold text-slate-700">Acconti IRAP versati nel <span data-anno></span> (1° + 2°)
-                <input data-fx="irap" type="number" min="0" step="0.01" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
-              </label>
-          </div>
         </div>
       </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
           <div class="border-b border-slate-100 pb-3">
             <span class="text-[11px] font-bold uppercase tracking-wider text-amber-600">Imputazione per trasparenza <span data-s1-quota></span></span>
@@ -1085,22 +1127,14 @@
           </div>
           <div class="space-y-2.5 text-xs sm:text-sm" id="dettaglio-socio2"></div>
         </div>
-        <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-          <div class="border-b border-slate-100 pb-3">
-            <span class="text-[11px] font-bold uppercase tracking-wider text-indigo-600">Imposta regionale &amp; scadenze</span>
-            <h3 class="text-lg font-bold text-slate-900">IRAP società &amp; riepilogo F24</h3>
-          </div>
-          <div class="space-y-2.5 text-xs sm:text-sm" id="dettaglio-societa"></div>
-          <div class="pt-3 border-t border-slate-100">
-            <h4 class="text-xs font-bold uppercase text-slate-500 mb-2">Principali scadenze F24</h4>
-            <ul class="text-xs text-slate-600 space-y-1.5">
-              <li>• <strong>16 feb:</strong> autoliquidazione INAIL (oppure in 4 rate: 16 feb, 16 mag, 20 ago, 16 nov).</li>
-              <li>• <strong>16 mag / 20 ago / 16 nov / 16 feb:</strong> rate fisse INPS sul minimale.</li>
-              <li>• <strong>30 giugno:</strong> saldo IRPEF, addizionali, IRAP e INPS oltre il minimale + 1° acconto (40%).</li>
-              <li>• <strong>30 novembre:</strong> 2° acconto IRPEF, IRAP e INPS oltre il minimale (60%).</li>
-            </ul>
-          </div>
-        </div>
+      </div>
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <h4 class="text-xs font-bold uppercase text-slate-500 mb-2">Principali scadenze F24 dei soci</h4>
+        <ul class="text-xs text-slate-600 space-y-1.5">
+          <li>• <strong>16 mag / 20 ago / 16 nov / 16 feb:</strong> rate fisse INPS sul minimale.</li>
+          <li>• <strong>30 giugno:</strong> saldo IRPEF, addizionali e INPS oltre il minimale + 1° acconto (40%).</li>
+          <li>• <strong>30 novembre:</strong> 2° acconto IRPEF e INPS oltre il minimale (60%).</li>
+        </ul>
       </div>
     </section>
 

@@ -1957,6 +1957,24 @@ function renderAll() {
     })();
   versamentiAnno[anno] = versamenti;
 
+  $('societa-catena').innerHTML =
+    (redditoDich == null
+      ? riga(`Ricavi lordi ${appState.anno}:`, fmtEuro(totRicaviImp), 'text-slate-700') +
+        riga('Costi deducibili (senza IRAP e INAIL):', '- ' + fmtEuro(costiReali), 'font-semibold text-rose-600')
+      : riga('Reddito dichiarato (quadro RN):', fmtEuro(risultato), 'text-slate-700') +
+        (inailTot > 0 ? riga('INAIL già dedotto nel reddito, riaggiunto:', '+ ' + fmtEuro(inailTot), 'font-semibold text-slate-700') : '')) +
+    riga(utileLordoSoc < 0 ? 'Perdita lorda società:' : 'Utile lordo società:', fmtEuro(utileLordoSoc), utileLordoSoc < 0 ? 'font-bold text-rose-600' : 'font-bold text-slate-900', 'pt-1 border-t border-slate-100') +
+    riga(`IRAP ${appState.anno} (${fmtPct(s.irap)}, calcolo qui accanto):`, '- ' + fmtEuro(irapSocieta), 'font-semibold text-rose-600') +
+    riga(`INAIL ${appState.anno} dei soci:`, '- ' + fmtEuro(inailTot), 'font-semibold text-rose-600') +
+    riga('Totale imposte della società:', fmtEuro(impSocieta), 'font-bold text-rose-600') +
+    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Utile netto società = utile lordo soci:</span><span class="font-extrabold ${utileNettoSoc < 0 ? 'text-rose-600' : 'text-teal-700'} whitespace-nowrap">${fmtEuro(utileNettoSoc)}</span></div>` +
+    `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
+    titoloInps('Diviso tra i soci') +
+    riga(`${esc(s.s1Nome)} (${fmtPct(quotaS1())}):`, fmtEuro(l1), 'font-semibold text-slate-900') +
+    riga(`${esc(s.s2Nome)} (${fmtPct(quotaS2())}):`, fmtEuro(l2), 'font-semibold text-slate-900') +
+    `<p class="text-[11px] text-slate-500 pt-1">Su queste quote i soci pagano IRPEF, addizionali e INPS (tab Imposte Soci &amp; INPS). Per legge però si calcolano sul reddito fiscale della SNC (${fmtEuro(risultato)}), cioè prima dell'IRAP: l'IRAP non si deduce, salvo il 10%.</p>` +
+    `</div>`;
+
   // 6. Cruscotto
   $('kpi-ricavi').textContent = fmtEuro(totRicaviImp);
   const colore = (id, v) => { $(id).classList.toggle('text-rose-600', v < 0); };
@@ -2902,7 +2920,7 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
   const inailTot = extra.inail.s1 + extra.inail.s2;
   const contSoc =
     (inailTot > 0 ? gruppo(`INAIL ${anno}`, 'Premio per i soci: in un\'unica volta a febbraio oppure in 4 rate (dalla 2ª con piccoli interessi).',
-      rate4('soc', RATE_INAIL, inailTot, NOMI_INPS, 'INAIL')) : gruppo(`INAIL ${anno}`, 'Nessun premio inserito: si inserisce nel tab Imposte Soci &amp; INPS.', '')) +
+      rate4('soc', RATE_INAIL, inailTot, NOMI_INPS, 'INAIL')) : gruppo(`INAIL ${anno}`, 'Nessun premio inserito: si inserisce nel tab Imposte Società.', '')) +
     imposte('soc', v.soc, `IRAP ${anno}`, 'IRAP');
   const schedaSoc = scheda('soc', 'Società', 'INAIL e IRAP', contSoc);
 
@@ -3003,7 +3021,7 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
       ${iva.some((x) => x.acconto && x.daVersare > 0) ? `<p class="text-[11px] text-slate-500 mt-2">Il 4° trimestre è già al netto dell'acconto di dicembre.</p>` : ''}
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-6">${schede}</div>
-    <p class="text-[11px] text-slate-500 mt-4">Il dettaglio dei calcoli è nei tab Liquidazione IVA e Imposte Soci &amp; INPS.</p>`;
+    <p class="text-[11px] text-slate-500 mt-4">Il dettaglio dei calcoli è nei tab Liquidazione IVA, Imposte Società e Imposte Soci &amp; INPS.</p>`;
 }
 
 function disegnaAvvisiPolizze() {

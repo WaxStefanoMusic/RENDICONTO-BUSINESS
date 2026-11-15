@@ -205,7 +205,9 @@ const imp = () => appState.impostazioni;
 const EURO = new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', useGrouping: 'always' });
 const fmtEuro = (n) => EURO.format(n || 0);
 // arrotonda al centesimo, come negli F24: ogni importo mostrato è quello usato nei conti
-const cent = (n) => Math.round(((+n || 0) + (n >= 0 ? Number.EPSILON : -Number.EPSILON)) * 100) / 100;
+/* arrotonda al centesimo, il mezzo centesimo per eccesso (come in contabilità). toPrecision(15)
+   toglie i residui dei decimali binari: 4508,105 × 100 in memoria è 450810,49999…, che va letto 450810,5 */
+const cent = (n) => { const x = +n || 0; return Math.sign(x) * Math.round(+(Math.abs(x) * 100).toPrecision(15)) / 100 + 0; };
 const fmtPct = (n) => new Intl.NumberFormat('it-IT', { maximumFractionDigits: 2 }).format(n || 0) + '%';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtData = (iso) => { const [y, m, d] = String(iso || '').split('-'); return d ? `${d}/${m}/${y}` : iso; };
@@ -469,8 +471,8 @@ function calcEntrataBreakdown(item) {
      con più aliquote (10%, 4%…) dove lo scorporo al 22% sbaglierebbe */
   if (item.imponibile != null && item.iva != null) return { imponibile: +item.imponibile, iva: +item.iva, totale: tot };
   if (item.regime === 'IT_22') {
-    const imponibile = tot / 1.22;
-    return { imponibile, iva: tot - imponibile, totale: tot };
+    const imponibile = cent(tot / 1.22);
+    return { imponibile, iva: cent(tot - imponibile), totale: tot };
   }
   return { imponibile: tot, iva: 0, totale: tot };   // art. 8 / art. 41: non imponibile
 }
@@ -482,18 +484,18 @@ function calcAcquistoBreakdown(item) {
   let ivaDebitoRC = 0, ivaDetraibile = 0, ivaIndetraibile = 0, notaEstero = '';
 
   if (item.provenienza === 'UE_MERCE' || item.provenienza === 'CH_SERVIZI') {
-    const ivaRC = im * 0.22;                        // reverse charge: IVA calcolata sull'imponibile
+    const ivaRC = cent(im * 0.22);                  // reverse charge: IVA calcolata sull'imponibile
     ivaDebitoRC = ivaRC;
-    ivaDetraibile = ivaRC * rule.ivaDetPct;
-    ivaIndetraibile = ivaRC - ivaDetraibile;
+    ivaDetraibile = cent(ivaRC * rule.ivaDetPct);
+    ivaIndetraibile = cent(ivaRC - ivaDetraibile);
     notaEstero = item.provenienza === 'UE_MERCE' ? 'Reverse charge UE (TD18 entro il 15 del mese successivo)' : 'Reverse charge servizi esteri (TD17)';
   } else {
-    ivaDetraibile = ivaDoc * rule.ivaDetPct;
-    ivaIndetraibile = ivaDoc - ivaDetraibile;
+    ivaDetraibile = cent(ivaDoc * rule.ivaDetPct);
+    ivaIndetraibile = cent(ivaDoc - ivaDetraibile);
     if (item.provenienza === 'CH_BOLLA') notaEstero = 'Importazione dalla Svizzera (bolla doganale)';
   }
   // l'IVA indetraibile diventa parte del costo
-  const costoDeducibile = (im + ivaIndetraibile) * rule.costoDedPct;
+  const costoDeducibile = cent((im + ivaIndetraibile) * rule.costoDedPct);
   return { imponibile: im, ivaDocumento: ivaDoc, ivaDebitoRC, ivaDetraibile, ivaIndetraibile, costoDeducibile, rule, notaEstero };
 }
 
@@ -508,19 +510,28 @@ function termineAutofattura(item) {
   return ` <span class="inline-block mt-1 px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-semibold" title="Se hai ricevuto la fattura estera più tardi, conta la data di ricevimento">Autofattura allo SDI entro il ${fmtData(iso)}</span>`;
 }
 
-function calcolaIrpefScaglioni(imponibile) {
+/* IRPEF lorda a scaglioni sull'imponibile (reddito meno contributi INPS) */
+function irpefLorda(imponibile) {
   if (imponibile <= 0) return 0;
   const a1 = imp().irpef1 / 100, a2 = imp().irpef2 / 100, a3 = imp().irpef3 / 100;
   let irpef;
   if (imponibile <= 28000) irpef = imponibile * a1;
   else if (imponibile <= 50000) irpef = 28000 * a1 + (imponibile - 28000) * a2;
   else irpef = 28000 * a1 + 22000 * a2 + (imponibile - 50000) * a3;
-  // detrazione per redditi d'impresa (semplificata)
-  let detrazione = 0;
-  if (imponibile <= 5500) detrazione = 1265;
-  else if (imponibile <= 28000) detrazione = 500 + 765 * ((28000 - imponibile) / 22500);
-  else if (imponibile <= 50000) detrazione = 500 * ((50000 - imponibile) / 22000);
-  return cent(Math.max(0, irpef - detrazione));
+  return cent(irpef);
+}
+/* Detrazione per redditi d'impresa (art. 13, comma 5 TUIR): per legge si
+   calcola sul reddito COMPLESSIVO, cioè prima di togliere i contributi INPS. */
+function detrazioneImpresa(redditoComplessivo) {
+  const r = Math.max(0, redditoComplessivo);
+  if (r <= 5500) return 1265;
+  if (r <= 28000) return cent(500 + 765 * ((28000 - r) / 22500));
+  if (r <= 50000) return cent(500 * ((50000 - r) / 22000));
+  return 0;
+}
+function calcolaIrpefScaglioni(imponibile, redditoComplessivo = imponibile) {
+  if (imponibile <= 0) return 0;
+  return cent(Math.max(0, irpefLorda(imponibile) - detrazioneImpresa(redditoComplessivo)));
 }
 
 /* INPS artigiani e commercianti sulla quota di reddito del socio:
@@ -686,15 +697,15 @@ for (const [p, m] of Object.entries(MODULI_SPESA)) {
    ma mette il bollo da 2 € sopra 77,47 €. */
 function calcParcella(p) {
   const onorario = parseFloat(p.onorario) || 0;
-  const cassa = onorario * ((parseFloat(p.cassaPct) || 0) / 100);
+  const cassa = cent(onorario * ((parseFloat(p.cassaPct) || 0) / 100));
   const esenti = parseFloat(p.esenti) || 0;
   const forf = p.regime === 'forfettario';
-  const imponibileIva = onorario + cassa;
-  const iva = forf ? 0 : imponibileIva * 0.22;
+  const imponibileIva = cent(onorario + cassa);
+  const iva = forf ? 0 : cent(imponibileIva * 0.22);
   const bollo = forf && imponibileIva + esenti > 77.47 ? 2 : 0;
-  const totale = imponibileIva + iva + esenti + bollo;
-  const ritenuta = forf ? 0 : onorario * 0.20;
-  return { onorario, cassa, esenti, imponibileIva, iva, bollo, totale, ritenuta, netto: totale - ritenuta, costoDeducibile: imponibileIva + esenti + bollo };
+  const totale = cent(imponibileIva + iva + esenti + bollo);
+  const ritenuta = forf ? 0 : cent(onorario * 0.20);
+  return { onorario, cassa, esenti, imponibileIva, iva, bollo, totale, ritenuta, netto: cent(totale - ritenuta), costoDeducibile: cent(imponibileIva + esenti + bollo) };
 }
 
 /** 16 del mese dopo il pagamento, spostato al lunedì se cade nel weekend */
@@ -1532,7 +1543,7 @@ function renderAll() {
   const btnElimina = (azione, id) => `<td class="py-3 px-4 text-center"><button data-action="${azione}" data-id="${id}" class="text-rose-500 hover:text-rose-700 text-xs font-semibold px-2 py-1 rounded-lg hover:bg-rose-50">Elimina</button></td>`;
 
   // 1. Entrate: fatture emesse e corrispettivi
-  let totRicaviImp = 0;
+  let totRicaviLordi = 0, totIvaVendite = 0, totScontiTotale = 0;
   const REGIME = {
     IT_22: '<span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[11px] whitespace-nowrap">IT IVA 22%</span>',
     CH_ART8: '<span class="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[11px] font-semibold whitespace-nowrap">Svizzera art. 8 (0%)</span>',
@@ -1544,7 +1555,11 @@ function renderAll() {
     const b = calcEntrataBreakdown(item);
     const q = getTrimestre(item.data);
     const p = item.tipo === 'Fattura' ? 'fe' : 'co';
-    totRicaviImp += b.imponibile; ivaTrim[q].debito += b.iva;
+    /* Il ricavo è quello davvero incassato al netto dell'IVA: se una fattura ha
+       uno sconto fatto sul totale (dopo l'IVA), l'IVA resta quella scritta in
+       fattura e lo sconto è un minor ricavo. */
+    totRicaviLordi += b.totale; totIvaVendite += b.iva; ivaTrim[q].debito += b.iva;
+    if (b.imponibile + b.iva - b.totale > 0.005) totScontiTotale += b.imponibile + b.iva - b.totale;
     tot[p].imp += b.imponibile; tot[p].iva += b.iva; tot[p].lordo += b.totale; tot[p].n++;
     htmlEnt[p] += `<tr data-voce="entrata:${item.id}" class="hover:bg-slate-50/80 transition">
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
@@ -1557,6 +1572,8 @@ function renderAll() {
       ${btnElimina('del-entrata', item.id)}
     </tr>`;
   }
+  totRicaviLordi = cent(totRicaviLordi); totIvaVendite = cent(totIvaVendite); totScontiTotale = cent(totScontiTotale);
+  const totRicaviImp = cent(totRicaviLordi - totIvaVendite);
   $('tbody-fatture').innerHTML = htmlEnt.fe || vuota(8, `Nessuna fattura emessa nel ${anno}. Usa il modulo qui sopra per registrarne una.`);
   $('count-fe').textContent = tot.fe.n;
   $('tot-fe-imp').textContent = fmtEuro(tot.fe.imp);
@@ -1694,12 +1711,12 @@ function renderAll() {
   html = '';
   const ivaVers = [];   // per il riquadro del cruscotto
   for (const t of TRIM) {
-    const deb = ivaTrim[t.q].debito;
-    const credTot = ivaTrim[t.q].credito + riporto;
-    const diff = deb - credTot;
+    const deb = cent(ivaTrim[t.q].debito);
+    const credTot = cent(ivaTrim[t.q].credito + riporto);
+    const diff = cent(deb - credTot);
     if (t.q === 4) ivaQ4Anno[anno] = Math.max(0, diff);     // base dell'acconto dell'anno dopo
     const acc = t.q === 4 ? accontoIva : 0;                 // l'acconto di dicembre si scala dal 4° trimestre
-    const netto = diff - acc;
+    const netto = cent(diff - acc);
     let daVersare = 0, interessi = 0;
     if (netto > 0) { interessi = cent(netto * 0.01); daVersare = cent(netto + interessi); riporto = 0; }
     else riporto = Math.abs(netto);
@@ -1770,12 +1787,12 @@ function renderAll() {
 
   const impIrpefS1 = cent(Math.max(0, q1 - inpsS1.totale - (appState.collabDeduci ? inpsCollab : 0)));
   const detrS1 = detrazioniSocio('s1').importo, detrS2 = detrazioniSocio('s2').importo;
-  const irpefS1 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS1) - detrS1));
+  const irpefS1 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS1, q1) - detrS1));
   const addizS1 = calcolaAddizionali(impIrpefS1), addS1 = addizS1.totale;
   const totS1 = cent(irpefS1 + addS1 + inpsS1.totale + inpsCollab);
 
   const impIrpefS2 = cent(Math.max(0, q2 - inpsS2.totale));
-  const irpefS2 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS2) - detrS2));
+  const irpefS2 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS2, q2) - detrS2));
   const addizS2 = calcolaAddizionali(impIrpefS2), addS2 = addizS2.totale;
   const totS2 = cent(irpefS2 + addS2 + inpsS2.totale);
 
@@ -1817,6 +1834,8 @@ function renderAll() {
   const annoDopo = appState.anno + 1;
   const importoSaldo = (v) => v < 0 ? `credito ${fmtEuro(-v)}` : fmtEuro(v);
   const clsSaldo = (v) => v < 0 ? 'font-semibold text-emerald-700' : 'font-semibold text-slate-900';
+  // acconto IRPEF o IRAP: fino a 257,52 € tutto a novembre, oltre metà e metà
+  const divisoAcconto = (x) => x <= 0 ? [0, 0] : x <= 257.52 ? [0, cent(x)] : [cent(x * 0.5), cent(x - cent(x * 0.5))];
   const righeVersamenti = (k, irpef, inpsEcc, add, rit = 0) => {
     // le ritenute subite riducono l'IRPEF da versare, e quindi anche gli acconti
     irpef = irpef - rit;
@@ -1826,15 +1845,19 @@ function renderAll() {
     const inseriti = ['irpef', 'inps', 'com'].some((c) => a[c] !== '' && a[c] != null);
     const stimati = !inseriti && prec ? prec.dett : null;
     const accIrpef = +(stimati || a).irpef || 0, accInps = +(stimati || a).inps || 0, accCom = +(stimati || a).com || 0;
-    const sIrpef = irpef - accIrpef, sInps = inpsEcc - accInps, sCom = add.comunale - accCom;
-    const baseAcc = Math.max(0, irpef);
+    irpef = cent(irpef);
+    const sIrpef = cent(irpef - accIrpef), sInps = cent(inpsEcc - accInps), sCom = cent(add.comunale - accCom);
+    /* Acconto IRPEF: non è dovuto se l'imposta non supera 51,65 €; fino a
+       257,52 € si versa tutto a novembre; oltre, 50% a giugno e 50% a novembre. */
+    const baseAcc = Math.max(0, irpef) > 51.65 ? Math.max(0, irpef) : 0;
+    const [accIrpef1, accIrpef2] = divisoAcconto(baseAcc);
     const meta = (x) => cent(x * 0.5);
-    const acc1 = cent(meta(baseAcc) + meta(inpsEcc) + cent(add.comunale * 0.3));
-    const acc2 = cent(baseAcc - meta(baseAcc) + inpsEcc - meta(inpsEcc));
-    const giugno = Math.max(0, sIrpef) + Math.max(0, sInps) + add.regionale + Math.max(0, sCom) + acc1;
+    const acc1 = cent(accIrpef1 + meta(inpsEcc) + cent(add.comunale * 0.3));
+    const acc2 = cent(accIrpef2 + inpsEcc - meta(inpsEcc));
+    const giugno = cent(Math.max(0, sIrpef) + Math.max(0, sInps) + add.regionale + Math.max(0, sCom) + acc1);
     const riporto = prec ? prec.resto : 0;               // credito avanzato dall'anno prima
-    const crediti = Math.max(0, -sIrpef) + Math.max(0, -sInps) + Math.max(0, -sCom) + riporto;
-    versamenti[k] = { saldo: giugno - acc1, acc1, acc2, riporto, stimati: !!stimati, rit, accVersati: cent(accIrpef + accInps + accCom),
+    const crediti = cent(Math.max(0, -sIrpef) + Math.max(0, -sInps) + Math.max(0, -sCom) + riporto);
+    versamenti[k] = { saldo: cent(giugno - acc1), acc1, acc2, riporto, stimati: !!stimati, rit, accVersati: cent(accIrpef + accInps + accCom),
       dett: { irpef: baseAcc, inps: inpsEcc, com: cent(add.comunale * 0.3) }, ...compensa(giugno, acc2, crediti) };
     return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
       titoloInps(`Versamenti F24 per il ${appState.anno}`) +
@@ -1856,9 +1879,9 @@ function renderAll() {
      dovuto a giugno; quello che avanza copre il 2° acconto di novembre e poi
      resta disponibile. Ogni contribuente compensa solo i propri crediti. */
   const compensa = (giugno, novembre, crediti) => {
-    const usatoGiu = Math.min(crediti, giugno), restoGiu = crediti - usatoGiu;
-    const usatoNov = Math.min(restoGiu, novembre), resto = restoGiu - usatoNov;
-    return { usatoGiu, usatoNov, resto, daGiu: giugno - usatoGiu, daNov: novembre - usatoNov };
+    const usatoGiu = cent(Math.min(crediti, giugno)), restoGiu = cent(crediti - usatoGiu);
+    const usatoNov = cent(Math.min(restoGiu, novembre)), resto = cent(restoGiu - usatoNov);
+    return { usatoGiu, usatoNov, resto, daGiu: cent(giugno - usatoGiu), daNov: cent(novembre - usatoNov) };
   };
   const versamenti = {};   // per il riquadro del cruscotto
   const righeCompensazione = (giugno, novembre, crediti, avvisoVisto) => {
@@ -1867,9 +1890,9 @@ function renderAll() {
     if (crediti <= 0) return totale(`Da versare a giugno ${annoDopo}:`, giugno, 'text-indigo-600') + '</div>';
     return riga(`Dovuto a giugno ${annoDopo} prima della compensazione:`, fmtEuro(giugno), 'text-slate-500') +
       riga('Crediti usati in compensazione nell\'F24:', '- ' + fmtEuro(usatoGiu), 'text-emerald-700') +
-      totale(`Da versare a giugno ${annoDopo}:`, giugno - usatoGiu, 'text-indigo-600') +
+      totale(`Da versare a giugno ${annoDopo}:`, cent(giugno - usatoGiu), 'text-indigo-600') +
       (usatoNov > 0 ? riga(`Credito usato per il 2° acconto di novembre:`, '- ' + fmtEuro(usatoNov), 'text-emerald-700') : '') +
-      riga(`Da versare a novembre ${annoDopo}:`, fmtEuro(novembre - usatoNov), 'font-semibold text-slate-900') +
+      riga(`Da versare a novembre ${annoDopo}:`, fmtEuro(cent(novembre - usatoNov)), 'font-semibold text-slate-900') +
       (resto > 0 ? totale('Credito che resta ancora da usare:', resto, 'text-emerald-700') : '') +
       (avvisoVisto ? `<p class="text-[11px] text-slate-500">Per usare oltre 5.000 € di crediti IRPEF per pagare altre imposte o contributi serve il visto di conformità sulla dichiarazione; tra IRPEF e IRPEF (saldo con acconto) non serve.</p>` : '') +
       '</div>';
@@ -1908,10 +1931,12 @@ function renderAll() {
     righeInps(inpsS1, s.s1Nome) +
     righeCollab() +
     riga('Imponibile netto IRPEF:', fmtEuro(impIrpefS1), 'font-bold text-slate-800', 'pt-2 border-t border-slate-100') +
+    riga('IRPEF lorda (scaglioni sull\'imponibile):', fmtEuro(irpefLorda(impIrpefS1))) +
+    (impIrpefS1 > 0 && detrazioneImpresa(q1) > 0 ? riga(`Detrazione redditi d'impresa (sul reddito complessivo di ${fmtEuro(q1)}):`, '- ' + fmtEuro(Math.min(detrazioneImpresa(q1), irpefLorda(impIrpefS1))), 'text-emerald-700') : '') +
     (detrS1 > 0 ? riga('Altre detrazioni IRPEF:', '- ' + fmtEuro(detrS1), 'text-emerald-700') : '') +
     riga('IRPEF netta stimata:', fmtEuro(irpefS1)) +
     righeAddiz(addizS1) +
-    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
+    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
     righeNetto(quotaS1(), q1, irapS1, dedS1, l1, totS1, nettoS1, inailS1, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso di ${esc(s.s2Nome)} pagato da te:`, '- ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-rose-600') : '') +
     righeVersamenti('s1', irpefS1, inpsS1.eccedenza, addizS1, ritS1);
 
@@ -1919,10 +1944,12 @@ function renderAll() {
     riga(`Quota del reddito fiscale SNC (${fmtPct(quotaS2())}):`, fmtEuro(q2), 'font-bold text-slate-900') +
     righeInps(inpsS2, s.s2Nome) +
     riga('Imponibile netto IRPEF:', fmtEuro(impIrpefS2), 'font-bold text-slate-800', 'pt-2 border-t border-slate-100') +
+    riga('IRPEF lorda (scaglioni sull\'imponibile):', fmtEuro(irpefLorda(impIrpefS2))) +
+    (impIrpefS2 > 0 && detrazioneImpresa(q2) > 0 ? riga(`Detrazione redditi d'impresa (sul reddito complessivo di ${fmtEuro(q2)}):`, '- ' + fmtEuro(Math.min(detrazioneImpresa(q2), irpefLorda(impIrpefS2))), 'text-emerald-700') : '') +
     (detrS2 > 0 ? riga('Altre detrazioni IRPEF:', '- ' + fmtEuro(detrS2), 'text-emerald-700') : '') +
     riga('IRPEF netta stimata:', fmtEuro(irpefS2)) +
     righeAddiz(addizS2) +
-    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-indigo-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>` +
+    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>` +
     righeNetto(quotaS2(), q2, irapS2, dedS2, l2, totS2, nettoS2, inailS2, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso pagato da ${esc(s.s1Nome)}:`, '+ ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-emerald-700') : '') +
     righeVersamenti('s2', irpefS2, inpsS2.eccedenza, addizS2, ritS2);
 
@@ -1941,7 +1968,7 @@ function renderAll() {
       const valIrap = fiscaleAnno().irap, prec = precedente && precedente.soc;
       const stimato = (valIrap === '' || valIrap == null) && prec;
       const acc = stimato ? cent(prec.acc1 + prec.acc2) : +valIrap || 0, saldo = cent(irapSocieta - acc);
-      const irapAcc1 = cent(irapSocieta * 0.5), irapAcc2 = cent(irapSocieta - irapAcc1);
+      const [irapAcc1, irapAcc2] = divisoAcconto(irapSocieta > 51.65 ? irapSocieta : 0);   // stesse soglie dell'IRPEF
       const riporto = prec ? prec.resto : 0, crediti = Math.max(0, -saldo) + riporto;
       versamenti.soc = { saldo: Math.max(0, saldo), acc1: irapAcc1, acc2: irapAcc2, riporto, stimati: !!stimato, rit: 0, accVersati: acc,
         ...compensa(cent(Math.max(0, saldo) + irapAcc1), irapAcc2, crediti) };
@@ -1959,7 +1986,9 @@ function renderAll() {
 
   $('societa-catena').innerHTML =
     (redditoDich == null
-      ? riga(`Ricavi lordi ${appState.anno}:`, fmtEuro(totRicaviImp), 'text-slate-700') +
+      ? riga(`Ricavi lordi ${appState.anno} (IVA inclusa):`, fmtEuro(totRicaviLordi), 'text-slate-700') +
+        riga(`IVA a debito ${appState.anno}:`, '- ' + fmtEuro(totIvaVendite), 'font-semibold text-rose-600') +
+        riga('Ricavi imponibili:', fmtEuro(totRicaviImp), 'font-semibold text-slate-900', 'pt-1 border-t border-slate-100') +
         riga('Costi deducibili (senza IRAP e INAIL):', '- ' + fmtEuro(costiReali), 'font-semibold text-rose-600')
       : riga('Reddito dichiarato (quadro RN):', fmtEuro(risultato), 'text-slate-700') +
         (inailTot > 0 ? riga('INAIL già dedotto nel reddito, riaggiunto:', '+ ' + fmtEuro(inailTot), 'font-semibold text-slate-700') : '')) +
@@ -1967,7 +1996,7 @@ function renderAll() {
     riga(`IRAP ${appState.anno} (${fmtPct(s.irap)}, calcolo qui accanto):`, '- ' + fmtEuro(irapSocieta), 'font-semibold text-rose-600') +
     riga(`INAIL ${appState.anno} dei soci:`, '- ' + fmtEuro(inailTot), 'font-semibold text-rose-600') +
     riga('Totale imposte della società:', fmtEuro(impSocieta), 'font-bold text-rose-600') +
-    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Utile netto società = utile lordo soci:</span><span class="font-extrabold ${utileNettoSoc < 0 ? 'text-rose-600' : 'text-teal-700'} whitespace-nowrap">${fmtEuro(utileNettoSoc)}</span></div>` +
+    `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Utile netto società = utile lordo soci:</span><span class="font-extrabold ${utileNettoSoc < 0 ? 'text-rose-600' : 'text-emerald-600'} whitespace-nowrap">${fmtEuro(utileNettoSoc)}</span></div>` +
     `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
     titoloInps('Diviso tra i soci') +
     riga(`${esc(s.s1Nome)} (${fmtPct(quotaS1())}):`, fmtEuro(l1), 'font-semibold text-slate-900') +
@@ -1976,20 +2005,25 @@ function renderAll() {
     `</div>`;
 
   // 6. Cruscotto
-  $('kpi-ricavi').textContent = fmtEuro(totRicaviImp);
-  const colore = (id, v) => { $(id).classList.toggle('text-rose-600', v < 0); };
+  $('kpi-ricavi').textContent = fmtEuro(totRicaviLordi);
+  $('kpi-iva').textContent = fmtEuro(totIvaVendite);
+  $('kpi-imp').textContent = fmtEuro(totRicaviImp);
+  $('kpi-imp-sub').textContent = 'Ricavi lordi - IVA a debito.' + (totScontiTotale > 0
+    ? ` Comprende ${fmtEuro(totScontiTotale)} di sconti fatti sul totale delle fatture: l'IVA resta quella scritta in fattura.` : '');
+  // utili in verde (dal più scuro al più chiaro), in rosso se negativi
+  const colore = (id, v, verde) => { $(id).classList.toggle(verde, v >= 0); $(id).classList.toggle('text-rose-600', v < 0); };
   $('kpi-costi').textContent = fmtEuro(costiReali);
   $('kpi-utile').textContent = fmtEuro(utileLordoSoc);
-  $('kpi-utile').classList.toggle('text-emerald-600', utileLordoSoc >= 0); colore('kpi-utile', utileLordoSoc);
+  colore('kpi-utile', utileLordoSoc, 'text-emerald-800');
   $('kpi-utile-titolo').textContent = utileLordoSoc < 0 ? 'Perdita lorda società' : 'Utile lordo società';
   $('kpi-utile-sub').textContent = redditoDich != null
     ? `Reddito dichiarato (${fmtEuro(risultato)})${inailTot > 0 ? ' + INAIL già dedotto' : ''}`
-    : 'Ricavi lordi - costi deducibili';
+    : 'Ricavi imponibili - costi deducibili';
   $('kpi-soc').textContent = fmtEuro(impSocieta);
   $('kpi-soc-pct').textContent = utileLordoSoc > 0 ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(impSocieta / utileLordoSoc * 100)}% dell'utile lordo società` : '';
   $('kpi-soc-sub').textContent = `IRAP ${fmtEuro(irapSocieta)} + INAIL ${fmtEuro(inailTot)}, pagate dalla società.`;
   $('kpi-uns').textContent = fmtEuro(utileNettoSoc);
-  $('kpi-uns').classList.toggle('text-emerald-600', utileNettoSoc >= 0); colore('kpi-uns', utileNettoSoc);
+  colore('kpi-uns', utileNettoSoc, 'text-emerald-600');
   $('kpi-uns-sub').textContent = risultato < 0
     ? 'I costi superano i ricavi: niente IRPEF né IRAP sul reddito, l\'INPS minimale resta dovuto.'
     : `Diviso ${fmtPct(quotaS1())} a ${s.s1Nome} e ${fmtPct(quotaS2())} a ${s.s2Nome}.`;
@@ -1999,26 +2033,28 @@ function renderAll() {
     ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(caricoSoci / utileNettoSoc * 100)}% dell'utile lordo soci`
     : 'Nessun utile su cui calcolare la percentuale';
   $('kpi-tasse-base').textContent = fmtEuro(risultato);
-  $('kpi-netto').textContent = fmtEuro(utileNettoSoci); colore('kpi-netto', utileNettoSoci);
+  $('kpi-netto').textContent = fmtEuro(utileNettoSoci); colore('kpi-netto', utileNettoSoci, 'text-emerald-500');
   $('kpi-netto-pct').textContent = utileNettoSoc > 0 ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(utileNettoSoci / utileNettoSoc * 100)}% dell'utile lordo soci` : '';
 
-  const maxVal = Math.max(totRicaviImp, 1);
+  const maxVal = Math.max(totRicaviLordi, 1);
   $('bars').innerHTML =
-    barra('Ricavi lordi totali', totRicaviImp, totRicaviImp > 0 ? 100 : 0, 'bg-slate-800', 'text-slate-900') +
+    barra('Ricavi lordi (IVA inclusa)', totRicaviLordi, totRicaviLordi > 0 ? 100 : 0, 'bg-slate-800', 'text-slate-900') +
+    barra(`IVA a debito ${appState.anno} (va allo Stato)`, totIvaVendite, Math.abs(totIvaVendite) / maxVal * 100, 'bg-rose-300', 'text-rose-600') +
+    barra('Ricavi imponibili (senza IVA)', totRicaviImp, Math.abs(totRicaviImp) / maxVal * 100, 'bg-sky-600', 'text-sky-700') +
     barra('Costi deducibili (IRAP e INAIL a parte)', costiReali, costiReali / maxVal * 100, 'bg-amber-500', 'text-amber-700') +
     (utileLordoSoc < 0
       ? barra('Perdita lorda società (costi oltre i ricavi)', utileLordoSoc, -utileLordoSoc / maxVal * 100, 'bg-rose-500', 'text-rose-600')
-      : barra('Utile lordo società', utileLordoSoc, utileLordoSoc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700')) +
-    barra(`Imposte della società (IRAP + INAIL) del ${appState.anno}`, impSocieta, impSocieta / maxVal * 100, 'bg-rose-400', 'text-rose-600') +
-    barra('Utile netto società = utile lordo soci', utileNettoSoc, Math.abs(utileNettoSoc) / maxVal * 100, utileNettoSoc < 0 ? 'bg-rose-500' : 'bg-teal-500', utileNettoSoc < 0 ? 'text-rose-600' : 'text-teal-700') +
-    barra(`Carico fiscale + INPS soci del ${appState.anno}`, caricoSoci, caricoSoci / maxVal * 100, 'bg-indigo-600', 'text-indigo-700') +
+      : barra('Utile lordo società', utileLordoSoc, utileLordoSoc / maxVal * 100, 'bg-emerald-700', 'text-emerald-800')) +
+    barra(`Imposte della società (IRAP + INAIL) del ${appState.anno}`, impSocieta, impSocieta / maxVal * 100, 'bg-rose-500', 'text-rose-600') +
+    barra('Utile netto società = utile lordo soci', utileNettoSoc, Math.abs(utileNettoSoc) / maxVal * 100, utileNettoSoc < 0 ? 'bg-rose-500' : 'bg-emerald-500', utileNettoSoc < 0 ? 'text-rose-600' : 'text-emerald-600') +
+    barra(`Carico fiscale + INPS soci del ${appState.anno}`, caricoSoci, caricoSoci / maxVal * 100, 'bg-rose-600', 'text-rose-600') +
     barra(`Utile netto soci (dopo IRPEF, addizionali e INPS del ${appState.anno})`, utileNettoSoci, Math.abs(utileNettoSoci) / maxVal * 100, utileNettoSoci < 0 ? 'bg-rose-500' : 'bg-emerald-300', utileNettoSoci < 0 ? 'text-rose-600' : 'text-emerald-500');
 
   const scheda = (nome, quota, utile, irpef, inps, netto, collab = 0, altro = '') => `
     <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
       <div class="flex justify-between items-center gap-2">
         <span class="text-xs font-bold text-slate-800">${esc(nome)} (${fmtPct(quota)})</span>
-        <span class="text-xs font-bold text-teal-700 whitespace-nowrap">${fmtEuro(utile)} utile lordo</span>
+        <span class="text-xs font-bold text-emerald-600 whitespace-nowrap">${fmtEuro(utile)} utile lordo</span>
       </div>
       <div class="mt-2 flex justify-between text-xs text-slate-600"><span>IRPEF + addizionali:</span><span class="font-semibold text-slate-900">${fmtEuro(irpef)}</span></div>
       <div class="flex justify-between text-xs text-slate-600"><span>INPS ${esc(nome)}:</span><span class="font-semibold text-slate-900">${fmtEuro(inps)}</span></div>
@@ -2032,7 +2068,7 @@ function renderAll() {
       ${rs(`IRAP ${appState.anno} (${fmtPct(s.irap)}):`, irapSocieta)}
       ${rs(`INAIL ${appState.anno} dei soci:`, inailTot)}
       <div class="flex justify-between gap-3 text-xs"><span class="font-semibold text-slate-700">Totale imposte della società:</span><span class="font-bold text-rose-600 whitespace-nowrap">${fmtEuro(impSocieta)}</span></div>
-      <div class="pt-1.5 mt-1 border-t border-rose-100 flex justify-between gap-3 text-xs"><span class="font-bold text-slate-800">Utile netto società = utile lordo soci:</span><span class="font-bold ${utileNettoSoc < 0 ? 'text-rose-600' : 'text-teal-700'} whitespace-nowrap">${fmtEuro(utileNettoSoc)}</span></div>
+      <div class="pt-1.5 mt-1 border-t border-rose-100 flex justify-between gap-3 text-xs"><span class="font-bold text-slate-800">Utile netto società = utile lordo soci:</span><span class="font-bold ${utileNettoSoc < 0 ? 'text-rose-600' : 'text-emerald-600'} whitespace-nowrap">${fmtEuro(utileNettoSoc)}</span></div>
     </div>`;
   $('dash-soci').innerHTML =
     scheda(s.s1Nome, quotaS1(), l1, irpefS1 + addS1, inpsS1.totale, nettoS1, inpsCollab,

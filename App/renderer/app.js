@@ -2089,6 +2089,7 @@ function renderAll() {
     irap: irapSocieta,
   });
   disegnaAvvisiPolizze();
+  ordinaPerData();
   applicaRicerche();
 }
 
@@ -2169,6 +2170,61 @@ function installaRicerche() {
     card.before(riquadri);
   }
 }
+
+/* Ordine per data delle tabelle: cliccando l'intestazione «Data» si passa
+   dalla meno recente alla più recente e viceversa. La scelta resta salvata
+   (per tabella) su questo computer. */
+const TABELLE_DATA = ['tbody-fatture', 'tbody-corrispettivi', 'tbody-fornitori', 'tbody-estero', 'tbody-acquisti', 'tbody-polizze', 'tbody-scalare', 'tbody-carta', 'tbody-parcelle'];
+let ordineDate = {};
+try { ordineDate = JSON.parse(localStorage.getItem('ordineDate') || '{}') || {}; } catch (_) { ordineDate = {}; }
+function dataDiVoce(rif) {
+  const [t, id] = String(rif).split(':');
+  const lista = t === 'entrata' ? appState.entrate : t === 'parcella' ? appState.parcelle : appState.acquisti;
+  const x = lista.find((v) => String(v.id) === id);
+  return x ? String(x.data || '') : '';
+}
+function ordinaPerData() {
+  for (const tb of TABELLE_DATA) {
+    const el = $(tb);
+    if (!el) continue;
+    const recentiPrima = ordineDate[tb] === 'desc';
+    // gruppi: un'intestazione (i mesi della carta) e le sue righe; senza intestazioni un gruppo solo
+    const gruppi = [];
+    let g = null;
+    for (const tr of [...el.children]) {
+      if (tr.hasAttribute('data-gruppo')) { g = { testa: tr, righe: [] }; gruppi.push(g); }
+      else if (tr.dataset.voce) { if (!g) { g = { testa: null, righe: [] }; gruppi.push(g); } g.righe.push(tr); }
+    }
+    if (!gruppi.length) continue;
+    const chiave = (tr) => dataDiVoce(tr.dataset.voce) + '|' + String(tr.dataset.voce.split(':')[1]).padStart(16, '0');
+    for (const x of gruppi) {
+      x.righe.sort((a, b) => chiave(a).localeCompare(chiave(b)));
+      if (recentiPrima) x.righe.reverse();
+      x.min = x.righe.length ? chiave(x.righe[recentiPrima ? x.righe.length - 1 : 0]) : '';
+    }
+    gruppi.sort((a, b) => a.min.localeCompare(b.min));
+    if (recentiPrima) gruppi.reverse();
+    for (const x of gruppi) { if (x.testa) el.appendChild(x.testa); x.righe.forEach((tr) => el.appendChild(tr)); }
+  }
+  aggiornaIntestazioniData();
+}
+function aggiornaIntestazioniData() {
+  for (const tb of TABELLE_DATA) {
+    const th = $(tb) && $(tb).closest('table').querySelector('thead th');
+    if (!th) continue;
+    if (!th.dataset.etichetta) th.dataset.etichetta = th.textContent.trim();
+    const desc = ordineDate[tb] === 'desc';
+    th.innerHTML = `<button type="button" data-ordina-data="${tb}" class="inline-flex items-center gap-1 uppercase font-bold hover:text-slate-900 transition" title="Clicca per invertire l'ordine">${esc(th.dataset.etichetta)} <span aria-hidden="true">${desc ? '↓' : '↑'}</span><span class="normal-case font-semibold text-slate-400">${desc ? 'più recenti prima' : 'meno recenti prima'}</span></button>`;
+  }
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-ordina-data]');
+  if (!b) return;
+  const tb = b.dataset.ordinaData;
+  ordineDate[tb] = ordineDate[tb] === 'desc' ? 'asc' : 'desc';
+  try { localStorage.setItem('ordineDate', JSON.stringify(ordineDate)); } catch (_) {}
+  ordinaPerData();
+});
 
 function applicaRicerche() {
   for (const r of RICERCHE) {
@@ -3343,7 +3399,7 @@ function disegnaCarta(voci) {
       dd += b.costoDeducibile;
     }
     spese += sp; ded += dd;
-    html += `<tr class="bg-slate-50 border-t-2 border-slate-200"><td colspan="6" class="py-2 px-4 text-xs">
+    html += `<tr data-gruppo class="bg-slate-50 border-t-2 border-slate-200"><td colspan="6" class="py-2 px-4 text-xs">
         <span class="font-bold text-slate-900">${esc(nomeMese(m))} ${a}</span>
         <span class="text-slate-500"> · spese <strong class="text-slate-800">${fmtEuro(sp)}</strong> · costo deducibile <strong class="text-slate-800">${fmtEuro(dd)}</strong>${ent ? ` · ricariche e accrediti ${fmtEuro(ent)}` : ''} · ${lista.length} ${lista.length === 1 ? 'movimento' : 'movimenti'}</span>
       </td></tr>`;

@@ -1942,16 +1942,16 @@ function renderAll() {
   $('kpi-utile').textContent = fmtEuro(risultato);
   $('kpi-utile').classList.toggle('text-rose-600', risultato < 0);
   $('kpi-utile').classList.toggle('text-emerald-600', risultato >= 0);
-  $('kpi-utile-titolo').textContent = risultato < 0 ? 'Perdita lorda' : 'Utili lordi';
+  $('kpi-utile-titolo').textContent = risultato < 0 ? 'Perdita lorda' : 'Utile lordo';
   if (risultato < 0) $('kpi-utile-sub').textContent = 'I costi superano i ricavi: niente IRPEF né IRAP sul reddito, l\'INPS minimale resta dovuto.';
   $('kpi-tasse').textContent = fmtEuro(totaleTasse);
   // quota dell'utile della SNC che se ne va in imposte e INPS
   $('kpi-tasse-pct').textContent = risultato > 0
-    ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(totaleTasse / risultato * 100)}% degli utili lordi ${redditoDich != null ? 'dichiarati' : 'stimati'}`
+    ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(totaleTasse / risultato * 100)}% dell'utile lordo ${redditoDich != null ? 'dichiarato' : 'stimato'}`
     : 'Nessun utile su cui calcolare la percentuale';
   $('kpi-netto').textContent = fmtEuro(nettoTasca);
   $('kpi-netto-pct').textContent = risultato > 0
-    ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(nettoTasca / risultato * 100)}% degli utili lordi ${redditoDich != null ? 'dichiarati' : 'stimati'}`
+    ? `${new Intl.NumberFormat('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(nettoTasca / risultato * 100)}% dell'utile lordo ${redditoDich != null ? 'dichiarato' : 'stimato'}`
     : '';
 
   const maxVal = Math.max(totRicaviImp, 1);
@@ -1960,9 +1960,9 @@ function renderAll() {
     barra('Costi fiscalmente deducibili', totCostiDeducibili, totCostiDeducibili / maxVal * 100, 'bg-amber-500', 'text-amber-700') +
     (risultato < 0
       ? barra('Perdita lorda (costi oltre i ricavi)', risultato, -risultato / Math.max(totCostiDeducibili, 1) * 100, 'bg-rose-500', 'text-rose-600')
-      : barra('Utili lordi (base imponibile)', utileSnc, utileSnc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700')) +
+      : barra('Utile lordo (base imponibile)', utileSnc, utileSnc / maxVal * 100, 'bg-emerald-500', 'text-emerald-700')) +
     barra(`Carico fiscale + INPS soci del ${appState.anno}`, totaleTasse, totaleTasse / maxVal * 100, 'bg-indigo-600', 'text-indigo-700') +
-    barra(`Utile netto residuo (dopo IRPEF, IRAP e INPS del ${appState.anno})`, nettoTasca, nettoTasca / maxVal * 100, 'bg-emerald-300', 'text-emerald-500');
+    barra(`Utile netto (dopo IRPEF, IRAP e INPS del ${appState.anno})`, nettoTasca, nettoTasca / maxVal * 100, 'bg-emerald-300', 'text-emerald-500');
 
   const scheda = (nome, quota, utile, irpef, inps, netto, collab = 0, altro = '') => `
     <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">

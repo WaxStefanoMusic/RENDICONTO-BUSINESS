@@ -151,7 +151,8 @@ function normalizza(s) {
   if (s?.impostazioni && s.impostazioni.addReg1 == null && s.impostazioni.addiz != null) {
     st.impostazioni.addCom = Math.max(0, Math.round((+s.impostazioni.addiz - 1.23) * 100) / 100);
   }
-  st.entrate = Array.isArray(st.entrate) ? st.entrate : [];
+  // le note di credito emesse (prima stavano tra le fatture) si riconoscono dal nome o dal totale negativo
+  st.entrate = (Array.isArray(st.entrate) ? st.entrate : []).map((e) => (e.tipo === 'Fattura' && e.nc == null && (/^nota di credito/i.test(e.desc || '') || +e.totale < 0) ? { ...e, nc: true } : e));
   st.acquisti = (Array.isArray(st.acquisti) ? st.acquisti : []).map((a) => ({ ...a, sezione: sezioneDi(a) }));
   st.parcelle = Array.isArray(st.parcelle) ? st.parcelle : [];
   st.regole = Array.isArray(st.regole) ? st.regole.filter((r) => r && r.dest && (r.piva || r.nome)) : [];
@@ -607,6 +608,7 @@ function detrazioniSocio(k) {
    «sezione»). Così LIPE, utile e imposte restano calcolati come prima. */
 const MODULI_ENTRATA = {
   fe: { form: 'form-fatture', tipo: 'Fattura', msg: 'Fattura emessa registrata.' },
+  nc: { form: 'form-notecredito', tipo: 'Fattura', nc: true, msg: 'Nota di credito registrata: riduce ricavi e IVA a debito.' },
   co: { form: 'form-corrispettivi', tipo: 'Corrispettivi', msg: 'Corrispettivi registrati.' },
 };
 const MODULI_SPESA = {
@@ -618,7 +620,9 @@ const regimeEntrata = (p) => (p === 'co' ? 'IT_22' : $(`${p}-regime`).value);
 
 function updateEntrataPreview(p) {
   const b = calcEntrataBreakdown({ totale: $(`${p}-totale`).value, regime: regimeEntrata(p) });
-  $(`${p}-preview`).innerHTML = `Anteprima scorporo: imponibile <strong>${fmtEuro(b.imponibile)}</strong> + IVA a debito <strong>${fmtEuro(b.iva)}</strong>`;
+  $(`${p}-preview`).innerHTML = MODULI_ENTRATA[p].nc
+    ? `Anteprima: ricavi imponibili in meno <strong>${fmtEuro(b.imponibile)}</strong> · IVA a debito in meno <strong>${fmtEuro(b.iva)}</strong>`
+    : `Anteprima scorporo: imponibile <strong>${fmtEuro(b.imponibile)}</strong> + IVA a debito <strong>${fmtEuro(b.iva)}</strong>`;
 }
 
 function updateAcquistoPreview(p) {
@@ -647,7 +651,7 @@ function dataDefault() {
   const t = oggi();
   return annoDi(t) === appState.anno ? t : `${appState.anno}-01-01`;
 }
-const CAMPI_DATA = ['fe-data', 'co-data', 'fo-data', 'es-data', 'acq-data', 'po-data', 'sc-data', 'ca-data', 'pa-data'];
+const CAMPI_DATA = ['fe-data', 'nc-data', 'co-data', 'fo-data', 'es-data', 'acq-data', 'po-data', 'sc-data', 'ca-data', 'pa-data'];
 
 function confermaRegistrazione(data, msg, focus) {
   if (annoDi(data) === appState.anno) showToast(msg);
@@ -663,7 +667,9 @@ for (const [p, m] of Object.entries(MODULI_ENTRATA)) {
     const nuovo = {
       id: Date.now(), data: $(`${p}-data`).value, tipo: m.tipo,
       desc: $(`${p}-desc`).value.trim(), regime: regimeEntrata(p),
-      totale: parseFloat($(`${p}-totale`).value) || 0,
+      // la nota di credito si scrive in positivo e si salva in negativo: storna ricavi e IVA
+      totale: (m.nc ? -1 : 1) * Math.abs(parseFloat($(`${p}-totale`).value) || 0),
+      ...(m.nc ? { nc: true } : {}),
     };
     appState.entrate.push(nuovo);
     appState.entrate.sort((a, b) => a.data.localeCompare(b.data));
@@ -939,7 +945,7 @@ function proponiDestinazione(f, contesto, presunta = '') {
     else if (ces === mia || pulisciPiva(f.cessionario.cf) === mia || (ced === mia)) emessa = false;
     else return { dest: 'salta', motivo: 'Non è intestata alla tua Partita IVA' };
   } else {
-    emessa = contesto === 'fatture';
+    emessa = contesto === 'fatture' || contesto === 'notecredito';
   }
   if (emessa) return { dest: 'fatture' };
   if (f.ritenuta > 0 || (f.cassa && f.cassa.importo > 0)) return { dest: 'commercialista' };
@@ -1056,7 +1062,7 @@ async function confermaImport() {
   lotto.inCorso = true;
   $('import-ok').disabled = true;
   $('import-ok').textContent = 'Salvataggio…';
-  const conta = { fatture: 0, fornitori: 0, estero: 0, spese: 0, polizze: 0, commercialista: 0 };
+  const conta = { fatture: 0, notecredito: 0, fornitori: 0, estero: 0, spese: 0, polizze: 0, commercialista: 0 };
   let id = Date.now();
   for (const r of lotto.righe) {
     if (r.dest === 'salta') continue;
@@ -1071,6 +1077,7 @@ async function confermaImport() {
       appState.entrate.push({
         id: id++, data: f.data, tipo: 'Fattura', desc: `${nc}n. ${f.numero} - ${f.cessionario.nome}`, regime,
         totale: s * f.totale, imponibile: s * f.imponibile, iva: s * f.iva, xml: r.chiave, cp, ...fileXml,
+        ...(s < 0 ? { nc: true } : {}),
       });
     } else if (r.dest === 'commercialista') {
       /* nell'XML l'imponibile dei riepiloghi comprende già la cassa:
@@ -1098,7 +1105,7 @@ async function confermaImport() {
         ...(f.ritenuta > 0 || f.cassa ? { prof: { regime: f.cedente.regime === 'RF19' ? 'forfettario' : 'ordinario', cassaPct: f.cassa ? f.cassa.aliquota : 0, esenti: s * f.riepiloghi.filter((x) => (x.natura || '').startsWith('N1')).reduce((t, x) => t + x.imponibile, 0) } } : {}),
       });
     }
-    conta[r.dest]++;
+    conta[r.dest === 'fatture' && NOTE_CREDITO.has(f.tipoDoc) ? 'notecredito' : r.dest]++;
   }
   // fatture già registrate prima della 2.6: si collega il file, senza duplicarle
   let collegati = 0;
@@ -1114,10 +1121,11 @@ async function confermaImport() {
   saveState();
   chiudi($('import-modal'));
   const tot = Object.values(conta).reduce((a, b) => a + b, 0);
-  const dove = Object.entries(conta).filter(([, n]) => n).map(([k, n]) => `${n} in ${DESTINAZIONI[k]}`).join(', ');
+  const nomeDest = { ...DESTINAZIONI, notecredito: 'Note di credito emesse' };
+  const dove = Object.entries(conta).filter(([, n]) => n).map(([k, n]) => `${n} in ${nomeDest[k]}`).join(', ');
   // si apre il tab dove è finita la maggior parte delle fatture
   const principale = Object.entries(conta).sort((a, b) => b[1] - a[1])[0][0];
-  const tabDi = { fatture: 'fatture', fornitori: 'fornitori', estero: 'estero', spese: 'acquisti', polizze: 'polizze', commercialista: 'commercialista' };
+  const tabDi = { fatture: 'fatture', notecredito: 'notecredito', fornitori: 'fornitori', estero: 'estero', spese: 'acquisti', polizze: 'polizze', commercialista: 'commercialista' };
   importazione = null;
   popolaAnni(); renderAll();
   if (tot) switchTab(tabDi[principale]);
@@ -1571,12 +1579,12 @@ function renderAll() {
     CH_ART8: '<span class="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[11px] font-semibold whitespace-nowrap">Svizzera art. 8 (0%)</span>',
     UE_ART41: '<span class="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-[11px] font-semibold whitespace-nowrap">UE VIES art. 41 (0%)</span>',
   };
-  const tot = { fe: { imp: 0, iva: 0, lordo: 0, n: 0 }, co: { imp: 0, iva: 0, lordo: 0, n: 0 } };
-  const htmlEnt = { fe: '', co: '' };
+  const tot = { fe: { imp: 0, iva: 0, lordo: 0, n: 0 }, nc: { imp: 0, iva: 0, lordo: 0, n: 0 }, co: { imp: 0, iva: 0, lordo: 0, n: 0 } };
+  const htmlEnt = { fe: '', nc: '', co: '' };
   for (const item of entrate) {
     const b = calcEntrataBreakdown(item);
     const q = getTrimestre(item.data);
-    const p = item.tipo === 'Fattura' ? 'fe' : 'co';
+    const p = item.tipo === 'Fattura' ? (item.nc ? 'nc' : 'fe') : 'co';
     /* Il ricavo è quello davvero incassato al netto dell'IVA: se una fattura ha
        uno sconto fatto sul totale (dopo l'IVA), l'IVA resta quella scritta in
        fattura e lo sconto è un minor ricavo. */
@@ -1587,7 +1595,7 @@ function renderAll() {
       <td class="py-3 px-4 whitespace-nowrap text-slate-600">${fmtData(item.data)}</td>
       <td class="py-3 px-4 font-semibold text-slate-500">Q${q}</td>
       <td class="py-3 px-4 font-medium text-slate-900 min-w-[200px]">${esc(item.desc)}${item.xml ? badgeXml('entrata:' + item.id, item) : ''}${item.registro ? badgeRegistro(item) : ''}</td>
-      ${p === 'fe' ? `<td class="py-3 px-4">${REGIME[item.regime] || esc(item.regime)}</td>` : ''}
+      ${p !== 'co' ? `<td class="py-3 px-4">${REGIME[item.regime] || esc(item.regime)}</td>` : ''}
       <td class="py-3 px-4 text-right font-bold text-slate-900 whitespace-nowrap">${fmtEuro(b.totale)}</td>
       <td class="py-3 px-4 text-right font-semibold text-slate-700 whitespace-nowrap">${fmtEuro(b.imponibile)}</td>
       <td class="py-3 px-4 text-right text-rose-600 whitespace-nowrap">${fmtEuro(b.iva)}</td>
@@ -1600,6 +1608,9 @@ function renderAll() {
   $('count-fe').textContent = tot.fe.n;
   $('tot-fe-imp').textContent = fmtEuro(tot.fe.imp);
   $('tot-fe-iva').textContent = fmtEuro(tot.fe.iva);
+  $('tbody-notecredito').innerHTML = htmlEnt.nc || vuota(8, `Nessuna nota di credito emessa nel ${anno}.`);
+  $('count-nc').textContent = tot.nc.n;
+  for (const [id, v] of [['tot-nc-lordo', tot.nc.lordo], ['tot-nc-imp', tot.nc.imp], ['tot-nc-iva', tot.nc.iva]]) $(id).textContent = fmtEuro(cent(v));
   disegnaControlloRegistro(anno);
   $('tbody-corrispettivi').innerHTML = htmlEnt.co || vuota(7, `Nessun corrispettivo nel ${anno}. Registra gli incassi del registratore telematico.`);
   $('tot-co-lordo').textContent = fmtEuro(tot.co.lordo);
@@ -2138,7 +2149,8 @@ if (DESKTOP && window.gestionale.onMenu) {
    (più parole: devono esserci tutte) e conta i risultati negli altri anni.
    Ctrl+F porta alla barra del tab aperto, Esc la svuota. */
 const RICERCHE = [
-  { tbody: 'tbody-fatture', tipo: 'entrata', voci: () => appState.entrate.filter((x) => x.tipo === 'Fattura'), ph: 'Cerca cliente, numero, data o importo…' },
+  { tbody: 'tbody-fatture', tipo: 'entrata', voci: () => appState.entrate.filter((x) => x.tipo === 'Fattura' && !x.nc), ph: 'Cerca cliente, numero, data o importo…' },
+  { tbody: 'tbody-notecredito', tipo: 'entrata', voci: () => appState.entrate.filter((x) => x.tipo === 'Fattura' && x.nc), ph: 'Cerca cliente, numero, data o importo…' },
   { tbody: 'tbody-corrispettivi', tipo: 'entrata', voci: () => appState.entrate.filter((x) => x.tipo !== 'Fattura'), ph: 'Cerca mese, data o importo…' },
   { tbody: 'tbody-fornitori', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'fornitori'), ph: 'Cerca fornitore, numero, data o importo…' },
   { tbody: 'tbody-estero', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'estero'), ph: 'Cerca fornitore, numero, data o importo…' },
@@ -2203,7 +2215,7 @@ function installaRicerche() {
 /* Ordine per data delle tabelle: cliccando l'intestazione «Data» si passa
    dalla meno recente alla più recente e viceversa. La scelta resta salvata
    (per tabella) su questo computer. */
-const TABELLE_DATA = ['tbody-fatture', 'tbody-corrispettivi', 'tbody-fornitori', 'tbody-estero', 'tbody-acquisti', 'tbody-polizze', 'tbody-scalare', 'tbody-carta', 'tbody-parcelle', 'tbody-banca'];
+const TABELLE_DATA = ['tbody-fatture', 'tbody-notecredito', 'tbody-corrispettivi', 'tbody-fornitori', 'tbody-estero', 'tbody-acquisti', 'tbody-polizze', 'tbody-scalare', 'tbody-carta', 'tbody-parcelle', 'tbody-banca'];
 let ordineDate = {};
 try { ordineDate = JSON.parse(localStorage.getItem('ordineDate') || '{}') || {}; } catch (_) { ordineDate = {}; }
 function dataDiVoce(rif) {
@@ -2324,11 +2336,12 @@ function disegnaRiquadri(r, lista, filtrata) {
   if (r.riquadri) { box.innerHTML = r.riquadri(lista, filtrata); return; }
   const t = sommeVoci(r.tipo, lista);
   const corr = r.tbody === 'tbody-corrispettivi';
-  const quante = corr ? (t.n === 1 ? 'registrazione' : 'registrazioni') : r.tipo === 'parcella' ? (t.n === 1 ? 'parcella' : 'parcelle') : (t.n === 1 ? 'fattura' : 'fatture');
+  const quante = corr ? (t.n === 1 ? 'registrazione' : 'registrazioni') : r.tbody === 'tbody-notecredito' ? (t.n === 1 ? 'nota di credito' : 'note di credito') : r.tipo === 'parcella' ? (t.n === 1 ? 'parcella' : 'parcelle') : (t.n === 1 ? 'fattura' : 'fatture');
   const dove = filtrata ? ' · solo i risultati della ricerca' : ` nel ${appState.anno}`;
   let subTot = `${t.n} ${quante}${dove}`;
   let titIva = 'IVA', colIva = 'text-slate-900', subIva = '', subImp = 'Senza IVA';
-  if (r.tipo === 'entrata') { titIva = 'IVA a debito'; colIva = 'text-rose-600'; subIva = 'Da versare con la liquidazione'; }
+  if (r.tbody === 'tbody-notecredito') { titIva = 'IVA a debito stornata'; colIva = 'text-emerald-700'; subIva = 'Si toglie dall\'IVA da versare'; subImp = 'Ricavi senza IVA stornati'; }
+  else if (r.tipo === 'entrata') { titIva = 'IVA a debito'; colIva = 'text-rose-600'; subIva = 'Da versare con la liquidazione'; }
   else if (r.tipo === 'acquisto') {
     titIva = 'IVA delle fatture';
     subIva = `Detraibile <strong class="text-emerald-700">${fmtEuro(t.det)}</strong>` + (t.rc ? ` · reverse charge ${fmtEuro(t.rc)}` : '');
@@ -4059,7 +4072,7 @@ function speseDaBanca(anno) {
   const importiPagati = (a) => [Math.round(totaleSpesa(a) * 100), ...(a.totaleDoc != null ? [Math.round(+a.totaleDoc * 100)] : [])];
   const giaRegistrata = (m, giorni, sezioni) => appState.acquisti.some((a) => a.sezione !== 'carta' && (!sezioni || sezioni.includes(a.sezione))
     && importiPagati(a).includes(-m.c) && giorniTra(a.data, m.data) <= giorni);
-  const proposte = [], controllare = [];
+  const proposte = [], controllare = [], annoPrima = [];
   const perMese = new Map();
   for (const m of movBanca()) {
     if (annoDi(m.data) !== anno || m.c >= 0 || collegati.has(m.id)) continue;
@@ -4090,6 +4103,9 @@ function speseDaBanca(anno) {
       else if (/POLIZZA|ASSICUR/.test(t)) nota = nominaSocio(t) ? 'Polizza intestata a un socio: se è personale non è un costo della società.' : 'Polizza: se è dell\'attività, registrala nel tab Polizze.';
       else if (/RIMBORSO/.test(t)) nota = 'Rimborso a un cliente: non è una spesa, riduce l\'incasso.';
       else if (/AMAZON/.test(t)) nota = 'Acquisto Amazon: registra la fattura (si scarica dall\'account Amazon).';
+      /* a gennaio le uscite senza spesa dell'anno pagano quasi sempre fatture di dicembre
+         o dell'anno prima: sono costi di quell'anno, non di questo */
+      if (m.data.slice(5, 7) === '01') { annoPrima.push({ m, nota: `Pagamento di inizio anno: quasi certamente una fattura di dicembre ${anno - 1} o comunque del ${anno - 1}, che è un costo di quell'anno e non del ${anno}.` }); continue; }
       controllare.push({ m, nota });
     }
   }
@@ -4101,7 +4117,7 @@ function speseDaBanca(anno) {
   }
   proposte.sort((a, b) => a.data.localeCompare(b.data));
   proposte.forEach((p) => { p.k = p.ids.join('-'); });
-  return { proposte, controllare };
+  return { proposte, controllare, annoPrima };
 }
 
 /* Le fatture registrate prima della 2.21.2 non hanno il totale del documento:
@@ -4249,10 +4265,10 @@ function disegnaBanca() {
       </tbody></table></div>`;
 
   // spese trovate nel conto e non registrate
-  const { proposte, controllare } = speseDaBanca(anno);
+  const { proposte, controllare, annoPrima } = speseDaBanca(anno);
   const totProp = proposte.reduce((t, p) => t + p.c, 0);
-  $('banca-spese').classList.toggle('hidden', !proposte.length && !controllare.length);
-  $('banca-spese').innerHTML = !proposte.length && !controllare.length ? '' : `<div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+  $('banca-spese').classList.toggle('hidden', !proposte.length && !controllare.length && !annoPrima.length);
+  $('banca-spese').innerHTML = !proposte.length && !controllare.length && !annoPrima.length ? '' : `<div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
       <div><h3 class="text-base font-bold text-slate-900">Spese nel conto non ancora registrate (${anno})</h3>
       <p class="text-xs text-slate-500">Costi deducibili che passano dal conto ma non sono in nessun tab: registrandoli abbassano l'utile e quindi le imposte. Commissioni e bolli del conto sono sommati mese per mese.</p></div>
       ${proposte.length ? `<button type="button" data-action="banca-registra" data-k="" class="shrink-0 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition">Registra tutte (${eu(totProp)})</button>` : ''}
@@ -4266,7 +4282,9 @@ function disegnaBanca() {
         <td class="py-2 text-right"><button type="button" data-action="banca-registra" data-k="${esc(p.k)}" class="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold hover:bg-emerald-100">Registra</button></td></tr>`).join('')}
       </tbody></table></div>` : ''}
     ${controllare.length ? `<details class="mt-4"><summary class="cursor-pointer text-sm font-semibold text-amber-800">Da controllare: ${controllare.length} ${controllare.length === 1 ? 'uscita' : 'uscite'} senza una spesa registrata con lo stesso importo</summary>
-      <ul class="mt-2 space-y-1.5 text-xs">${controllare.map(({ m, nota }) => `<li class="p-2 rounded-lg bg-amber-50/60 border border-amber-100"><span class="font-semibold">${fmtData(m.data)} · ${eu(-m.c)}</span> · ${esc(m.descrizione.slice(0, 140))}<span class="block text-amber-900 mt-0.5">${esc(nota)}</span></li>`).join('')}</ul></details>` : ''}`;
+      <ul class="mt-2 space-y-1.5 text-xs">${controllare.map(({ m, nota }) => `<li class="p-2 rounded-lg bg-amber-50/60 border border-amber-100"><span class="font-semibold">${fmtData(m.data)} · ${eu(-m.c)}</span> · ${esc(m.descrizione.slice(0, 140))}<span class="block text-amber-900 mt-0.5">${esc(nota)}</span></li>`).join('')}</ul></details>` : ''}
+    ${annoPrima.length ? `<details class="mt-3"><summary class="cursor-pointer text-sm font-semibold text-slate-600">Pagamenti di gennaio per fatture del ${anno - 1}: ${annoPrima.length} ${annoPrima.length === 1 ? 'uscita' : 'uscite'} (${eu(-annoPrima.reduce((t, x) => t + x.m.c, 0))}), non sono costi del ${anno}</summary>
+      <ul class="mt-2 space-y-1.5 text-xs">${annoPrima.map(({ m, nota }) => `<li class="p-2 rounded-lg bg-slate-50 border border-slate-200"><span class="font-semibold">${fmtData(m.data)} · ${eu(-m.c)}</span> · ${esc(m.descrizione.slice(0, 140))}<span class="block text-slate-600 mt-0.5">${esc(nota)}</span></li>`).join('')}</ul></details>` : ''}`;
 
   // file caricati e controllo dei saldi
   const docs = appState.banca.documenti.slice().sort((a, b) => (a.dal || '').localeCompare(b.dal || ''));

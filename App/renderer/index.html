@@ -238,19 +238,20 @@
       <nav class="flex gap-1 sm:gap-2 border-t border-slate-800/80 pt-2" aria-label="Sezioni">
         <button data-tab="dashboard" class="tab-btn">1. Dashboard &amp; Riepilogo</button>
         <button data-tab="fatture" class="tab-btn">2. Fatture Emesse</button>
-        <button data-tab="corrispettivi" class="tab-btn">3. Corrispettivi</button>
-        <button data-tab="fornitori" class="tab-btn">4. Fatture Ricevute Fornitori</button>
-        <button data-tab="estero" class="tab-btn">5. Autofatture/Fatture Estere</button>
-        <button data-tab="acquisti" class="tab-btn">6. Abbonamenti/Acquisti/Spese</button>
-        <button data-tab="polizze" class="tab-btn">7. Polizze/Assicurazioni</button>
-        <button data-tab="banca" class="tab-btn">8. Estratto Conto Bancario</button>
-        <button data-tab="scalare" class="tab-btn">9. Estratto Conto Scalare</button>
-        <button data-tab="carta" class="tab-btn">10. Carta Business</button>
-        <button data-tab="commercialista" class="tab-btn">11. Commercialista</button>
-        <button data-tab="iva" class="tab-btn">12. Liquidazione IVA (LIPE)</button>
-        <button data-tab="societa" class="tab-btn">13. Imposte Società (IRAP &amp; INAIL)</button>
-        <button data-tab="imposte" class="tab-btn">14. Imposte Soci &amp; INPS</button>
-        <button data-tab="guida" class="tab-btn">15. Guida &amp; Adempimenti</button>
+        <button data-tab="notecredito" class="tab-btn">3. Note di Credito Emesse</button>
+        <button data-tab="corrispettivi" class="tab-btn">4. Corrispettivi</button>
+        <button data-tab="fornitori" class="tab-btn">5. Fatture Ricevute Fornitori</button>
+        <button data-tab="estero" class="tab-btn">6. Autofatture/Fatture Estere</button>
+        <button data-tab="acquisti" class="tab-btn">7. Abbonamenti/Acquisti/Spese</button>
+        <button data-tab="polizze" class="tab-btn">8. Polizze/Assicurazioni</button>
+        <button data-tab="banca" class="tab-btn">9. Estratto Conto Bancario</button>
+        <button data-tab="scalare" class="tab-btn">10. Estratto Conto Scalare</button>
+        <button data-tab="carta" class="tab-btn">11. Carta Business</button>
+        <button data-tab="commercialista" class="tab-btn">12. Commercialista</button>
+        <button data-tab="iva" class="tab-btn">13. Liquidazione IVA (LIPE)</button>
+        <button data-tab="societa" class="tab-btn">14. Imposte Società (IRAP &amp; INAIL)</button>
+        <button data-tab="imposte" class="tab-btn">15. Imposte Soci &amp; INPS</button>
+        <button data-tab="guida" class="tab-btn">16. Guida &amp; Adempimenti</button>
       </nav>
     </div>
   </header>
@@ -416,6 +417,67 @@
               </tr>
             </thead>
             <tbody id="tbody-fatture" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: NOTE DI CREDITO EMESSE -->
+    <section id="tab-notecredito" class="tab-content hidden space-y-6">
+      <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <p class="text-xs sm:text-sm text-amber-900"><strong>Hai l'XML della nota di credito?</strong> Importalo (o trascinalo qui sopra): le note di credito emesse (TD04 e TD08) finiscono in questo tab con imponibile e IVA già in negativo. Riducono i ricavi e l'IVA a debito del trimestre in cui le emetti.</p>
+        <button data-action="import-xml" data-contesto="notecredito" class="shrink-0 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-semibold transition">⇪ Importa XML / P7M / ZIP</button>
+      </div>
+      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">Registra nota di credito emessa</h2>
+          <p class="text-xs text-slate-500">Scrivi il totale della nota di credito IVA inclusa, senza il segno meno: l'app lo toglie dai ricavi e dall'IVA a debito.</p>
+        </div>
+        <form id="form-notecredito" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
+          <label class="block text-xs font-semibold text-slate-700">Data nota di credito
+            <input type="date" id="nc-data" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Numero, cliente e fattura stornata
+            <input type="text" id="nc-desc" placeholder="Es. Nota di credito n. 2 - Rossi Mario (storno fatt. n. 12)" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <label class="block lg:col-span-2 text-xs font-semibold text-slate-700">Regime IVA della fattura stornata
+            <select id="nc-regime" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+              <option value="IT_22">Italia / privato UE (IVA 22%)</option>
+              <option value="CH_ART8">Esportazione Svizzera / extra-UE (art. 8 - 0%)</option>
+              <option value="UE_ART41">Cessione a impresa UE VIES (art. 41 - 0%)</option>
+            </select>
+          </label>
+          <label class="block text-xs font-semibold text-slate-700">Totale nota (€ IVA incl.)
+            <input type="number" step="0.01" min="0" id="nc-totale" placeholder="0.00" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+          </label>
+          <div class="sm:col-span-2 lg:col-span-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
+            <div id="nc-preview" class="text-xs text-slate-600"></div>
+            <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-xs transition">+ Aggiungi nota di credito</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Note di credito emesse <span data-anno></span></h3>
+            <p class="text-xs text-slate-500">Note di credito nell'anno: <strong id="count-nc">0</strong> · totale <strong id="tot-nc-lordo">0,00 €</strong></p>
+          </div>
+          <div class="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+            Ricavi imponibili stornati: <span id="tot-nc-imp" class="text-slate-900">0,00 €</span> | IVA a debito stornata: <span id="tot-nc-iva" class="text-emerald-700">0,00 €</span>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Trim.</th>
+                <th class="py-3 px-4">Numero e cliente</th><th class="py-3 px-4">Regime</th>
+                <th class="py-3 px-4 text-right">Totale</th><th class="py-3 px-4 text-right">Imponibile</th>
+                <th class="py-3 px-4 text-right">IVA</th><th class="py-3 px-4 text-center">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-notecredito" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
           </table>
         </div>
       </div>

@@ -1922,7 +1922,7 @@ function renderAll() {
       (stimati ? riga(`Acconti del ${appState.anno} (dovuti in base al ${appState.anno - 1}):`, fmtEuro(accIrpef + accInps + accCom), 'text-slate-500')
         : accIrpef + accInps + accCom > 0
         ? riga(`Acconti già versati nel ${appState.anno}:`, fmtEuro(accIrpef + accInps + accCom), 'text-slate-500')
-        : riga(`Acconti versati nel ${appState.anno}:`, 'non inseriti', 'text-amber-700')) +
+        : riga(`Acconti versati nel ${appState.anno}:`, inseriti ? 'nessuno' : 'non inseriti', 'text-amber-700')) +
       (riporto > 0 ? riga(`Credito avanzato dal ${appState.anno - 1}:`, fmtEuro(riporto), 'text-emerald-700') : '') +
       riga(`Saldo IRPEF (giugno ${annoDopo}):`, importoSaldo(sIrpef), clsSaldo(sIrpef)) +
       (inpsEcc > 0 || accInps > 0 ? riga('Saldo INPS oltre il minimale:', importoSaldo(sInps), clsSaldo(sInps)) : '') +
@@ -2032,7 +2032,8 @@ function renderAll() {
       return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
         titoloInps(`IRAP: versamenti F24 per il ${appState.anno}`) +
         (stimato ? riga(`Acconti IRAP del ${appState.anno} (dovuti in base al ${appState.anno - 1}):`, fmtEuro(acc), 'text-slate-500')
-          : acc > 0 ? riga(`Acconti IRAP versati nel ${appState.anno}:`, fmtEuro(acc), 'text-slate-500') : riga(`Acconti IRAP versati nel ${appState.anno}:`, 'non inseriti', 'text-amber-700')) +
+          : acc > 0 ? riga(`Acconti IRAP versati nel ${appState.anno}:`, fmtEuro(acc), 'text-slate-500')
+          : riga(`Acconti IRAP versati nel ${appState.anno}:`, valIrap === '' || valIrap == null ? 'non inseriti' : 'nessuno', 'text-amber-700')) +
         (riporto > 0 ? riga(`Credito IRAP avanzato dal ${appState.anno - 1}:`, fmtEuro(riporto), 'text-emerald-700') : '') +
         riga(`Saldo IRAP (giugno ${annoDopo}):`, importoSaldo(saldo), clsSaldo(saldo)) +
         riga(`1° acconto IRAP ${annoDopo} (giugno):`, fmtEuro(irapAcc1)) +

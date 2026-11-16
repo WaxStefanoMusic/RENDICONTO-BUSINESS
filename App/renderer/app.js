@@ -594,12 +594,24 @@ function calcolaAddizionali(imponibile) {
   return { regionale, comunale: cent(comunale), esente, totale: cent(regionale + cent(comunale)) };
 }
 
+/* INPS commercianti anno per anno: contributo fisso annuo (con il contributo
+   maternità) e reddito minimale, ricavati dalle rate CF realmente pagate.
+   Gli anni che non sono qui usano i valori delle Impostazioni. */
+const INPS_ANNI = {
+  2024: { fisso: 4515.43, min: 18415 },
+  2025: { fisso: 4549.70, min: 18555 },
+  2026: { fisso: 4611.60, min: 18808 },
+};
+function inpsAnno(anno = appState.anno) {
+  const s = imp(), t = INPS_ANNI[anno];
+  return t ? { fisso: t.fisso, min: t.min, ufficiale: true } : { fisso: +s.inpsFisso || 0, min: +s.inpsMin || 0, ufficiale: false };
+}
+
 function calcolaInpsCommercianti(redditoQuota, attivo, ante96 = false) {
   const s = imp();
   const massimale = +(ante96 ? s.inpsMassVecchi : s.inpsMassNuovi) || Infinity;
   if (!attivo) return { fisso: 0, fascia1: 0, fascia2: 0, eccedenza: 0, totale: 0, massimale, oltreMassimale: false };
-  const fisso = +s.inpsFisso || 0;
-  const min = +s.inpsMin || 0;
+  const { fisso, min } = inpsAnno();
   const fascia = Math.max(min, +s.inpsFascia || Infinity);
   const base = Math.min(Math.max(0, redditoQuota), massimale);
   const fascia1 = Math.max(0, Math.min(base, fascia) - min) * ((+s.inpsAliq || 0) / 100);
@@ -1548,12 +1560,12 @@ function renderTesti() {
   document.querySelectorAll('[data-collab-nome]').forEach((el) => { el.textContent = s.collabNome || 'Collaboratore familiare'; });
   document.querySelectorAll('[data-s1-quota]').forEach((el) => { el.textContent = fmtPct(quotaS1()); });
   document.querySelectorAll('[data-s2-quota]').forEach((el) => { el.textContent = fmtPct(quotaS2()); });
-  $('txt-inps-s1').textContent = `Socio amministratore che lavora in negozio. Contributo fisso sul minimale (~${fmtEuro(s.inpsFisso)}/anno) + ${fmtPct(s.inpsAliq)} sul reddito da ${fmtEuro(s.inpsMin)} a ${fmtEuro(s.inpsFascia)}, ${fmtPct(s.inpsAliq2)} oltre, fino al massimale.`;
+  $('txt-inps-s1').textContent = `Socio amministratore che lavora in negozio. Contributo fisso sul minimale (${fmtEuro(inpsAnno().fisso)} nel ${anno}) + ${fmtPct(s.inpsAliq)} sul reddito da ${fmtEuro(inpsAnno().min)} a ${fmtEuro(s.inpsFascia)}, ${fmtPct(s.inpsAliq2)} oltre, fino al massimale.`;
   for (const k of ['s1', 's2']) $('txt-inail-' + k).textContent = +inailAnno()[k] > 0
     ? `Solo per il ${anno}: ogni anno ha il suo premio.`
     : `Nessun premio INAIL nel ${anno} (lascia vuoto se il socio non è più assicurato).`;
   for (const k of ['s1', 's2']) $('txt-mass-' + k).textContent = `Massimale ${fmtEuro(appState.inpsAnte96[k] ? s.inpsMassVecchi : s.inpsMassNuovi)}: oltre non si paga INPS.`;
-  $('txt-inps-collab').textContent = `Nessuno stipendio. Se attivo, conta i contributi INPS minimali (~${fmtEuro(s.inpsFisso)}/anno), pagati da ${s.s1Nome}.`;
+  $('txt-inps-collab').textContent = `Nessuno stipendio. Se attivo, conta i contributi INPS minimali (${fmtEuro(inpsAnno().fisso)} nel ${anno}), pagati da ${s.s1Nome}.`;
   $('lbl-socio2-inps').textContent = appState.socio2Inps ? 'INPS attivo' : 'Non attivo';
   $('lbl-collab-inps').textContent = appState.collabInps ? 'INPS attivo' : 'Cessato';
 
@@ -1840,7 +1852,7 @@ function renderAll() {
   const [q1, q2] = dividi(utileSnc);
   const inpsS1 = calcolaInpsCommercianti(q1, true, appState.inpsAnte96.s1);
   const inpsS2 = calcolaInpsCommercianti(q2, appState.socio2Inps, appState.inpsAnte96.s2);
-  const inpsCollab = appState.collabInps ? (+s.inpsFisso || 0) : 0;   // a carico del socio titolare
+  const inpsCollab = appState.collabInps ? inpsAnno().fisso : 0;   // a carico del socio titolare
 
   const impIrpefS1 = cent(Math.max(0, q1 - inpsS1.totale - (appState.collabDeduci ? inpsCollab : 0)));
   const detrS1 = detrazioniSocio('s1').importo, detrS2 = detrazioniSocio('s2').importo;
@@ -1961,7 +1973,7 @@ function renderAll() {
   const righeInps = (x, nome) => !x.totale ? riga(`INPS di ${esc(nome)}:`, 'non dovuto', 'text-slate-500') :
     titoloInps(`INPS di ${nome}`) +
     riga('INPS contributo fisso (minimale):', '- ' + fmtEuro(x.fisso), 'font-semibold text-rose-600') +
-    (x.fascia1 > 0 ? riga(`INPS ${fmtPct(s.inpsAliq)} da ${fmtEuro(s.inpsMin)} a ${fmtEuro(s.inpsFascia)}:`, '- ' + fmtEuro(x.fascia1), 'font-semibold text-rose-600') : '') +
+    (x.fascia1 > 0 ? riga(`INPS ${fmtPct(s.inpsAliq)} da ${fmtEuro(inpsAnno().min)} a ${fmtEuro(s.inpsFascia)}:`, '- ' + fmtEuro(x.fascia1), 'font-semibold text-rose-600') : '') +
     (x.fascia2 > 0 ? riga(`INPS ${fmtPct(s.inpsAliq2)} oltre ${fmtEuro(s.inpsFascia)}:`, '- ' + fmtEuro(x.fascia2), 'font-semibold text-rose-600') : '') +
     (x.oltreMassimale ? riga(`Oltre il massimale (${fmtEuro(x.massimale)}):`, 'niente INPS', 'font-semibold text-emerald-700') : '') +
     riga(`Totale INPS di ${esc(nome)}:`, '- ' + fmtEuro(x.totale), 'font-bold text-rose-700', 'pt-1 border-t border-slate-100');

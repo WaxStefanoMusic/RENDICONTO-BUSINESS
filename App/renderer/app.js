@@ -888,6 +888,9 @@ const DESTINAZIONI = {
 const pulisciPiva = (s) => String(s || '').toUpperCase().replace(/^IT/, '').replace(/[^0-9A-Z]/g, '');
 const chiaveFattura = (f) => `${pulisciPiva(f.cedente.piva || f.cedente.cf)}|${String(f.numero).trim().toUpperCase()}|${f.data}`;
 const NOTE_CREDITO = new Set(['TD04', 'TD08']);
+// nelle autofatture e integrazioni il totale comprende l'IVA integrata, che al fornitore non si paga
+const AUTOFATTURE = new Set(['TD16', 'TD17', 'TD18', 'TD19', 'TD20', 'TD21', 'TD22', 'TD23', 'TD27', 'TD28']);
+const totalePagato = (tipoDoc, totale) => (AUTOFATTURE.has(tipoDoc) ? null : totale);
 const TIPI_DOC = {
   TD01: 'Fattura', TD02: 'Acconto', TD03: 'Acconto/parcella', TD04: 'Nota di credito', TD05: 'Nota di debito',
   TD06: 'Parcella', TD16: 'Integrazione RC interno', TD17: 'Autofattura servizi estero', TD18: 'Autofattura beni UE',
@@ -1087,6 +1090,7 @@ async function confermaImport() {
         provenienza: r.provenienza, categoria: r.categoria,
         imponibile: s * f.imponibile, iva: rc ? 0 : s * f.iva,
         sezione: r.dest, xml: r.chiave, cp, ...fileXml,
+        totaleDoc: totalePagato(f.tipoDoc, s * f.totale),   // il totale scritto nella fattura: è quello che si paga (può avere arrotondamenti)
         ...(r.dest === 'polizze' ? { compagnia: f.cedente.nome, dal: (f.periodo && f.periodo.dal) || '', al: (f.periodo && f.periodo.al) || '', categoria: catPolizza(r.categoria), iva: 0 } : {}),
         ...(r.dest === 'fornitori' && r.provenienza !== 'IT' ? { sezioneManuale: true } : {}),
         // se un giorno la si sposta tra le parcelle, servono cassa e spese esenti
@@ -2432,7 +2436,7 @@ function importiDi(tipo, x) {
 function convertiVoce(tipo, x, dest, opz = {}) {
   const cp = controparteDi(tipo, x);
   const base = { id: x.id, data: x.data, desc: x.desc };
-  for (const k of ['xml', 'xmlFile', 'xmlCorpo', 'xmlTesto', 'allegato', 'prof']) if (x[k] != null) base[k] = x[k];
+  for (const k of ['xml', 'xmlFile', 'xmlCorpo', 'xmlTesto', 'allegato', 'prof', 'totaleDoc']) if (x[k] != null) base[k] = x[k];
   if (cp) base.cp = cp;
   // i dati del professionista restano da parte, per un eventuale ritorno
   if (tipo === 'parcella') {
@@ -4050,8 +4054,10 @@ const giorniTra = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 86400000;
 function speseDaBanca(anno) {
   const collegati = new Set(appState.acquisti.flatMap((a) => Array.isArray(a.banca) ? a.banca : []));
   const totaleSpesa = (a) => cent((+a.imponibile || 0) + (+a.iva || 0));
+  // l'importo pagato può essere imponibile + IVA oppure il totale scritto nella fattura (che a volte ha un arrotondamento)
+  const importiPagati = (a) => [Math.round(totaleSpesa(a) * 100), ...(a.totaleDoc != null ? [Math.round(+a.totaleDoc * 100)] : [])];
   const giaRegistrata = (m, giorni, sezioni) => appState.acquisti.some((a) => a.sezione !== 'carta' && (!sezioni || sezioni.includes(a.sezione))
-    && Math.round(totaleSpesa(a) * 100) === -m.c && giorniTra(a.data, m.data) <= giorni);
+    && importiPagati(a).includes(-m.c) && giorniTra(a.data, m.data) <= giorni);
   const proposte = [], controllare = [];
   const perMese = new Map();
   for (const m of movBanca()) {
@@ -4095,6 +4101,28 @@ function speseDaBanca(anno) {
   proposte.sort((a, b) => a.data.localeCompare(b.data));
   proposte.forEach((p) => { p.k = p.ids.join('-'); });
   return { proposte, controllare };
+}
+
+/* Le fatture registrate prima della 2.21.2 non hanno il totale del documento:
+   si legge una volta sola dal loro file XML */
+async function completaTotaliXml() {
+  let n = 0;
+  for (const a of appState.acquisti) {
+    if (!a.xml || a.totaleDoc !== undefined) continue;   // null = già letto, autofattura
+    try {
+      let testo = a.xmlTesto || null;
+      if (!testo && a.xmlFile && DESKTOP) {
+        const r = await window.gestionale.leggiAllegato(a.xmlFile);
+        if (r && r.ok) testo = window.FatturaPA.testoXml(new Uint8Array(r.bytes));
+      }
+      if (!testo) continue;
+      const d = window.FatturaPA.dettaglio(testo, a.xmlCorpo || 0);
+      if (d.totale == null) { a.totaleDoc = null; n++; continue; }
+      a.totaleDoc = totalePagato(d.tipoDoc, (NOTE_CREDITO.has(d.tipoDoc) ? -1 : 1) * d.totale); n++;
+    } catch (e) { /* file mancante o illeggibile: resta il confronto con imponibile + IVA */ }
+  }
+  if (n) { saveState(); renderAll(); }
+  return n;
 }
 
 const TAB_DI_SEZIONE = { spese: 'Abbonamenti/Acquisti/Spese', scalare: 'Estratto Conto Scalare' };
@@ -4330,4 +4358,5 @@ $('banca-input').addEventListener('change', (e) => {
   try { tab = sessionStorage.getItem('tab') || tab; } catch (_) {}
   switchTab($('tab-' + tab) ? tab : 'dashboard');
   if (!imp().configurate) openSettings();
+  completaTotaliXml();
 })();

@@ -243,13 +243,14 @@
         <button data-tab="estero" class="tab-btn">5. Autofatture/Fatture Estere</button>
         <button data-tab="acquisti" class="tab-btn">6. Abbonamenti/Acquisti/Spese</button>
         <button data-tab="polizze" class="tab-btn">7. Polizze/Assicurazioni</button>
-        <button data-tab="scalare" class="tab-btn">8. Estratto Conto Scalare</button>
-        <button data-tab="carta" class="tab-btn">9. Carta Business</button>
-        <button data-tab="commercialista" class="tab-btn">10. Commercialista</button>
-        <button data-tab="iva" class="tab-btn">11. Liquidazione IVA (LIPE)</button>
-        <button data-tab="societa" class="tab-btn">12. Imposte Società (IRAP &amp; INAIL)</button>
-        <button data-tab="imposte" class="tab-btn">13. Imposte Soci &amp; INPS</button>
-        <button data-tab="guida" class="tab-btn">14. Guida &amp; Adempimenti</button>
+        <button data-tab="banca" class="tab-btn">8. Estratto Conto Bancario</button>
+        <button data-tab="scalare" class="tab-btn">9. Estratto Conto Scalare</button>
+        <button data-tab="carta" class="tab-btn">10. Carta Business</button>
+        <button data-tab="commercialista" class="tab-btn">11. Commercialista</button>
+        <button data-tab="iva" class="tab-btn">12. Liquidazione IVA (LIPE)</button>
+        <button data-tab="societa" class="tab-btn">13. Imposte Società (IRAP &amp; INAIL)</button>
+        <button data-tab="imposte" class="tab-btn">14. Imposte Soci &amp; INPS</button>
+        <button data-tab="guida" class="tab-btn">15. Guida &amp; Adempimenti</button>
       </nav>
     </div>
   </header>
@@ -743,6 +744,43 @@
     </section>
 
     <!-- TAB 8: ESTRATTO CONTO SCALARE -->
+    <section id="tab-banca" class="tab-content hidden space-y-6">
+      <div class="no-print rounded-2xl border border-dashed border-emerald-300 bg-emerald-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <p class="text-xs sm:text-sm text-emerald-900"><strong>Carica gli estratti conto della società</strong> (PDF, anche più file insieme o dentro uno ZIP): l'estratto conto mensile e la <strong>lista movimenti</strong> scaricata dall'home banking. I movimenti presenti in più file si contano una volta sola e ogni saldo scritto dalla banca viene controllato al centesimo. Puoi anche trascinare i PDF qui sopra.</p>
+        <button data-action="import-banca" class="shrink-0 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition">📄 Carica estratti conto</button>
+      </div>
+
+      <div id="banca-pieno" class="hidden space-y-6">
+        <div id="banca-situazione" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+        <div id="banca-futuri" class="hidden bg-white p-5 rounded-2xl border border-slate-200 shadow-xs"></div>
+        <div id="banca-spese" class="hidden bg-white p-5 rounded-2xl border border-emerald-200 shadow-xs"></div>
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div id="banca-categorie" class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs"></div>
+          <div id="banca-mesi" class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs"></div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200">
+          <h3 class="text-base font-bold text-slate-900">Movimenti del conto nel <span data-anno></span></h3>
+          <p class="text-xs text-slate-500">Data contabile (sotto, se diversa, la data valuta). Il saldo è quello dopo ogni movimento.</p>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                <th class="py-3 px-4">Data</th><th class="py-3 px-4">Descrizione</th>
+                <th class="py-3 px-4 text-right">Entrate</th><th class="py-3 px-4 text-right">Uscite</th><th class="py-3 px-4 text-right">Saldo</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-banca" class="divide-y divide-slate-100 text-xs sm:text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="banca-controlli" class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs"></div>
+    </section>
+
     <section id="tab-scalare" class="tab-content hidden space-y-6">
       <div class="no-print rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <p class="text-xs sm:text-sm text-amber-900"><strong>Carica il PDF dell'estratto conto scalare</strong> (il conteggio delle competenze del conto, anche dentro uno ZIP): l'app divide gli <strong>oneri del fido, le commissioni e le spese</strong>, addebitati subito, dagli <strong>interessi passivi dell'anno</strong>, che la banca addebita il 1° marzo dell'anno dopo. Ognuno conta come costo nell'anno in cui viene addebitato. Puoi anche trascinare il PDF qui sopra.</p>
@@ -1313,6 +1351,7 @@
   <input type="file" id="restore-input" accept="application/json,.json" hidden />
   <input type="file" id="pdf-input" accept=".pdf,application/pdf" multiple hidden />
   <input type="file" id="scalare-input" accept=".pdf,.zip,application/pdf,application/zip" multiple hidden />
+  <input type="file" id="banca-input" accept=".pdf,.zip,application/pdf,application/zip" multiple hidden />
   <input type="file" id="carta-input" accept=".pdf,.zip,.xlsx,.xlsm,.xls,.csv,.txt,application/pdf,application/zip,text/csv" multiple hidden />
   <input type="file" id="po-pdf-input" accept=".pdf,.zip,application/pdf,application/zip" multiple hidden />
   <script src="fatturapa.js"></script>
@@ -1320,6 +1359,7 @@
   <script src="polizze-pdf.js"></script>
   <script src="carta-estratto.js"></script>
   <script src="scalare-pdf.js"></script>
+  <script src="banca-pdf.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

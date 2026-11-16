@@ -87,6 +87,7 @@ const STATO_VUOTO = () => ({
   cartaEstratti: [],           // estratti conto della carta caricati: periodo, saldi, PDF
   cartaCategorie: {},          // esercente -> tipo di spesa scelto a mano, per i prossimi estratti
   scalari: [],                 // estratti conto scalari caricati: fido, tasso, interessi, oneri, saldo
+  banca: { documenti: [], movimenti: [] },   // conto corrente: PDF caricati e movimenti (importi in centesimi, campo c)
 });
 
 /* Le spese registrate prima della divisione in due tab non sapevano dove
@@ -156,6 +157,10 @@ function normalizza(s) {
   if (typeof st.registroRiepiloghi !== 'object' || st.registroRiepiloghi === null || Array.isArray(st.registroRiepiloghi)) st.registroRiepiloghi = {};
   st.cartaEstratti = Array.isArray(st.cartaEstratti) ? st.cartaEstratti : [];
   st.scalari = Array.isArray(st.scalari) ? st.scalari : [];
+  st.banca = {
+    documenti: Array.isArray(st.banca?.documenti) ? st.banca.documenti : [],
+    movimenti: Array.isArray(st.banca?.movimenti) ? st.banca.movimenti.filter((m) => m && m.data && Number.isInteger(m.c)).map((m) => ({ ...m, fonti: Array.isArray(m.fonti) ? m.fonti : [] })) : [],
+  };
   st.inpsAnte96 = { s1: !!st.inpsAnte96?.s1, s2: !!st.inpsAnte96?.s2 };
   st.inpsS2DaS1 = !!st.inpsS2DaS1;
   if (typeof st.inail !== 'object' || st.inail === null || Array.isArray(st.inail)) st.inail = {};
@@ -446,6 +451,13 @@ document.addEventListener('click', (e) => {
     case 'close-carta': chiudiEstrattoCarta(); break;
     case 'conferma-carta': confermaEstrattoCarta(); break;
     case 'import-scalare': $('scalare-input').click(); break;
+    case 'import-banca': $('banca-input').click(); break;
+    case 'banca-registra': {
+      const n = registraSpeseBanca(a.dataset.k ? [a.dataset.k] : null);
+      showToast(n ? (n === 1 ? 'Spesa registrata.' : `Registrate ${n} spese.`) + ' Le trovi nei tab Abbonamenti/Acquisti/Spese ed Estratto Conto Scalare.' : 'Niente da registrare.');
+      break;
+    }
+    case 'banca-togli-doc': togliDocumentoBanca(a.dataset.k); showToast('File tolto: i movimenti che c\'erano solo lì sono stati tolti.'); break;
     case 'close-scalare': chiudiPdfScalare(); break;
     case 'conferma-scalare': confermaPdfScalare(); break;
     case 'close-popdf': chiudiPdfPolizze(); break;
@@ -1123,6 +1135,7 @@ window.addEventListener('drop', (e) => {
   // nel tab Carta Business ogni file è un estratto conto
   if (attivo === 'carta') { if (tutti.length) apriEstrattoCarta(tutti); return; }
   if (attivo === 'scalare') { if (tutti.length) apriPdfScalare(tutti); return; }
+  if (attivo === 'banca') { if (tutti.length) apriPdfBanca(tutti); return; }
   // nel tab Polizze i PDF (anche dentro gli ZIP) sono ricevute e quietanze
   if (attivo === 'polizze') {
     const daLeggere = tutti.filter((f) => /\.(pdf|zip)$/i.test(f.name));
@@ -1423,6 +1436,10 @@ function syncControlsFromState() {
     const [k, campo] = el.dataset.fx.split('.');
     const v = campo ? fiscaleAnno()[k]?.[campo] : fiscaleAnno()[k];
     el.value = v == null || v === '' ? '' : v;
+    if (k === 'soc' && campo === 'ritenute') {
+      const rb = ritenuteBanca(appState.anno);
+      el.placeholder = rb > 0 ? `${fmtEuro(rb)} (dalla banca)` : '0,00';
+    }
     if (campo === 'detr') {
       const d = detrazioniSocio(k);
       el.placeholder = d.anno && d.anno !== appState.anno ? `${fmtEuro(d.importo)} (dal ${d.anno})` : '0,00';
@@ -1776,7 +1793,9 @@ function renderAll() {
   const redditoDich = dich.reddito === '' || dich.reddito == null ? null : +dich.reddito;
   const risultatoConti = cent(totRicaviImp - totCostiDeducibili);
   const risultato = redditoDich != null ? redditoDich : risultatoConti;
-  const ritenute = +dich.ritenute || 0;               // ritenute subite dalla società, divise tra i soci
+  /* ritenute subite dalla società, divise tra i soci: quelle della dichiarazione o,
+     finché non c'è, quelle trattenute dalla banca sui bonifici (tab Estratto conto bancario) */
+  const ritenute = dich.ritenute === '' || dich.ritenute == null ? ritenuteBanca(anno) : +dich.ritenute || 0;
   const dividi = (tot) => { const a = cent(tot * quotaS1() / 100); return [a, quotaS1() + quotaS2() === 100 ? cent(tot - a) : cent(tot * quotaS2() / 100)]; };
   const [ritS1, ritS2] = dividi(ritenute);
   const utileSnc = Math.max(0, risultato);
@@ -2089,6 +2108,7 @@ function renderAll() {
     irap: irapSocieta,
   });
   disegnaAvvisiPolizze();
+  disegnaBanca();
   ordinaPerData();
   applicaRicerche();
 }
@@ -2122,6 +2142,7 @@ const RICERCHE = [
   { tbody: 'tbody-scalare', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'scalare'), ph: 'Cerca interessi, oneri, data o importo…', riquadri: (lista, filtrata) => riquadriScalare(lista, filtrata), colonne: 'grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4' },
   { tbody: 'tbody-carta', tipo: 'acquisto', voci: () => appState.acquisti.filter((x) => x.sezione === 'carta'), ph: 'Cerca esercente, data o importo…', riquadri: (lista, filtrata) => riquadriCarta(lista, filtrata), colonne: 'grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4' },
   { tbody: 'tbody-parcelle', tipo: 'parcella', voci: () => appState.parcelle, ph: 'Cerca professionista, numero, data o importo…' },
+  { tbody: 'tbody-banca', tipo: 'banca', voci: () => appState.banca.movimenti, ph: 'Cerca descrizione, voce, data o importo…', riquadri: (lista, filtrata) => riquadriBanca(lista, filtrata) },
 ];
 const normTesto = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').toLowerCase();
 const importoTesti = (n) => {
@@ -2134,6 +2155,9 @@ function testoVoce(tipo, x) {
   const parti = [x.desc, fmtData(x.data), x.data, x.compagnia, x.numero, x.dal && fmtData(x.dal), x.al && fmtData(x.al)];
   const cp = controparteDi(tipo, x);
   if (cp) parti.push(cp.nome, cp.piva);
+  if (tipo === 'banca') {
+    return normTesto([x.descrizione, fmtData(x.data), x.data, x.valuta && fmtData(x.valuta), ...importoTesti(Math.abs(x.c) / 100), CATEGORIE_BANCA[categoriaBanca(x)].nome, x.c > 0 ? 'entrata' : 'uscita'].filter(Boolean).join(' | '));
+  }
   if (tipo === 'entrata') {
     const b = calcEntrataBreakdown(x);
     parti.push(...importoTesti(b.imponibile), ...importoTesti(b.iva), ...importoTesti(b.totale), NOMI_REGIME[x.regime]);
@@ -2174,12 +2198,12 @@ function installaRicerche() {
 /* Ordine per data delle tabelle: cliccando l'intestazione «Data» si passa
    dalla meno recente alla più recente e viceversa. La scelta resta salvata
    (per tabella) su questo computer. */
-const TABELLE_DATA = ['tbody-fatture', 'tbody-corrispettivi', 'tbody-fornitori', 'tbody-estero', 'tbody-acquisti', 'tbody-polizze', 'tbody-scalare', 'tbody-carta', 'tbody-parcelle'];
+const TABELLE_DATA = ['tbody-fatture', 'tbody-corrispettivi', 'tbody-fornitori', 'tbody-estero', 'tbody-acquisti', 'tbody-polizze', 'tbody-scalare', 'tbody-carta', 'tbody-parcelle', 'tbody-banca'];
 let ordineDate = {};
 try { ordineDate = JSON.parse(localStorage.getItem('ordineDate') || '{}') || {}; } catch (_) { ordineDate = {}; }
 function dataDiVoce(rif) {
   const [t, id] = String(rif).split(':');
-  const lista = t === 'entrata' ? appState.entrate : t === 'parcella' ? appState.parcelle : appState.acquisti;
+  const lista = t === 'entrata' ? appState.entrate : t === 'parcella' ? appState.parcelle : t === 'banca' ? appState.banca.movimenti : appState.acquisti;
   const x = lista.find((v) => String(v.id) === id);
   return x ? String(x.data || '') : '';
 }
@@ -2955,6 +2979,7 @@ function polizzeDaRinnovare() {
    con la data di ogni versamento (spostata al lunedì se cade nel fine
    settimana). Sopra l'IVA, poi un riquadro per la società e uno per socio,
    in fondo i totali per trimestre in base alla data di pagamento. */
+const pagamentiAnno = {};   // anno -> scadenze F24 calcolate (per il tab Estratto conto bancario)
 function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
   const anno = annoDopo - 1;
   const giorno = (a, m, g) => {
@@ -3054,6 +3079,7 @@ function disegnaVersamentiDash(v, annoDopo, s, iva, extra) {
         <th class="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-400">Totale</th></tr></thead>
       <tbody>${righe(rigaT, intestazione)}</tbody></table></div>`;
   };
+  pagamentiAnno[anno] = pagamenti;
   const voci = (chi) => [...new Set(pagamenti.filter((p) => p.chi === chi).map((p) => p.voce))];
   const tabSoc = tabella(pagamenti.filter((p) => p.chi === 'soc'), (rigaT) =>
     voci('soc').map((vo) => rigaT(vo, (p) => p.voce === vo, '', 'text-slate-700', vo === 'IVA')).join('') +
@@ -3932,6 +3958,351 @@ $('sc-form').addEventListener('submit', function (e) {
   $('sc-data').value = nuovo.data;
   renderAll();
   confermaRegistrazione(nuovo.data, 'Addebito del conto registrato.', 'sc-desc');
+});
+
+// ---------------------------------------------------------------------------
+// Estratto conto bancario: saldo, entrate e uscite del conto della società
+// ---------------------------------------------------------------------------
+/* Si caricano gli estratti conto mensili e la lista movimenti dell'home
+   banking (PDF): i movimenti uguali presenti in più file si tengono una volta
+   sola. Il saldo di ogni giorno si calcola dal saldo letto più recente e deve
+   tornare al centesimo con tutti gli altri saldi letti. Gli importi del conto
+   sono in centesimi interi (campo «c»): niente arrotondamenti. */
+const eu = (c) => fmtEuro((c || 0) / 100);
+const CATEGORIE_BANCA = {
+  incassi:    { nome: 'Incassi da clienti (bonifici e POS)', badge: 'bg-emerald-50 text-emerald-700' },
+  versamenti: { nome: 'Versamenti di contanti', badge: 'bg-emerald-50 text-emerald-700' },
+  rimborsi:   { nome: 'Rimborsi e storni', badge: 'bg-emerald-50 text-emerald-700' },
+  fornitori:  { nome: 'Fornitori (RiBa, effetti, bonifici)', badge: 'bg-slate-100 text-slate-700' },
+  f24:        { nome: 'Imposte e contributi (F24)', badge: 'bg-rose-50 text-rose-700' },
+  ritenute:   { nome: 'Ritenute d\'acconto sui bonifici (si recuperano)', badge: 'bg-amber-50 text-amber-800' },
+  soci:       { nome: 'Prelievi dei soci', badge: 'bg-indigo-50 text-indigo-700' },
+  utenze:     { nome: 'Utenze e addebiti diretti (SDD)', badge: 'bg-sky-50 text-sky-700' },
+  carta:      { nome: 'Ricariche della carta', badge: 'bg-slate-100 text-slate-600' },
+  interessi:  { nome: 'Interessi passivi del fido', badge: 'bg-rose-50 text-rose-700' },
+  banca:      { nome: 'Banca: commissioni, bolli, spese del fido', badge: 'bg-slate-100 text-slate-700' },
+  altro:      { nome: 'Altro', badge: 'bg-slate-100 text-slate-600' },
+};
+/* i nomi dei soci, per riconoscere giroconti e prelievi: dalla ragione sociale
+   («… di Rossi Mario & C.») e dai nomi nelle impostazioni, in tutti e due gli ordini */
+function nomiSoci() {
+  const s = imp(), nomi = [];
+  const m = /\bdi\s+([^&]+?)\s*(?:&|\be\b)\s*c\b/i.exec(s.ragione || '');
+  if (m) nomi.push(m[1]);
+  for (const n of [s.s1Nome, s.s2Nome]) if (n && !/^socio\s*\d$/i.test(n.trim())) nomi.push(n);
+  const out = new Set();
+  for (const n of nomi) {
+    const p = n.toUpperCase().replace(/[^A-ZÀ-Ý' ]/g, ' ').split(/\s+/).filter((x) => x.length > 1);
+    if (p.length >= 2) { out.add(p.join(' ')); out.add(p.slice().reverse().join(' ')); }
+  }
+  return [...out];
+}
+const nominaSocio = (t) => nomiSoci().some((n) => t.includes(n));
+function categoriaBanca(m) {
+  const t = String(m.descrizione || '').toUpperCase(), entra = m.c > 0;
+  if (/RIT\. D'ACCONTO/.test(t)) return 'ritenute';
+  if (!entra && /PRELEVAMENTO ALLO SPORTELLO|PRELIEVO TITOLARE|PRELIEVO DEL TITOLARE/.test(t) && !/^COMMISSION/.test(t)) return 'soci';
+  if (/COMPETENZE DARE|INTERESSI DEBITORI/.test(t)) return entra ? 'rimborsi' : 'interessi';
+  if (/COMMISSION|COMM\. BON|CANONE|IMPOSTA DI BOLLO|COMPETENZE|SPESE ED ONERI/.test(t)) return entra ? 'rimborsi' : 'banca';
+  if (/F24|IMPOSTE E TASSE|TRIBUTI/.test(t)) return entra ? 'rimborsi' : 'f24';
+  if (/RICARICA CARTA|CARTA PREPAGATA|RIC\.PREP/.test(t)) return entra ? 'rimborsi' : 'carta';
+  if (!entra && (/PRELIEV|PRELEVAMENTO/.test(t) || (/GIROCONTO|A FAVORE DI|BEN:|FV\./.test(t) && nominaSocio(t)))) return 'soci';
+  if (/\bSDD\b|ADDEBITI PREAUTORIZZATI/.test(t)) return entra ? 'rimborsi' : 'utenze';
+  if (entra) return /VERSAMENTO/.test(t) ? 'versamenti' : /RIMBORSO|STORNO/.test(t) ? 'rimborsi' : 'incassi';
+  if (/EFFETTO|RIBA|BONIFICO|DISPOSIZIONE/.test(t)) return 'fornitori';
+  return 'altro';
+}
+const movBanca = () => appState.banca.movimenti;
+const ritenuteBanca = (anno) => cent(-movBanca().filter((m) => annoDi(m.data) === anno && categoriaBanca(m) === 'ritenute').reduce((t, m) => t + m.c, 0) / 100);
+const statoBancaPdf = () => ({ documenti: appState.banca.documenti.map((d) => ({ ...d })), movimenti: movBanca().map((m) => ({ ...m, fonti: [...m.fonti], importo: m.c })) });
+
+/* saldi del conto: dal saldo letto più recente, all'indietro e in avanti */
+function calcoloBanca() {
+  const r = window.BancaPDF.calcola(statoBancaPdf());
+  const saldoDopo = new Map();   // saldo dopo ogni movimento, nell'ordine della banca
+  let s = r.base;
+  for (const m of r.mov) { s = s == null ? null : s + m.importo; saldoDopo.set(m.id, s); }
+  const ultimaData = r.mov.length ? r.mov[r.mov.length - 1].data : r.ancora ? r.ancora.data : '';
+  // fido: dalla lista movimenti (disponibile − contabile dello stesso giorno), altrimenti dall'estratto scalare
+  const lista = appState.banca.documenti.filter((d) => d.disponibile != null && (d.saldi || []).some((x) => x.cosa === 'Saldo contabile')).sort((a, b) => b.al.localeCompare(a.al))[0];
+  let fido = null, disponibile = null, dataDisp = '';
+  if (lista) {
+    const sc = lista.saldi.find((x) => x.cosa === 'Saldo contabile');
+    fido = lista.disponibile - sc.saldo; disponibile = lista.disponibile; dataDisp = sc.data;
+  } else {
+    const sca = appState.scalari.filter((d) => d.fido != null).sort((a, b) => b.conteggio.localeCompare(a.conteggio))[0];
+    if (sca) fido = Math.round(sca.fido * 100);
+  }
+  return { ...r, saldoDopo, ultimaData, fido, disponibile, dataDisp };
+}
+
+/* Le spese che passano dal conto ma non sono ancora registrate nell'app:
+   commissioni e bolli del conto, bollo del furgone, commissioni POS, quote
+   associative... Ogni proposta dice in quale tab va e con quale regola. */
+const MESI_IT = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+const giorniTra = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 86400000;
+function speseDaBanca(anno) {
+  const collegati = new Set(appState.acquisti.flatMap((a) => Array.isArray(a.banca) ? a.banca : []));
+  const totaleSpesa = (a) => cent((+a.imponibile || 0) + (+a.iva || 0));
+  const giaRegistrata = (m, giorni, sezioni) => appState.acquisti.some((a) => a.sezione !== 'carta' && (!sezioni || sezioni.includes(a.sezione))
+    && Math.round(totaleSpesa(a) * 100) === -m.c && giorniTra(a.data, m.data) <= giorni);
+  const proposte = [], controllare = [];
+  const perMese = new Map();
+  for (const m of movBanca()) {
+    if (annoDi(m.data) !== anno || m.c >= 0 || collegati.has(m.id)) continue;
+    const cat = categoriaBanca(m), t = m.descrizione.toUpperCase();
+    if (cat === 'banca') {
+      if (/COMPETENZE|SPESE ED ONERI/.test(t)) {
+        if (giaRegistrata(m, 10, ['scalare'])) continue;
+        proposte.push({ ids: [m.id], data: m.data, c: -m.c, sezione: 'scalare', categoria: 'esente_0_100', scalare: true,
+          desc: `Oneri del fido (CFA) e spese addebitati il ${fmtData(m.data)} - c/c società`, perche: 'Oneri del fido e spese del conto: costo deducibile per intero, esente IVA.' });
+      } else {
+        const k = m.data.slice(0, 7);
+        if (!perMese.has(k)) perMese.set(k, []);
+        perMese.get(k).push(m);
+      }
+      continue;
+    }
+    if (cat === 'utenze' || cat === 'fornitori' || cat === 'altro') {
+      if (giaRegistrata(m, 75)) continue;
+      let p = null;
+      if (/REGIONE|TASSA AUTOMOBILISTICA|BOLLO AUTO/.test(t)) p = { sezione: 'spese', categoria: 'furgone_100_100', desc: `Bollo del furgone (tassa automobilistica)${/REGIONE LOMBARDIA/.test(t) ? ' - Regione Lombardia' : ''}`, perche: 'Tassa automobilistica del furgone: costo deducibile per intero, senza IVA. Se è il bollo di un\'auto usata anche dai soci, cambia la categoria in «Auto promiscua».' };
+      else if (/NEXI/.test(t)) p = { sezione: 'spese', categoria: 'esente_0_100', desc: 'Commissioni POS Nexi (addebito diretto)', perche: 'Commissioni sugli incassi con il POS: costo deducibile per intero, esenti IVA.' };
+      else if (/UNIONE COMMERCIO|CONFCOMMERCIO|CONFESERCENTI|CONFARTIGIANATO/.test(t)) p = { sezione: 'spese', categoria: 'esente_0_100', desc: 'Quota associativa Unione Commercio e Turismo', perche: 'Quota dell\'associazione di categoria: costo deducibile per intero, senza IVA.' };
+      else if (/\bCUP\b/.test(t) && /COMUNE/.test(t)) p = { sezione: 'spese', categoria: 'esente_0_100', desc: 'Canone unico patrimoniale (insegna / suolo pubblico) - Comune', perche: 'Canone del Comune (CUP), qui riscosso da San Marco S.p.A.: costo deducibile per intero, senza IVA.' };
+      if (p) { proposte.push({ ids: [m.id], data: m.data, c: -m.c, ...p }); continue; }
+      if (cat === 'fornitori' && /EFFETTO|RIBA/.test(t)) continue;   // pagano fatture già registrate (spesso dell'anno prima)
+      let nota = 'Non trovo una spesa registrata con questo importo: se è un costo della società, registra la fattura o la ricevuta.';
+      if (/IMU/.test(t)) nota = 'IMU rimborsata al proprietario del locale in comodato: chiedi al commercialista se si può dedurre.';
+      else if (/POLIZZA|ASSICUR/.test(t)) nota = nominaSocio(t) ? 'Polizza intestata a un socio: se è personale non è un costo della società.' : 'Polizza: se è dell\'attività, registrala nel tab Polizze.';
+      else if (/RIMBORSO/.test(t)) nota = 'Rimborso a un cliente: non è una spesa, riduce l\'incasso.';
+      else if (/AMAZON/.test(t)) nota = 'Acquisto Amazon: registra la fattura (si scarica dall\'account Amazon).';
+      controllare.push({ m, nota });
+    }
+  }
+  for (const [k, lista] of [...perMese].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const [a, mm] = k.split('-');
+    proposte.push({ ids: lista.map((m) => m.id), data: lista[lista.length - 1].data, c: -lista.reduce((t, m) => t + m.c, 0), sezione: 'scalare', categoria: 'esente_0_100', scalare: true,
+      desc: `Commissioni e bolli del conto corrente - ${MESI_IT[+mm - 1]} ${a} (${lista.length} ${lista.length === 1 ? 'addebito' : 'addebiti'})`,
+      perche: lista.map((m) => `${fmtData(m.data)} ${eu(-m.c)} ${m.descrizione.slice(0, 60)}`).join('\n') });
+  }
+  proposte.sort((a, b) => a.data.localeCompare(b.data));
+  proposte.forEach((p) => { p.k = p.ids.join('-'); });
+  return { proposte, controllare };
+}
+
+const TAB_DI_SEZIONE = { spese: 'Abbonamenti/Acquisti/Spese', scalare: 'Estratto Conto Scalare' };
+function registraSpeseBanca(chiavi) {
+  const { proposte } = speseDaBanca(appState.anno);
+  const scelte = proposte.filter((p) => !chiavi || chiavi.includes(p.k));
+  if (!scelte.length) return 0;
+  let id = Date.now();
+  for (const p of scelte) {
+    appState.acquisti.push({
+      id: id++, data: p.data, desc: p.desc, provenienza: 'IT', categoria: p.categoria, imponibile: p.c / 100, iva: 0,
+      sezione: p.sezione, sezioneManuale: true, banca: p.ids, ...(p.scalare ? { scalare: { tipo: 'oneri' } } : {}),
+    });
+  }
+  appState.acquisti.sort((a, b) => a.data.localeCompare(b.data));
+  saveState(); renderAll();
+  return scelte.length;
+}
+
+function disegnaBanca() {
+  const anno = appState.anno;
+  const vuoto = !movBanca().length && !appState.banca.documenti.length;
+  $('banca-pieno').classList.toggle('hidden', vuoto);
+  if (vuoto) { $('tbody-banca').innerHTML = `<tr><td colspan="5" class="py-8 text-center text-slate-400 text-xs">Nessun movimento: carica gli estratti conto o la lista movimenti in PDF.</td></tr>`; return; }
+  const k = calcoloBanca();
+  const mov = k.mov.filter((m) => annoDi(m.data) === anno);
+
+  // tabella dei movimenti dell'anno, con il saldo dopo ogni movimento
+  $('tbody-banca').innerHTML = mov.map((m) => {
+    const cat = CATEGORIE_BANCA[categoriaBanca(m)], s = k.saldoDopo.get(m.id);
+    return `<tr data-voce="banca:${m.id}" class="hover:bg-slate-50/80 transition align-top">
+      <td class="py-2.5 px-4 whitespace-nowrap text-slate-600">${fmtData(m.data)}${m.valuta && m.valuta !== m.data ? `<span class="block text-[10px] text-slate-400">valuta ${fmtData(m.valuta)}</span>` : ''}</td>
+      <td class="py-2.5 px-4 min-w-[280px]"><div class="text-slate-900 text-xs leading-snug">${esc(m.descrizione)}</div>
+        <span class="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold ${cat.badge}">${esc(cat.nome)}</span></td>
+      <td class="py-2.5 px-4 text-right font-semibold whitespace-nowrap text-emerald-700">${m.importo > 0 ? eu(m.importo) : ''}</td>
+      <td class="py-2.5 px-4 text-right font-semibold whitespace-nowrap text-rose-600">${m.importo < 0 ? eu(-m.importo) : ''}</td>
+      <td class="py-2.5 px-4 text-right whitespace-nowrap ${s < 0 ? 'text-rose-700' : 'text-slate-900'}">${s == null ? '' : eu(s)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="5" class="py-8 text-center text-slate-400 text-xs">Nessun movimento del conto nel ${anno}.</td></tr>`;
+
+  // situazione: saldo, fido, entrate e uscite dell'anno, imposte ancora da pagare
+  const fineAnno = `${anno}-12-31`, inizio = `${anno - 1}-12-31`;
+  const dataFine = k.ultimaData && k.ultimaData < fineAnno ? k.ultimaData : fineAnno;
+  const saldoFine = k.saldoAl(dataFine), saldoInizio = k.base == null ? null : k.saldoAl(inizio);
+  const ent = mov.filter((m) => m.importo > 0).reduce((t, m) => t + m.importo, 0);
+  const usc = -mov.filter((m) => m.importo < 0).reduce((t, m) => t + m.importo, 0);
+  const perCat = {};
+  for (const m of mov) { const c = categoriaBanca(m); const x = (perCat[c] = perCat[c] || { e: 0, u: 0, n: 0 }); if (m.importo > 0) x.e += m.importo; else x.u -= m.importo; x.n++; }
+  const s = imp();
+  const nomeChi = { soc: 'Società', s1: s.s1Nome, s2: s.s2Nome };
+  // imposte e contributi con scadenza dopo l'ultimo movimento (calendario F24 dell'anno prima e di quest'anno)
+  const ultimo = k.ultimaData ? new Date(k.ultimaData + 'T23:59:59') : null;
+  const futuri = ultimo && annoDi(k.ultimaData) === anno
+    ? [...(pagamentiAnno[anno - 1] || []), ...(pagamentiAnno[anno] || [])].filter((p) => p.data > ultimo).sort((a, b) => a.data - b.data) : [];
+  const totFuturi = Math.round(cent(futuri.reduce((t, p) => t + p.importo, 0)) * 100);
+  const cella = (titolo, valore, sub, colore = 'text-slate-900') => `<div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 flex flex-col">
+      <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500 leading-4 min-h-8">${titolo}</div>
+      <div class="mt-1 text-2xl font-bold ${colore} whitespace-nowrap">${valore}</div>
+      <div class="mt-1 text-[11px] text-slate-500">${sub}</div></div>`;
+  const rosso = (c) => c < 0 ? 'text-rose-600' : 'text-emerald-700';
+  const piu = (c) => (c > 0 ? '+ ' : '') + eu(c);
+  let html = cella(`Saldo del conto al ${fmtData(dataFine)}`, saldoFine == null ? '—' : eu(saldoFine),
+      saldoFine == null ? '' : saldoFine < 0 ? 'Negativo: per questa cifra stai usando il fido.' : 'Positivo: soldi della società sul conto.', rosso(saldoFine || 0))
+    + cella('Ancora disponibile (fido compreso)', k.fido != null && saldoFine != null ? eu(k.fido + saldoFine) : '—',
+      k.fido != null ? `Fido ${eu(k.fido)} ${saldoFine < 0 ? '−' : '+'} saldo ${eu(Math.abs(saldoFine || 0))}${k.disponibile != null && k.dataDisp === dataFine ? ` · la banca scrive ${eu(k.disponibile)}` : ''}` : 'Il fido si legge dalla lista movimenti o dall\'estratto scalare.', k.fido != null && k.fido + saldoFine < 0 ? 'text-rose-600' : 'text-slate-900')
+    + cella(`Variazione nel ${anno}`, saldoInizio == null || saldoFine == null ? '—' : piu(saldoFine - saldoInizio),
+      saldoInizio == null ? '' : `Dal saldo al ${fmtData(inizio)} (${eu(saldoInizio)}) a quello al ${fmtData(dataFine)}.`, rosso((saldoFine || 0) - (saldoInizio || 0)))
+    + cella(`Entrate nel ${anno}`, eu(ent), `Incassi da clienti ${eu(perCat.incassi?.e || 0)}${perCat.versamenti ? ` · versamenti ${eu(perCat.versamenti.e)}` : ''}${perCat.rimborsi ? ` · rimborsi ${eu(perCat.rimborsi.e)}` : ''}`, 'text-emerald-700')
+    + cella(`Uscite nel ${anno}`, eu(usc), `Fornitori ${eu(perCat.fornitori?.u || 0)} · imposte F24 ${eu(perCat.f24?.u || 0)} · prelievi soci ${eu(perCat.soci?.u || 0)}`, 'text-rose-600');
+  if (futuri.length && saldoFine != null) {
+    html += cella('Imposte e contributi ancora da pagare', eu(totFuturi),
+      `Scadenze F24 dopo il ${fmtData(k.ultimaData)}. Pagate quelle, il saldo sarebbe <strong class="${rosso(saldoFine - totFuturi)}">${eu(saldoFine - totFuturi)}</strong>${k.fido != null ? ` e resterebbero disponibili ${eu(k.fido + saldoFine - totFuturi)} col fido` : ''}.`, 'text-rose-600');
+  }
+  $('banca-situazione').innerHTML = html;
+
+  // imposte future, una per riga
+  $('banca-futuri').classList.toggle('hidden', !futuri.length);
+  $('banca-futuri').innerHTML = futuri.length ? `<h3 class="text-base font-bold text-slate-900">Imposte e contributi da pagare dopo il ${fmtData(k.ultimaData)}</h3>
+    <p class="text-xs text-slate-500">Le scadenze F24 calcolate dall'app (IVA, INAIL, IRAP, IRPEF, addizionali, INPS e acconti, già tolti i crediti) che cadono dopo l'ultimo movimento del conto. Ci sono anche quelle dei soci, perché oggi le paga il conto della società.</p>
+    <div class="mt-3 overflow-x-auto"><table class="w-full text-sm"><tbody class="divide-y divide-slate-100">
+      ${futuri.map((p) => `<tr><td class="py-1.5 pr-3 whitespace-nowrap text-slate-600">${p.data.toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' })}</td>
+        <td class="py-1.5 pr-3 text-slate-800">${esc(p.voce)}${p.rif ? ` <span class="text-slate-500">(${esc(p.rif)})</span>` : ''}</td>
+        <td class="py-1.5 pr-3 text-slate-500">${esc(nomeChi[p.chi] || '')}</td>
+        <td class="py-1.5 text-right font-semibold whitespace-nowrap text-rose-600">${fmtEuro(p.importo)}</td></tr>`).join('')}
+      <tr class="font-bold"><td colspan="3" class="py-2 pr-3 text-slate-900">Totale</td><td class="py-2 text-right whitespace-nowrap text-rose-600">${eu(totFuturi)}</td></tr>
+    </tbody></table></div>` : '';
+
+  // per categoria e per mese
+  const ordineCat = Object.keys(CATEGORIE_BANCA).filter((c) => perCat[c]);
+  const ritDich = fiscaleAnno().soc?.ritenute;
+  $('banca-categorie').innerHTML = `<h3 class="text-base font-bold text-slate-900">Dove entrano ed escono i soldi nel ${anno}</h3>
+    <div class="mt-3 overflow-x-auto"><table class="w-full text-sm">
+      <thead><tr class="border-b border-slate-200 text-[11px] uppercase text-slate-500"><th class="py-2 pr-3 text-left">Voce</th><th class="py-2 px-2 text-right">Mov.</th><th class="py-2 px-2 text-right">Entrate</th><th class="py-2 pl-2 text-right">Uscite</th></tr></thead>
+      <tbody class="divide-y divide-slate-100">${ordineCat.map((c) => `<tr><td class="py-1.5 pr-3"><span class="px-2 py-0.5 rounded text-[11px] font-bold ${CATEGORIE_BANCA[c].badge}">${esc(CATEGORIE_BANCA[c].nome)}</span></td>
+        <td class="py-1.5 px-2 text-right text-slate-500">${perCat[c].n}</td>
+        <td class="py-1.5 px-2 text-right whitespace-nowrap text-emerald-700">${perCat[c].e ? eu(perCat[c].e) : ''}</td>
+        <td class="py-1.5 pl-2 text-right whitespace-nowrap text-rose-600">${perCat[c].u ? eu(perCat[c].u) : ''}</td></tr>`).join('')}
+      <tr class="font-bold border-t border-slate-200"><td class="py-2 pr-3">Totale</td><td class="py-2 px-2 text-right">${mov.length}</td><td class="py-2 px-2 text-right whitespace-nowrap text-emerald-700">${eu(ent)}</td><td class="py-2 pl-2 text-right whitespace-nowrap text-rose-600">${eu(usc)}</td></tr>
+      </tbody></table></div>
+    ${perCat.ritenute ? `<p class="mt-3 text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-2.5">Le <strong>ritenute d'acconto</strong> che la banca trattiene sui bonifici per le detrazioni casa (${eu(perCat.ritenute.u)} nel ${anno}) non sono una spesa: sono imposte già pagate per conto della società e si tolgono dall'IRPEF dei soci, divise secondo le quote. ${ritDich === '' || ritDich == null ? 'L\'app le usa già nel calcolo delle imposte; quando avrai la dichiarazione, scrivi la cifra nel tab Imposte Società e varrà quella.' : `Nel tab Imposte Società è scritta la cifra della dichiarazione (${fmtEuro(+ritDich)}): vale quella.`}</p>` : ''}`;
+  const mesi = [];
+  for (let i = 1; i <= 12; i++) {
+    const mm = `${anno}-${String(i).padStart(2, '0')}`;
+    if (k.ultimaData && mm > k.ultimaData.slice(0, 7)) break;
+    const lista = mov.filter((m) => m.data.startsWith(mm));
+    const e = lista.filter((m) => m.importo > 0).reduce((t, m) => t + m.importo, 0), u = -lista.filter((m) => m.importo < 0).reduce((t, m) => t + m.importo, 0);
+    mesi.push({ nome: MESI_IT[i - 1], e, u, saldo: k.base == null ? null : k.saldoAl(`${mm}-31`) });
+  }
+  $('banca-mesi').innerHTML = `<h3 class="text-base font-bold text-slate-900">Mese per mese</h3>
+    <div class="mt-3 overflow-x-auto"><table class="w-full text-sm">
+      <thead><tr class="border-b border-slate-200 text-[11px] uppercase text-slate-500"><th class="py-2 pr-3 text-left">Mese</th><th class="py-2 px-2 text-right">Entrate</th><th class="py-2 px-2 text-right">Uscite</th><th class="py-2 px-2 text-right">Differenza</th><th class="py-2 pl-2 text-right">Saldo a fine mese</th></tr></thead>
+      <tbody class="divide-y divide-slate-100">${mesi.map((x) => `<tr><td class="py-1.5 pr-3 capitalize">${x.nome}</td>
+        <td class="py-1.5 px-2 text-right whitespace-nowrap text-emerald-700">${eu(x.e)}</td>
+        <td class="py-1.5 px-2 text-right whitespace-nowrap text-rose-600">${eu(x.u)}</td>
+        <td class="py-1.5 px-2 text-right whitespace-nowrap ${rosso(x.e - x.u)}">${piu(x.e - x.u)}</td>
+        <td class="py-1.5 pl-2 text-right whitespace-nowrap font-semibold ${x.saldo < 0 ? 'text-rose-700' : 'text-slate-900'}">${x.saldo == null ? '—' : eu(x.saldo)}</td></tr>`).join('')}
+      <tr class="font-bold border-t border-slate-200"><td class="py-2 pr-3">Totale</td><td class="py-2 px-2 text-right whitespace-nowrap text-emerald-700">${eu(ent)}</td><td class="py-2 px-2 text-right whitespace-nowrap text-rose-600">${eu(usc)}</td><td class="py-2 px-2 text-right whitespace-nowrap ${rosso(ent - usc)}">${piu(ent - usc)}</td><td></td></tr>
+      </tbody></table></div>`;
+
+  // spese trovate nel conto e non registrate
+  const { proposte, controllare } = speseDaBanca(anno);
+  const totProp = proposte.reduce((t, p) => t + p.c, 0);
+  $('banca-spese').classList.toggle('hidden', !proposte.length && !controllare.length);
+  $('banca-spese').innerHTML = !proposte.length && !controllare.length ? '' : `<div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+      <div><h3 class="text-base font-bold text-slate-900">Spese nel conto non ancora registrate (${anno})</h3>
+      <p class="text-xs text-slate-500">Costi deducibili che passano dal conto ma non sono in nessun tab: registrandoli abbassano l'utile e quindi le imposte. Commissioni e bolli del conto sono sommati mese per mese.</p></div>
+      ${proposte.length ? `<button type="button" data-action="banca-registra" data-k="" class="shrink-0 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition">Registra tutte (${eu(totProp)})</button>` : ''}
+    </div>
+    ${proposte.length ? `<div class="mt-3 overflow-x-auto"><table class="w-full text-sm"><thead><tr class="border-b border-slate-200 text-[11px] uppercase text-slate-500">
+      <th class="py-2 pr-3 text-left">Data</th><th class="py-2 pr-3 text-left">Spesa</th><th class="py-2 pr-3 text-left">Va nel tab</th><th class="py-2 pr-3 text-right">Importo</th><th></th></tr></thead>
+      <tbody class="divide-y divide-slate-100">${proposte.map((p) => `<tr class="align-top"><td class="py-2 pr-3 whitespace-nowrap text-slate-600">${fmtData(p.data)}</td>
+        <td class="py-2 pr-3"><div class="font-medium text-slate-900">${esc(p.desc)}</div><div class="text-[11px] text-slate-500 whitespace-pre-line">${esc(p.perche)}</div></td>
+        <td class="py-2 pr-3 text-xs text-slate-600">${esc(TAB_DI_SEZIONE[p.sezione])}<span class="block text-[10px] text-slate-400">${esc(CATEGORIE_SPESA[p.categoria].badge)}</span></td>
+        <td class="py-2 pr-3 text-right font-semibold whitespace-nowrap">${eu(p.c)}</td>
+        <td class="py-2 text-right"><button type="button" data-action="banca-registra" data-k="${esc(p.k)}" class="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold hover:bg-emerald-100">Registra</button></td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+    ${controllare.length ? `<details class="mt-4"><summary class="cursor-pointer text-sm font-semibold text-amber-800">Da controllare: ${controllare.length} ${controllare.length === 1 ? 'uscita' : 'uscite'} senza una spesa registrata con lo stesso importo</summary>
+      <ul class="mt-2 space-y-1.5 text-xs">${controllare.map(({ m, nota }) => `<li class="p-2 rounded-lg bg-amber-50/60 border border-amber-100"><span class="font-semibold">${fmtData(m.data)} · ${eu(-m.c)}</span> · ${esc(m.descrizione.slice(0, 140))}<span class="block text-amber-900 mt-0.5">${esc(nota)}</span></li>`).join('')}</ul></details>` : ''}`;
+
+  // file caricati e controllo dei saldi
+  const docs = appState.banca.documenti.slice().sort((a, b) => (a.dal || '').localeCompare(b.dal || ''));
+  $('banca-controlli').innerHTML = `<h3 class="text-base font-bold text-slate-900">File caricati e controllo al centesimo</h3>
+    <p class="text-xs text-slate-500">Ogni saldo scritto dalla banca nei PDF deve tornare con quello calcolato dai movimenti. I movimenti presenti in più file si contano una volta sola.</p>
+    <ul class="mt-3 space-y-1.5 text-xs">${k.controlli.map((c) => `<li class="${c.ok ? 'text-emerald-800' : 'text-rose-700 font-semibold'}">${c.ok ? '✓' : '✗'} ${esc(c.cosa)} al ${fmtData(c.data)}: la banca scrive ${eu(c.saldo)}, i movimenti danno ${eu(c.calcolato)}${c.ancora ? ' <span class="text-slate-500 font-normal">(punto di partenza del calcolo)</span>' : ''} <span class="text-slate-400 font-normal">· ${esc(c.file)}</span></li>`).join('')}</ul>
+    <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-2">${docs.map((d) => `<div class="p-3 rounded-xl border border-slate-200 text-xs text-slate-600">
+      <div class="flex flex-wrap items-center justify-between gap-2"><span class="font-semibold text-slate-900 break-all">${esc(d.file)}</span>
+        <span class="flex gap-1.5">${d.allegato && DESKTOP ? `<button type="button" data-action="apri-allegato" data-rel="${esc(d.allegato)}" class="px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-[11px] font-bold hover:bg-emerald-100">📎 Apri PDF</button>` : ''}
+        <button type="button" data-action="banca-togli-doc" data-k="${esc(d.k)}" class="px-2 py-1 rounded text-rose-600 text-[11px] font-semibold hover:bg-rose-50">Togli</button></span></div>
+      <div class="mt-1">${[d.tipo === 'lista' ? 'Lista movimenti' : 'Estratto conto', d.banca, d.ibanBello, `dal ${fmtData(d.dal)} al ${fmtData(d.al)}`, `${d.nMovimenti} movimenti`].filter(Boolean).map(esc).join(' · ')}</div>
+      ${(d.verifiche || []).map((v) => `<div class="${v.ok ? 'text-emerald-700' : 'text-rose-700 font-semibold'}">${v.ok ? '✓' : '✗'} ${esc(v.cosa)}: ${eu(v.atteso)}${v.ok ? '' : ` (somma ${eu(v.letto)})`}</div>`).join('')}
+      ${(d.avvisi || []).map((a) => `<div class="text-amber-800">${esc(a)}</div>`).join('')}</div>`).join('')}</div>`;
+}
+
+function riquadriBanca(lista, filtrata) {
+  const ent = lista.filter((m) => m.c > 0).reduce((t, m) => t + m.c, 0), usc = -lista.filter((m) => m.c < 0).reduce((t, m) => t + m.c, 0);
+  const dove = filtrata ? ' · solo i risultati della ricerca' : ` nel ${appState.anno}`;
+  const cella = (titolo, valore, sub, colore) => `<div class="bg-white rounded-2xl border ${filtrata ? 'border-amber-300' : 'border-slate-200'} shadow-xs p-4">
+      <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500">${titolo}</div>
+      <div class="mt-1 text-xl font-bold ${colore} whitespace-nowrap">${valore}</div><div class="mt-1 text-[11px] text-slate-500">${sub}</div></div>`;
+  return cella('Entrate', eu(ent), `${lista.filter((m) => m.c > 0).length} movimenti${dove}`, 'text-emerald-700')
+    + cella('Uscite', eu(usc), `${lista.filter((m) => m.c < 0).length} movimenti${dove}`, 'text-rose-600')
+    + cella('Differenza', (ent - usc > 0 ? '+ ' : '') + eu(ent - usc), 'Entrate meno uscite' + dove, ent - usc < 0 ? 'text-rose-600' : 'text-emerald-700');
+}
+
+// --- caricamento dei PDF ---
+async function apriPdfBanca(lista) {
+  showToast(`Lettura di ${lista.length === 1 ? '1 file' : `${lista.length} file`}…`);
+  let r;
+  try { r = await window.BancaPDF.leggiFile(lista); }
+  catch (e) { showToast('Lettura non riuscita: ' + e.message, true); return; }
+  if (!r.documenti.length) { showToast(r.errori.length ? `${r.errori[0].file}: ${r.errori[0].errore}` : 'Nessun estratto conto trovato.', true); return; }
+  await registraDocumentiBanca(r.documenti, r.errori);
+}
+
+async function registraDocumentiBanca(documenti, errori = []) {
+  // prima le liste movimenti (le più complete), poi gli estratti, dal più vecchio
+  documenti.sort((a, b) => (a.tipo === b.tipo ? 0 : a.tipo === 'lista' ? -1 : 1) || (a.dal || '').localeCompare(b.dal || ''));
+  const stato = statoBancaPdf(), primaN = stato.movimenti.length;
+  let id = Math.max(Date.now(), ...movBanca().map((m) => m.id + 1)), aggiunti = 0, gia = 0, persi = 0;
+  for (const d of documenti) {
+    const bytes = d.bytes; delete d.bytes;
+    const r = window.BancaPDF.unisci(stato, d, () => id++);
+    aggiunti += r.aggiunti; gia += r.gia;
+    const doc = stato.documenti.find((x) => x.k === r.k);
+    doc.allegato = '';
+    if (DESKTOP && bytes) {
+      try { const s = await window.gestionale.salvaAllegato(`banca/${annoDi(d.al) || appState.anno}`, `${d.tipo === 'lista' ? 'Lista movimenti' : 'Estratto conto'} ${d.dal} ${d.al}`, bytes); doc.allegato = s.ok ? s.rel : ''; } catch (_) { doc.allegato = ''; }
+      if (!doc.allegato) persi++;
+    }
+    doc.caricato = oggi();
+  }
+  appState.banca = { documenti: stato.documenti, movimenti: stato.movimenti.map(({ importo, ...m }) => ({ ...m, c: importo })) };
+  saveState();
+  const ultimo = stato.movimenti.reduce((a, m) => (m.data > a ? m.data : a), '');
+  popolaAnni();
+  if (ultimo && annoDi(ultimo) !== appState.anno) cambiaAnnoRicerca(annoDi(ultimo)); else renderAll();
+  switchTab('banca');
+  const sbagliati = calcoloBanca().controlli.filter((c) => !c.ok).length;
+  const nuovi = stato.movimenti.length - primaN;
+  syncControlsFromState();
+  showToast(`${nuovi === 1 ? 'Aggiunto 1 movimento nuovo' : `Aggiunti ${nuovi} movimenti nuovi`} (in tutto ${stato.movimenti.length}); i movimenti presenti in più file sono contati una volta sola. ${sbagliati ? `Attenzione: ${sbagliati === 1 ? 'un saldo non torna' : `${sbagliati} saldi non tornano`}.` : 'Tutti i saldi tornano al centesimo.'}`
+    + (errori.length ? ` ${errori.length === 1 ? 'Un file non letto' : `${errori.length} file non letti`}: ${errori.map((x) => x.file).join(', ')}.` : '') + (persi ? ' Non è stato possibile copiare un PDF nella cartella dei dati.' : ''), !!sbagliati || !!errori.length);
+}
+
+function togliDocumentoBanca(k) {
+  const stato = statoBancaPdf();
+  window.BancaPDF.togliDocumento(stato, k);
+  appState.banca = { documenti: stato.documenti, movimenti: stato.movimenti.map(({ importo, ...m }) => ({ ...m, c: importo })) };
+  saveState(); renderAll();
+}
+
+$('banca-input').addEventListener('change', (e) => {
+  const lista = [...e.target.files]; e.target.value = '';
+  if (lista.length) apriPdfBanca(lista);
 });
 
 // ---------------------------------------------------------------------------

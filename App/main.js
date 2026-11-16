@@ -244,11 +244,11 @@ function createWindow() {
       spellcheck: false,
     },
   });
-  if (st.maximized) win.maximize();
 
   Menu.setApplicationMenu(buildMenu());
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  win.once('ready-to-show', () => { win.webContents.setZoomFactor(uiZoom); win.show(); });
+  // si apre sempre a tutto schermo (le misure salvate servono quando la rimpicciolisci)
+  win.once('ready-to-show', () => { win.webContents.setZoomFactor(uiZoom); win.maximize(); win.show(); });
 
   // la pagina non deve navigare altrove; i link esterni si aprono nel browser
   win.webContents.setWindowOpenHandler(({ url }) => {

@@ -1856,12 +1856,24 @@ function renderAll() {
 
   const impIrpefS1 = cent(Math.max(0, q1 - inpsS1.totale - (appState.collabDeduci ? inpsCollab : 0)));
   const detrS1 = detrazioniSocio('s1').importo, detrS2 = detrazioniSocio('s2').importo;
-  const irpefS1 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS1, q1) - detrS1));
+  /* Saldo IRPEF dichiarato (dalla dichiarazione o dagli F24 pagati): se c'è,
+     l'IRPEF dell'anno è quella vera = saldo + acconti IRPEF + ritenute, e
+     sostituisce la stima dell'app. Gli acconti sono quelli usati nei versamenti. */
+  const saldoIrpefDich = (k) => { const v = fiscaleAnno()[k]?.saldoIrpef; return v === '' || v == null ? null : +v || 0; };
+  const accIrpefSocio = (k) => {
+    const a = accontiVersati(k), prec = precedente && precedente[k];
+    const inseriti = ['irpef', 'inps', 'com'].some((c) => a[c] !== '' && a[c] != null);
+    return +(!inseriti && prec ? prec.dett : a).irpef || 0;
+  };
+  const irpefVera = (k, stima, rit) => saldoIrpefDich(k) == null ? stima : cent(saldoIrpefDich(k) + accIrpefSocio(k) + rit);
+  const irpefStimaS1 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS1, q1) - detrS1));
+  const irpefS1 = irpefVera('s1', irpefStimaS1, ritS1);
   const addizS1 = calcolaAddizionali(impIrpefS1), addS1 = addizS1.totale;
   const totS1 = cent(irpefS1 + addS1 + inpsS1.totale + inpsCollab);
 
   const impIrpefS2 = cent(Math.max(0, q2 - inpsS2.totale));
-  const irpefS2 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS2, q2) - detrS2));
+  const irpefStimaS2 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS2, q2) - detrS2));
+  const irpefS2 = irpefVera('s2', irpefStimaS2, ritS2);
   const addizS2 = calcolaAddizionali(impIrpefS2), addS2 = addizS2.totale;
   const totS2 = cent(irpefS2 + addS2 + inpsS2.totale);
 
@@ -2006,7 +2018,9 @@ function renderAll() {
     riga('IRPEF lorda (scaglioni sull\'imponibile):', fmtEuro(irpefLorda(impIrpefS1))) +
     (impIrpefS1 > 0 && detrazioneImpresa(q1) > 0 ? riga(`Detrazione redditi d'impresa (sul reddito complessivo di ${fmtEuro(q1)}):`, '- ' + fmtEuro(Math.min(detrazioneImpresa(q1), irpefLorda(impIrpefS1))), 'text-emerald-700') : '') +
     (detrS1 > 0 ? riga('Altre detrazioni IRPEF:', '- ' + fmtEuro(detrS1), 'text-emerald-700') : '') +
-    riga('IRPEF netta stimata:', fmtEuro(irpefS1)) +
+    (saldoIrpefDich('s1') == null ? riga('IRPEF netta stimata:', fmtEuro(irpefS1))
+      : riga('IRPEF netta dichiarata (saldo + acconti + ritenute):', fmtEuro(irpefS1), 'font-semibold text-slate-900') +
+        riga('Stima dell\'app (non usata):', fmtEuro(irpefStimaS1), 'text-slate-400')) +
     righeAddiz(addizS1) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
     righeNetto(quotaS1(), q1, irapS1, dedS1, l1, totS1, nettoS1, inailS1, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso di ${esc(s.s2Nome)} pagato da te:`, '- ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-rose-600') : '') +
@@ -2019,7 +2033,9 @@ function renderAll() {
     riga('IRPEF lorda (scaglioni sull\'imponibile):', fmtEuro(irpefLorda(impIrpefS2))) +
     (impIrpefS2 > 0 && detrazioneImpresa(q2) > 0 ? riga(`Detrazione redditi d'impresa (sul reddito complessivo di ${fmtEuro(q2)}):`, '- ' + fmtEuro(Math.min(detrazioneImpresa(q2), irpefLorda(impIrpefS2))), 'text-emerald-700') : '') +
     (detrS2 > 0 ? riga('Altre detrazioni IRPEF:', '- ' + fmtEuro(detrS2), 'text-emerald-700') : '') +
-    riga('IRPEF netta stimata:', fmtEuro(irpefS2)) +
+    (saldoIrpefDich('s2') == null ? riga('IRPEF netta stimata:', fmtEuro(irpefS2))
+      : riga('IRPEF netta dichiarata (saldo + acconti + ritenute):', fmtEuro(irpefS2), 'font-semibold text-slate-900') +
+        riga('Stima dell\'app (non usata):', fmtEuro(irpefStimaS2), 'text-slate-400')) +
     righeAddiz(addizS2) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>` +
     righeNetto(quotaS2(), q2, irapS2, dedS2, l2, totS2, nettoS2, inailS2, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso pagato da ${esc(s.s1Nome)}:`, '+ ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-emerald-700') : '') +

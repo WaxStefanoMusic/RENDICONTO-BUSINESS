@@ -26,6 +26,7 @@ const CATEGORIE_SPESA = {
   auto_40_20:       { label: 'Auto promiscua soci & carburante / manutenzione',           ivaDetPct: 0.4, costoDedPct: 0.2,  badge: 'IVA 40% | Costo 20%' },
   esente_0_100:     { label: 'Spese bancarie / commissioni / altre esenti art. 10',       ivaDetPct: 0.0, costoDedPct: 1.0,  badge: 'Esente IVA | Costo 100%' },
   trasferta_0_75:   { label: 'Vitto e alloggio in trasferta (ristoranti, hotel)',       ivaDetPct: 1.0, costoDedPct: 0.75, badge: 'IVA 100% con fattura | Costo 75%' },
+  iva_estera_0_100: { label: 'Fornitore estero che ha addebitato l\'IVA italiana come a un privato (OSS)', ivaDetPct: 0.0, costoDedPct: 1.0, badge: 'IVA 0% (va a costo) | Costo 100%' },
   interessi_passivi: { label: 'Interessi passivi bancari (fido, scoperto di conto)',   ivaDetPct: 0.0, costoDedPct: 1.0,  badge: 'Esente IVA | Costo 100% (non deducibile IRAP)' },
   // polizze (tab Polizze/Assicurazioni): premi esenti IVA art. 10
   polizza_100:         { label: 'Polizza dell\'attività (RC, incendio/furto negozio, merce, furgone N1)', ivaDetPct: 0.0, costoDedPct: 1.0, badge: 'Esente IVA | Costo 100%', breve: 'Attività' },

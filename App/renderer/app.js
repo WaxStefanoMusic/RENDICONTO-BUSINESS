@@ -4033,7 +4033,13 @@ function calcoloBanca() {
     const sca = appState.scalari.filter((d) => d.fido != null).sort((a, b) => b.conteggio.localeCompare(a.conteggio))[0];
     if (sca) fido = Math.round(sca.fido * 100);
   }
-  return { ...r, saldoDopo, ultimaData, fido, disponibile, dataDisp };
+  /* prima del primo saldo letto (o del giorno prima del primo movimento) il saldo non si conosce:
+     potrebbero mancare dei movimenti */
+  const giornoPrima = (iso) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const inizi = [...r.punti.map((p) => p.data), ...(r.mov.length ? [giornoPrima(r.mov[0].data)] : [])].sort();
+  const dataMinima = inizi[0] || '';
+  const saldoAl = (data) => (!dataMinima || data < dataMinima ? null : r.saldoAl(data));
+  return { ...r, saldoAl, dataMinima, saldoDopo, ultimaData, fido, disponibile, dataDisp };
 }
 
 /* Le spese che passano dal conto ma non sono ancora registrate nell'app:
@@ -4150,14 +4156,19 @@ function disegnaBanca() {
       <div class="mt-1 text-[11px] text-slate-500">${sub}</div></div>`;
   const rosso = (c) => c < 0 ? 'text-rose-600' : 'text-emerald-700';
   const piu = (c) => (c > 0 ? '+ ' : '') + eu(c);
-  let html = cella(`Saldo del conto al ${fmtData(dataFine)}`, saldoFine == null ? '—' : eu(saldoFine),
-      saldoFine == null ? '' : saldoFine < 0 ? 'Negativo: per questa cifra stai usando il fido.' : 'Positivo: soldi della società sul conto.', rosso(saldoFine || 0))
-    + cella('Ancora disponibile (fido compreso)', k.fido != null && saldoFine != null ? eu(k.fido + saldoFine) : '—',
+  /* prima riga: saldo al 1° gennaio + entrate − uscite = saldo di oggi; il saldo al 1° gennaio
+     è quello di fine giornata del 31 dicembre (il 1° gennaio la banca non registra movimenti) */
+  const letto = k.controlli.find((c) => c.data === inizio);
+  const negativo = (c) => c < 0 ? 'Negativo: per questa cifra stai usando il fido.' : 'Positivo: soldi della società sul conto.';
+  $('banca-equazione').innerHTML = cella(`Saldo del conto al ${fmtData(`${anno}-01-01`)}`, saldoInizio == null ? '—' : eu(saldoInizio),
+      saldoInizio == null ? 'Serve un estratto conto con il saldo di inizio anno.' : `${negativo(saldoInizio)} È il saldo di fine giornata del ${fmtData(inizio)}${letto ? `, scritto anche nell'estratto conto (${letto.ok ? 'torna al centesimo' : 'NON torna'})` : ''}.`, rosso(saldoInizio || 0))
+    + cella(`+ Entrate nel ${anno}`, eu(ent), `Incassi da clienti ${eu(perCat.incassi?.e || 0)}${perCat.versamenti ? ` · versamenti ${eu(perCat.versamenti.e)}` : ''}${perCat.rimborsi ? ` · rimborsi ${eu(perCat.rimborsi.e)}` : ''}`, 'text-emerald-700')
+    + cella(`− Uscite nel ${anno}`, eu(usc), `Fornitori ${eu(perCat.fornitori?.u || 0)} · imposte F24 ${eu(perCat.f24?.u || 0)} · prelievi soci ${eu(perCat.soci?.u || 0)}`, 'text-rose-600')
+    + cella(`= Saldo del conto al ${fmtData(dataFine)}`, saldoFine == null ? '—' : eu(saldoFine), saldoFine == null ? '' : negativo(saldoFine), rosso(saldoFine || 0));
+  let html = cella('Ancora disponibile (fido compreso)', k.fido != null && saldoFine != null ? eu(k.fido + saldoFine) : '—',
       k.fido != null ? `Fido ${eu(k.fido)} ${saldoFine < 0 ? '−' : '+'} saldo ${eu(Math.abs(saldoFine || 0))}${k.disponibile != null && k.dataDisp === dataFine ? ` · la banca scrive ${eu(k.disponibile)}` : ''}` : 'Il fido si legge dalla lista movimenti o dall\'estratto scalare.', k.fido != null && k.fido + saldoFine < 0 ? 'text-rose-600' : 'text-slate-900')
     + cella(`Variazione nel ${anno}`, saldoInizio == null || saldoFine == null ? '—' : piu(saldoFine - saldoInizio),
-      saldoInizio == null ? '' : `Dal saldo al ${fmtData(inizio)} (${eu(saldoInizio)}) a quello al ${fmtData(dataFine)}.`, rosso((saldoFine || 0) - (saldoInizio || 0)))
-    + cella(`Entrate nel ${anno}`, eu(ent), `Incassi da clienti ${eu(perCat.incassi?.e || 0)}${perCat.versamenti ? ` · versamenti ${eu(perCat.versamenti.e)}` : ''}${perCat.rimborsi ? ` · rimborsi ${eu(perCat.rimborsi.e)}` : ''}`, 'text-emerald-700')
-    + cella(`Uscite nel ${anno}`, eu(usc), `Fornitori ${eu(perCat.fornitori?.u || 0)} · imposte F24 ${eu(perCat.f24?.u || 0)} · prelievi soci ${eu(perCat.soci?.u || 0)}`, 'text-rose-600');
+      saldoInizio == null ? '' : `Dal saldo al ${fmtData(inizio)} (${eu(saldoInizio)}) a quello al ${fmtData(dataFine)}.`, rosso((saldoFine || 0) - (saldoInizio || 0)));
   if (futuri.length && saldoFine != null) {
     html += cella('Imposte e contributi ancora da pagare', eu(totFuturi),
       `Scadenze F24 dopo il ${fmtData(k.ultimaData)}. Pagate quelle, il saldo sarebbe <strong class="${rosso(saldoFine - totFuturi)}">${eu(saldoFine - totFuturi)}</strong>${k.fido != null ? ` e resterebbero disponibili ${eu(k.fido + saldoFine - totFuturi)} col fido` : ''}.`, 'text-rose-600');

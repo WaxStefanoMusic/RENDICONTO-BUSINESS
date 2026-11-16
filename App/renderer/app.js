@@ -333,6 +333,16 @@ async function exportDataJSON() {
   showToast('Backup scaricato.');
 }
 
+/* Pulsante «Ricalcola» della dashboard: rilegge e sistema tutti i dati come
+   all'apertura dell'app, poi rifà tutti i conti di tutti i tab */
+async function ricalcolaTutto() {
+  salvaSubito();
+  appState = normalizza(JSON.parse(JSON.stringify(appState)));
+  await completaTotaliXml();
+  syncControlsFromState(); renderAll(); salvaSubito();
+  showToast('Conti ricalcolati in tutti i tab.');
+}
+
 function applicaBackup(testo) {
   let dati;
   try { dati = JSON.parse(testo); } catch (_) { showToast('Il file non è un backup valido.', true); return; }
@@ -461,6 +471,7 @@ document.addEventListener('click', (e) => {
       showToast(n ? (n === 1 ? 'Spesa registrata.' : `Registrate ${n} spese.`) + ' Le trovi nei tab Abbonamenti/Acquisti/Spese ed Estratto Conto Scalare.' : 'Niente da registrare.');
       break;
     }
+    case 'ricalcola': ricalcolaTutto(); break;
     case 'banca-spiega': {
       const id = a.dataset.id, campo = document.querySelector(`[data-spiega-testo="${id}"]`);
       appState.banca.spiegati = { ...(appState.banca.spiegati || {}), [id]: (campo && campo.value.trim()) || 'Controllata: non è una spesa da registrare.' };

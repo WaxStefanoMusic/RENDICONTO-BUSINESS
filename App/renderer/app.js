@@ -4250,6 +4250,28 @@ function disegnaBanca() {
       k.fido != null ? `Fido ${eu(k.fido)} ${saldoFine < 0 ? '−' : '+'} saldo ${eu(Math.abs(saldoFine || 0))}${k.disponibile != null && k.dataDisp === dataFine ? ` · la banca scrive ${eu(k.disponibile)}` : ''}` : 'Il fido si legge dalla lista movimenti o dall\'estratto scalare.', k.fido != null && k.fido + saldoFine < 0 ? 'text-rose-600' : 'text-slate-900')
     + cella(`Variazione nel ${anno}`, saldoInizio == null || saldoFine == null ? '—' : piu(saldoFine - saldoInizio),
       saldoInizio == null ? '' : `Dal saldo al ${fmtData(inizio)} (${eu(saldoInizio)}) a quello al ${fmtData(dataFine)}.`, rosso((saldoFine || 0) - (saldoInizio || 0)));
+  // F24 già addebitati sul conto nell'anno (fino all'ultimo movimento)
+  const pagati = mov.filter((m) => m.importo < 0 && categoriaBanca(m) === 'f24');
+  const totPagati = -pagati.reduce((t, m) => t + m.importo, 0);
+  const aNomeDi = (m) => {
+    const t = String(m.descrizione || '').toUpperCase();
+    // con la partita IVA è della società, con un codice fiscale personale è di un socio
+    return /[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]/.test(t) ? 'A nome di un socio' : 'A nome della società';
+  };
+  if (pagati.length) {
+    html += cella(`Imposte e contributi già pagati nel ${anno}`, eu(totPagati),
+      `${pagati.length} F24 addebitati sul conto dal ${fmtData(pagati[0].data)} al ${fmtData(pagati[pagati.length - 1].data)}: l'elenco è qui sotto.`, 'text-slate-900');
+  }
+  $('banca-pagati').classList.toggle('hidden', !pagati.length);
+  $('banca-pagati').innerHTML = pagati.length ? `<h3 class="text-base font-bold text-slate-900">Imposte e contributi già pagati nel ${anno}</h3>
+    <p class="text-xs text-slate-500">Gli F24 addebitati sul conto della società fino al ${fmtData(k.ultimaData)}. L'estratto conto dice solo l'importo e a nome di chi è l'F24: cosa paga (IVA, INAIL, IRAP, ritenute…) è scritto nella ricevuta dell'F24.</p>
+    <div class="mt-3 overflow-x-auto"><table class="w-full text-sm"><tbody class="divide-y divide-slate-100">
+      ${pagati.map((m) => `<tr><td class="py-1.5 pr-3 whitespace-nowrap text-slate-600">${fmtData(m.data)}</td>
+        <td class="py-1.5 pr-3 text-slate-800">F24</td>
+        <td class="py-1.5 pr-3 text-slate-500">${esc(aNomeDi(m))}</td>
+        <td class="py-1.5 text-right font-semibold whitespace-nowrap text-slate-900">${eu(-m.importo)}</td></tr>`).join('')}
+      <tr class="font-bold"><td colspan="3" class="py-2 pr-3 text-slate-900">Totale</td><td class="py-2 text-right whitespace-nowrap text-slate-900">${eu(totPagati)}</td></tr>
+    </tbody></table></div>` : '';
   if (futuri.length && saldoFine != null) {
     html += cella('Imposte e contributi ancora da pagare', eu(totFuturi),
       `Scadenze F24 dopo il ${fmtData(k.ultimaData)}. Pagate quelle, il saldo sarebbe <strong class="${rosso(saldoFine - totFuturi)}">${eu(saldoFine - totFuturi)}</strong>${k.fido != null ? ` e resterebbero disponibili ${eu(k.fido + saldoFine - totFuturi)} col fido` : ''}.`, 'text-rose-600');

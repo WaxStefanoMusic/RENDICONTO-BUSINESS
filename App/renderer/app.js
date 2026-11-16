@@ -1856,7 +1856,10 @@ function renderAll() {
   // per l'IRAP gli interessi passivi non si deducono: si riaggiungono
   // e la deduzione del 10% dell'IRAP vale solo per IRPEF, non per l'IRAP stessa
   const baseIrap = Math.max(0, risultato + interessiPassivi + (redditoDich == null ? dedIrap : 0));
-  const irapSocieta = cent(Math.max(0, baseIrap - (+s.irapDed || 0)) * (s.irap / 100));
+  const irapStimata = cent(Math.max(0, baseIrap - (+s.irapDed || 0)) * (s.irap / 100));
+  // se il Modello IRAP è già presentato vale l'imposta dichiarata (rigo IR21), non la stima
+  const irapDich = dich.irapDich === '' || dich.irapDich == null ? null : +dich.irapDich || 0;
+  const irapSocieta = irapDich != null ? cent(irapDich) : irapStimata;
   const [irapS1, irapS2] = dividi(irapSocieta);
   const [inailS1, inailS2] = dividi(inailTot);
   // se il contributo fisso del 2° socio lo paga il 1°, passa dal netto dell'uno a quello dell'altro
@@ -2017,8 +2020,11 @@ function renderAll() {
     (dedIrap > 0 && redditoDich == null ? riga(`di cui 10% dell'IRAP versata nel ${appState.anno} (${fmtEuro(irapVersataAnno)}) già dedotto:`, fmtEuro(dedIrap), 'text-slate-500') : '') +
     (dedIrap > 0 && redditoDich == null ? riga('Deduzione 10% IRAP (riaggiunta: vale solo per IRPEF):', '+ ' + fmtEuro(dedIrap), 'font-semibold text-slate-700') : '') +
     (interessiPassivi > 0 ? riga('Interessi passivi (non deducibili IRAP):', '+ ' + fmtEuro(interessiPassivi), 'font-semibold text-slate-700') : '') +
-    riga('Deduzione base IRAP stimata:', '- ' + fmtEuro(s.irapDed), 'font-semibold text-emerald-700') +
-    riga(`IRAP (${fmtPct(s.irap)}):`, fmtEuro(irapSocieta), 'font-bold text-slate-900') +
+    (irapDich != null
+      ? riga('IRAP dichiarata (Modello IRAP, rigo IR21):', fmtEuro(irapSocieta), 'font-bold text-slate-900') +
+        riga('Stima dell\'app (non usata):', fmtEuro(irapStimata), 'text-slate-500')
+      : riga('Deduzione base IRAP stimata:', '- ' + fmtEuro(s.irapDed), 'font-semibold text-emerald-700') +
+        riga(`IRAP (${fmtPct(s.irap)}):`, fmtEuro(irapSocieta), 'font-bold text-slate-900')) +
     (inailTot > 0 ? riga(`INAIL ${appState.anno} dei soci:`, fmtEuro(inailTot), 'font-bold text-slate-900') : '') +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Imposte della società (IRAP + INAIL):</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(impSocieta)}</span></div>` +
     (() => {
@@ -2051,7 +2057,7 @@ function renderAll() {
       : riga('Reddito dichiarato (quadro RN):', fmtEuro(risultato), 'text-slate-700') +
         (inailTot > 0 ? riga('INAIL già dedotto nel reddito, riaggiunto:', '+ ' + fmtEuro(inailTot), 'font-semibold text-slate-700') : '')) +
     riga(utileLordoSoc < 0 ? 'Perdita lorda società:' : 'Utile lordo società:', fmtEuro(utileLordoSoc), utileLordoSoc < 0 ? 'font-bold text-rose-600' : 'font-bold text-slate-900', 'pt-1 border-t border-slate-100') +
-    riga(`IRAP ${appState.anno} (${fmtPct(s.irap)}, calcolo qui accanto):`, '- ' + fmtEuro(irapSocieta), 'font-semibold text-rose-600') +
+    riga(irapDich != null ? `IRAP ${appState.anno} dichiarata (Modello IRAP):` : `IRAP ${appState.anno} (${fmtPct(s.irap)}, calcolo qui accanto):`, '- ' + fmtEuro(irapSocieta), 'font-semibold text-rose-600') +
     riga(`INAIL ${appState.anno} dei soci:`, '- ' + fmtEuro(inailTot), 'font-semibold text-rose-600') +
     riga('Totale imposte della società:', fmtEuro(impSocieta), 'font-bold text-rose-600') +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Utile netto società = utile lordo soci:</span><span class="font-extrabold ${utileNettoSoc < 0 ? 'text-rose-600' : 'text-emerald-600'} whitespace-nowrap">${fmtEuro(utileNettoSoc)}</span></div>` +

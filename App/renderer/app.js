@@ -162,6 +162,8 @@ function normalizza(s) {
   st.banca = {
     documenti: Array.isArray(st.banca?.documenti) ? st.banca.documenti : [],
     movimenti: Array.isArray(st.banca?.movimenti) ? st.banca.movimenti.filter((m) => m && m.data && Number.isInteger(m.c)).map((m) => ({ ...m, fonti: Array.isArray(m.fonti) ? m.fonti : [] })) : [],
+    // uscite che hai spiegato tu (id del movimento → spiegazione): non sono spese da registrare
+    spiegati: st.banca?.spiegati && typeof st.banca.spiegati === 'object' && !Array.isArray(st.banca.spiegati) ? st.banca.spiegati : {},
   };
   st.inpsAnte96 = { s1: !!st.inpsAnte96?.s1, s2: !!st.inpsAnte96?.s2 };
   st.inpsS2DaS1 = !!st.inpsS2DaS1;
@@ -458,6 +460,15 @@ document.addEventListener('click', (e) => {
       const n = registraSpeseBanca(a.dataset.k ? [a.dataset.k] : null);
       showToast(n ? (n === 1 ? 'Spesa registrata.' : `Registrate ${n} spese.`) + ' Le trovi nei tab Abbonamenti/Acquisti/Spese ed Estratto Conto Scalare.' : 'Niente da registrare.');
       break;
+    }
+    case 'banca-spiega': {
+      const id = a.dataset.id, campo = document.querySelector(`[data-spiega-testo="${id}"]`);
+      appState.banca.spiegati = { ...(appState.banca.spiegati || {}), [id]: (campo && campo.value.trim()) || 'Controllata: non è una spesa da registrare.' };
+      saveState(); renderAll(); showToast('Uscita segnata come spiegata.'); break;
+    }
+    case 'banca-riapri': {
+      const sp = { ...(appState.banca.spiegati || {}) }; delete sp[a.dataset.id];
+      appState.banca.spiegati = sp; saveState(); renderAll(); showToast('Uscita rimessa tra quelle da controllare.'); break;
     }
     case 'banca-togli-doc': togliDocumentoBanca(a.dataset.k); showToast('File tolto: i movimenti che c\'erano solo lì sono stati tolti.'); break;
     case 'close-scalare': chiudiPdfScalare(); break;
@@ -4070,12 +4081,17 @@ function speseDaBanca(anno) {
   const totaleSpesa = (a) => cent((+a.imponibile || 0) + (+a.iva || 0));
   // l'importo pagato può essere imponibile + IVA oppure il totale scritto nella fattura (che a volte ha un arrotondamento)
   const importiPagati = (a) => [Math.round(totaleSpesa(a) * 100), ...(a.totaleDoc != null ? [Math.round(+a.totaleDoc * 100)] : [])];
+  // le parcelle del commercialista si pagano al netto della ritenuta
+  const parcellaPagata = (m, giorni) => appState.parcelle.some((p) => { const b = calcParcella(p);
+    return [b.netto, b.totale].map((v) => Math.round(v * 100)).includes(-m.c) && giorniTra(p.data, m.data) <= giorni; });
   const giaRegistrata = (m, giorni, sezioni) => appState.acquisti.some((a) => a.sezione !== 'carta' && (!sezioni || sezioni.includes(a.sezione))
-    && importiPagati(a).includes(-m.c) && giorniTra(a.data, m.data) <= giorni);
-  const proposte = [], controllare = [], annoPrima = [];
+    && importiPagati(a).includes(-m.c) && giorniTra(a.data, m.data) <= giorni) || (!sezioni && parcellaPagata(m, giorni));
+  const spiegati = appState.banca.spiegati || {};
+  const proposte = [], controllare = [], annoPrima = [], spiegate = [];
   const perMese = new Map();
   for (const m of movBanca()) {
     if (annoDi(m.data) !== anno || m.c >= 0 || collegati.has(m.id)) continue;
+    if (spiegati[m.id] != null) { spiegate.push({ m, nota: spiegati[m.id] }); continue; }   // già spiegata da te
     const cat = categoriaBanca(m), t = m.descrizione.toUpperCase();
     if (cat === 'banca') {
       if (/COMPETENZE|SPESE ED ONERI/.test(t)) {
@@ -4101,7 +4117,8 @@ function speseDaBanca(anno) {
       let nota = 'Non trovo una spesa registrata con questo importo: se è un costo della società, registra la fattura o la ricevuta.';
       if (/IMU/.test(t)) nota = 'IMU rimborsata al proprietario del locale in comodato: chiedi al commercialista se si può dedurre.';
       else if (/POLIZZA|ASSICUR/.test(t)) nota = nominaSocio(t) ? 'Polizza intestata a un socio: se è personale non è un costo della società.' : 'Polizza: se è dell\'attività, registrala nel tab Polizze.';
-      else if (/RIMBORSO/.test(t)) nota = 'Rimborso a un cliente: non è una spesa, riduce l\'incasso.';
+      else if (/ECCEDENZA|PAGAT[OI] IN PI|IN ECCESSO/.test(t)) nota = `Restituzione a un cliente di quanto pagato in più: non è una spesa e non cambia i ricavi, che restano quelli della fattura.`;
+      else if (/RIMBORSO/.test(t)) nota = `Rimborso a un cliente: se restituisci un pagamento in più non cambia nulla; se è uno sconto o un reso serve una nota di credito.`;
       else if (/AMAZON/.test(t)) nota = 'Acquisto Amazon: registra la fattura (si scarica dall\'account Amazon).';
       /* a gennaio le uscite senza spesa dell'anno pagano quasi sempre fatture di dicembre
          o dell'anno prima: sono costi di quell'anno, non di questo */
@@ -4117,7 +4134,7 @@ function speseDaBanca(anno) {
   }
   proposte.sort((a, b) => a.data.localeCompare(b.data));
   proposte.forEach((p) => { p.k = p.ids.join('-'); });
-  return { proposte, controllare, annoPrima };
+  return { proposte, controllare, annoPrima, spiegate };
 }
 
 /* Le fatture registrate prima della 2.21.2 non hanno il totale del documento:
@@ -4265,10 +4282,11 @@ function disegnaBanca() {
       </tbody></table></div>`;
 
   // spese trovate nel conto e non registrate
-  const { proposte, controllare, annoPrima } = speseDaBanca(anno);
+  const { proposte, controllare, annoPrima, spiegate } = speseDaBanca(anno);
   const totProp = proposte.reduce((t, p) => t + p.c, 0);
-  $('banca-spese').classList.toggle('hidden', !proposte.length && !controllare.length && !annoPrima.length);
-  $('banca-spese').innerHTML = !proposte.length && !controllare.length && !annoPrima.length ? '' : `<div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+  const nienteSpese = !proposte.length && !controllare.length && !annoPrima.length && !spiegate.length;
+  $('banca-spese').classList.toggle('hidden', nienteSpese);
+  $('banca-spese').innerHTML = nienteSpese ? '' : `<div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
       <div><h3 class="text-base font-bold text-slate-900">Spese nel conto non ancora registrate (${anno})</h3>
       <p class="text-xs text-slate-500">Costi deducibili che passano dal conto ma non sono in nessun tab: registrandoli abbassano l'utile e quindi le imposte. Commissioni e bolli del conto sono sommati mese per mese.</p></div>
       ${proposte.length ? `<button type="button" data-action="banca-registra" data-k="" class="shrink-0 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition">Registra tutte (${eu(totProp)})</button>` : ''}
@@ -4282,7 +4300,12 @@ function disegnaBanca() {
         <td class="py-2 text-right"><button type="button" data-action="banca-registra" data-k="${esc(p.k)}" class="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold hover:bg-emerald-100">Registra</button></td></tr>`).join('')}
       </tbody></table></div>` : ''}
     ${controllare.length ? `<details class="mt-4"><summary class="cursor-pointer text-sm font-semibold text-amber-800">Da controllare: ${controllare.length} ${controllare.length === 1 ? 'uscita' : 'uscite'} senza una spesa registrata con lo stesso importo</summary>
-      <ul class="mt-2 space-y-1.5 text-xs">${controllare.map(({ m, nota }) => `<li class="p-2 rounded-lg bg-amber-50/60 border border-amber-100"><span class="font-semibold">${fmtData(m.data)} · ${eu(-m.c)}</span> · ${esc(m.descrizione.slice(0, 140))}<span class="block text-amber-900 mt-0.5">${esc(nota)}</span></li>`).join('')}</ul></details>` : ''}
+      <ul class="mt-2 space-y-1.5 text-xs">${controllare.map(({ m, nota }) => `<li class="p-2 rounded-lg bg-amber-50/60 border border-amber-100"><span class="font-semibold">${fmtData(m.data)} · ${eu(-m.c)}</span> · ${esc(m.descrizione.slice(0, 140))}<span class="block text-amber-900 mt-0.5">${esc(nota)}</span>
+        <span class="mt-1.5 flex flex-wrap gap-1.5 no-print"><input type="text" data-spiega-testo="${m.id}" placeholder="Cos'è? (es. restituito al cliente un pagamento in più)" class="flex-1 min-w-[220px] px-2 py-1 rounded-lg border border-amber-200 bg-white text-xs" />
+        <button type="button" data-action="banca-spiega" data-id="${m.id}" class="px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-amber-900 text-xs font-bold hover:bg-amber-100">Segna come spiegata</button></span></li>`).join('')}</ul></details>` : ''}
+    ${spiegate.length ? `<details class="mt-3"><summary class="cursor-pointer text-sm font-semibold text-emerald-800">Uscite spiegate: ${spiegate.length} (${eu(-spiegate.reduce((t, x) => t + x.m.c, 0))}), non sono spese da registrare</summary>
+      <ul class="mt-2 space-y-1.5 text-xs">${spiegate.map(({ m, nota }) => `<li class="p-2 rounded-lg bg-emerald-50/50 border border-emerald-100"><span class="font-semibold">${fmtData(m.data)} · ${eu(-m.c)}</span> · ${esc(m.descrizione.slice(0, 140))}<span class="block text-emerald-900 mt-0.5">${esc(nota || 'Spiegata.')}</span>
+        <button type="button" data-action="banca-riapri" data-id="${m.id}" class="mt-1 text-[11px] text-slate-500 underline hover:text-slate-800 no-print">Rimetti tra quelle da controllare</button></li>`).join('')}</ul></details>` : ''}
     ${annoPrima.length ? `<details class="mt-3"><summary class="cursor-pointer text-sm font-semibold text-slate-600">Pagamenti di gennaio per fatture del ${anno - 1}: ${annoPrima.length} ${annoPrima.length === 1 ? 'uscita' : 'uscite'} (${eu(-annoPrima.reduce((t, x) => t + x.m.c, 0))}), non sono costi del ${anno}</summary>
       <ul class="mt-2 space-y-1.5 text-xs">${annoPrima.map(({ m, nota }) => `<li class="p-2 rounded-lg bg-slate-50 border border-slate-200"><span class="font-semibold">${fmtData(m.data)} · ${eu(-m.c)}</span> · ${esc(m.descrizione.slice(0, 140))}<span class="block text-slate-600 mt-0.5">${esc(nota)}</span></li>`).join('')}</ul></details>` : ''}`;
 
@@ -4338,7 +4361,7 @@ async function registraDocumentiBanca(documenti, errori = []) {
     }
     doc.caricato = oggi();
   }
-  appState.banca = { documenti: stato.documenti, movimenti: stato.movimenti.map(({ importo, ...m }) => ({ ...m, c: importo })) };
+  appState.banca = { documenti: stato.documenti, movimenti: stato.movimenti.map(({ importo, ...m }) => ({ ...m, c: importo })), spiegati: appState.banca.spiegati || {} };
   saveState();
   const ultimo = stato.movimenti.reduce((a, m) => (m.data > a ? m.data : a), '');
   popolaAnni();
@@ -4354,7 +4377,7 @@ async function registraDocumentiBanca(documenti, errori = []) {
 function togliDocumentoBanca(k) {
   const stato = statoBancaPdf();
   window.BancaPDF.togliDocumento(stato, k);
-  appState.banca = { documenti: stato.documenti, movimenti: stato.movimenti.map(({ importo, ...m }) => ({ ...m, c: importo })) };
+  appState.banca = { documenti: stato.documenti, movimenti: stato.movimenti.map(({ importo, ...m }) => ({ ...m, c: importo })), spiegati: appState.banca.spiegati || {} };
   saveState(); renderAll();
 }
 

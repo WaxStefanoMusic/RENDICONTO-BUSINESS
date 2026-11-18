@@ -1593,6 +1593,7 @@ const annoConDati = (a) => Object.keys(appState.fiscale[a] || {}).length > 0 ||
   appState.entrate.some((x) => annoDi(x.data) === a) || appState.acquisti.some((x) => annoDi(x.data) === a);
 
 function renderAll() {
+  if (!profonditaCalcolo && collegaCartaFatture()) saveState();
   const anno = appState.anno;
   let precedente = null;
   if (profonditaCalcolo < 3 && annoConDati(anno - 1)) {
@@ -3490,6 +3491,38 @@ function categoriaCarta(desc, importo) {
   return 'merce_100_100';
 }
 
+/* Un pagamento con la carta che ha anche la fattura (registrata in un altro
+   tab con lo stesso totale, entro 5 giorni) diventa «Già fatturata»: il costo
+   lo conta la fattura, non la carta. Se cambi tu il tipo della riga, la scelta
+   resta (carta.noFattura). Se la fattura sparisce, la riga torna com'era. */
+const GIORNI_CARTA_FATTURA = 5;
+const totaleFattura = (a) => Math.round(((parseFloat(a.imponibile) || 0) + (parseFloat(a.iva) || 0)) * 100);
+function collegaCartaFatture() {
+  let cambiate = 0;
+  const giorni = (a, b) => Math.abs(new Date(a).getTime() - new Date(b).getTime()) / 864e5;
+  const fatture = appState.acquisti.filter((a) => a.sezione !== 'carta');
+  const ids = new Set(fatture.map((a) => a.id));
+  const usate = new Set();
+  for (const v of cartaVoci()) {
+    if (v.categoria !== 'carta_fatturata' || !v.carta || !v.carta.fattura) continue;
+    if (ids.has(v.carta.fattura)) { usate.add(v.carta.fattura); continue; }
+    v.categoria = CATEGORIE_SPESA[v.carta.categoriaPrima] ? v.carta.categoriaPrima : categoriaCarta(v.desc, importoCarta(v));
+    delete v.carta.fattura; delete v.carta.categoriaPrima; cambiate++;
+  }
+  for (const v of cartaVoci()) {
+    const importo = importoCarta(v);
+    if (importo >= 0 || !v.carta || v.carta.noFattura) continue;
+    if (['carta_fatturata', 'carta_personale', ...NON_SPESA_CARTA].includes(v.categoria)) continue;
+    const tot = Math.round(-importo * 100);
+    const f = fatture.filter((a) => !usate.has(a.id) && Math.abs(totaleFattura(a) - tot) <= 2 && giorni(a.data, v.data) <= GIORNI_CARTA_FATTURA)
+      .sort((a, b) => giorni(a.data, v.data) - giorni(b.data, v.data))[0];
+    if (!f) continue;
+    usate.add(f.id);
+    v.carta.categoriaPrima = v.categoria; v.carta.fattura = f.id; v.categoria = 'carta_fatturata'; cambiate++;
+  }
+  return cambiate;
+}
+
 function badgeCarta(x) {
   const c = [];
   if (x.carta && x.carta.provvisorio) c.push('<span class="ml-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 text-[10px] font-bold align-middle" title="Sull\'estratto risultava ancora da contabilizzare">Da contabilizzare</span>');
@@ -3603,6 +3636,11 @@ document.addEventListener('change', (e) => {
   if (!x || !CATEGORIE_SPESA[sel.value]) return;
   const cat = sel.value;
   x.categoria = cat;
+  if (x.carta) {
+    // scelta a mano: non si ricollega più da sola a una fattura
+    if (cat === 'carta_fatturata') delete x.carta.noFattura;
+    else { x.carta.noFattura = true; delete x.carta.fattura; delete x.carta.categoriaPrima; }
+  }
   let altre = 0;
   const es = chiaveEsercente(x.desc);
   if (es && !NON_SPESA_CARTA.includes(cat) && cat !== 'carta_fatturata') {

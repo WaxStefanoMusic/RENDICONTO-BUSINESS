@@ -1204,6 +1204,12 @@
               <label class="block text-xs font-semibold text-slate-700">Saldo IRPEF del <span data-anno></span> dichiarato (dalla dichiarazione o dagli F24 pagati)
                 <input data-fx="s1.saldoIrpef" type="number" min="0" step="0.01" placeholder="calcolato dall'app" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
               </label>
+              <label class="block text-xs font-semibold text-slate-700">Reddito imponibile del <span data-anno></span> dichiarato (Redditi PF, rigo RN4)
+                <input data-fx="s1.imponibileDich" type="number" min="0" step="1" placeholder="calcolato dall'app" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+              </label>
+              <label class="block text-xs font-semibold text-slate-700">Contributi INPS pagati nel <span data-anno></span> e dedotti (Redditi PF, rigo RP21)
+                <input data-fx="s1.inpsDed" type="number" min="0" step="0.01" placeholder="INPS di competenza" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+              </label>
             <p class="text-[11px] font-bold uppercase tracking-wider text-slate-500 pt-1">Acconti versati nel <span data-anno></span></p>
               <label class="block text-xs font-semibold text-slate-700">Acconti IRPEF (1° + 2°)
                 <input data-fx="s1.irpef" type="number" min="0" step="0.01" placeholder="0,00" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
@@ -1222,6 +1228,12 @@
               </label>
               <label class="block text-xs font-semibold text-slate-700">Saldo IRPEF del <span data-anno></span> dichiarato (dalla dichiarazione o dagli F24 pagati)
                 <input data-fx="s2.saldoIrpef" type="number" min="0" step="0.01" placeholder="calcolato dall'app" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+              </label>
+              <label class="block text-xs font-semibold text-slate-700">Reddito imponibile del <span data-anno></span> dichiarato (Redditi PF, rigo RN4)
+                <input data-fx="s2.imponibileDich" type="number" min="0" step="1" placeholder="calcolato dall'app" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
+              </label>
+              <label class="block text-xs font-semibold text-slate-700">Contributi INPS pagati nel <span data-anno></span> e dedotti (Redditi PF, rigo RP21)
+                <input data-fx="s2.inpsDed" type="number" min="0" step="0.01" placeholder="INPS di competenza" class="mt-1 w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-right bg-white" />
               </label>
             <p class="text-[11px] font-bold uppercase tracking-wider text-slate-500 pt-1">Acconti versati nel <span data-anno></span></p>
               <label class="block text-xs font-semibold text-slate-700">Acconti IRPEF (1° + 2°)

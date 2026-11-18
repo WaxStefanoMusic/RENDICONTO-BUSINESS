@@ -595,24 +595,29 @@ function calcolaAddizionali(imponibile) {
 }
 
 /* INPS commercianti anno per anno: contributo fisso annuo (con il contributo
-   maternità) e reddito minimale, ricavati dalle rate CF realmente pagate.
-   Gli anni che non sono qui usano i valori delle Impostazioni. */
+   maternità) e reddito minimale, ricavati dalle rate CF realmente pagate e
+   dal quadro RR delle dichiarazioni; fascia = reddito oltre il quale
+   l'aliquota sale di un punto. Gli anni che non sono qui (o i valori che
+   mancano) usano le Impostazioni. */
 const INPS_ANNI = {
-  2024: { fisso: 4515.43, min: 18415 },
-  2025: { fisso: 4549.70, min: 18555 },
+  2024: { fisso: 4515.43, min: 18415, fascia: 55008 },
+  2025: { fisso: 4549.70, min: 18555, fascia: 55448 },
   2026: { fisso: 4611.60, min: 18808 },
 };
 function inpsAnno(anno = appState.anno) {
   const s = imp(), t = INPS_ANNI[anno];
-  return t ? { fisso: t.fisso, min: t.min, ufficiale: true } : { fisso: +s.inpsFisso || 0, min: +s.inpsMin || 0, ufficiale: false };
+  const fascia = +(t && t.fascia) || +s.inpsFascia || Infinity;
+  return t ? { fisso: t.fisso, min: t.min, fascia, ufficiale: true } : { fisso: +s.inpsFisso || 0, min: +s.inpsMin || 0, fascia, ufficiale: false };
 }
 
-function calcolaInpsCommercianti(redditoQuota, attivo, ante96 = false) {
+/* anno: quello dei valori INPS da usare (gli acconti dell'anno dopo si
+   calcolano sul reddito di quest'anno ma con minimale e fascia dell'anno dopo) */
+function calcolaInpsCommercianti(redditoQuota, attivo, ante96 = false, anno = appState.anno) {
   const s = imp();
   const massimale = +(ante96 ? s.inpsMassVecchi : s.inpsMassNuovi) || Infinity;
   if (!attivo) return { fisso: 0, fascia1: 0, fascia2: 0, eccedenza: 0, totale: 0, massimale, oltreMassimale: false };
-  const { fisso, min } = inpsAnno();
-  const fascia = Math.max(min, +s.inpsFascia || Infinity);
+  const { fisso, min, fascia: f } = inpsAnno(anno);
+  const fascia = Math.max(min, f);
   const base = Math.min(Math.max(0, redditoQuota), massimale);
   const fascia1 = Math.max(0, Math.min(base, fascia) - min) * ((+s.inpsAliq || 0) / 100);
   const fascia2 = Math.max(0, base - fascia) * ((+s.inpsAliq2 || +s.inpsAliq || 0) / 100);
@@ -1560,7 +1565,7 @@ function renderTesti() {
   document.querySelectorAll('[data-collab-nome]').forEach((el) => { el.textContent = s.collabNome || 'Collaboratore familiare'; });
   document.querySelectorAll('[data-s1-quota]').forEach((el) => { el.textContent = fmtPct(quotaS1()); });
   document.querySelectorAll('[data-s2-quota]').forEach((el) => { el.textContent = fmtPct(quotaS2()); });
-  $('txt-inps-s1').textContent = `Socio amministratore che lavora in negozio. Contributo fisso sul minimale (${fmtEuro(inpsAnno().fisso)} nel ${anno}) + ${fmtPct(s.inpsAliq)} sul reddito da ${fmtEuro(inpsAnno().min)} a ${fmtEuro(s.inpsFascia)}, ${fmtPct(s.inpsAliq2)} oltre, fino al massimale.`;
+  $('txt-inps-s1').textContent = `Socio amministratore che lavora in negozio. Contributo fisso sul minimale (${fmtEuro(inpsAnno().fisso)} nel ${anno}) + ${fmtPct(s.inpsAliq)} sul reddito da ${fmtEuro(inpsAnno().min)} a ${fmtEuro(inpsAnno().fascia)}, ${fmtPct(s.inpsAliq2)} oltre, fino al massimale.`;
   for (const k of ['s1', 's2']) $('txt-inail-' + k).textContent = +inailAnno()[k] > 0
     ? `Solo per il ${anno}: ogni anno ha il suo premio.`
     : `Nessun premio INAIL nel ${anno} (lascia vuoto se il socio non è più assicurato).`;
@@ -1854,7 +1859,15 @@ function renderAll() {
   const inpsS2 = calcolaInpsCommercianti(q2, appState.socio2Inps, appState.inpsAnte96.s2);
   const inpsCollab = appState.collabInps ? inpsAnno().fisso : 0;   // a carico del socio titolare
 
-  const impIrpefS1 = cent(Math.max(0, q1 - inpsS1.totale - (appState.collabDeduci ? inpsCollab : 0)));
+  /* Contributi dedotti in dichiarazione (quadro RP, rigo RP21): per legge si
+     deducono i contributi PAGATI nell'anno (anche arretrati), non quelli di
+     competenza. Se c'è il dato della dichiarazione vale quello. */
+  const datoSocio = (k, campo) => { const v = fiscaleAnno()[k]?.[campo]; return v === '' || v == null ? null : +v || 0; };
+  const inpsDedotto = (k) => datoSocio(k, 'inpsDed');
+  // reddito imponibile della dichiarazione (rigo RN4): se c'è vale quello
+  const imponibileSocio = (k, q, stima) => datoSocio(k, 'imponibileDich') != null ? cent(datoSocio(k, 'imponibileDich'))
+    : inpsDedotto(k) != null ? cent(Math.max(0, q - inpsDedotto(k))) : stima;
+  const impIrpefS1 = imponibileSocio('s1', q1, cent(Math.max(0, q1 - inpsS1.totale - (appState.collabDeduci ? inpsCollab : 0))));
   const detrS1 = detrazioniSocio('s1').importo, detrS2 = detrazioniSocio('s2').importo;
   /* Saldo IRPEF dichiarato (dalla dichiarazione o dagli F24 pagati): se c'è,
      l'IRPEF dell'anno è quella vera = saldo + acconti IRPEF + ritenute, e
@@ -1871,7 +1884,7 @@ function renderAll() {
   const addizS1 = calcolaAddizionali(impIrpefS1), addS1 = addizS1.totale;
   const totS1 = cent(irpefS1 + addS1 + inpsS1.totale + inpsCollab);
 
-  const impIrpefS2 = cent(Math.max(0, q2 - inpsS2.totale));
+  const impIrpefS2 = imponibileSocio('s2', q2, cent(Math.max(0, q2 - inpsS2.totale)));
   const irpefStimaS2 = cent(Math.max(0, calcolaIrpefScaglioni(impIrpefS2, q2) - detrS2));
   const irpefS2 = irpefVera('s2', irpefStimaS2, ritS2);
   const addizS2 = calcolaAddizionali(impIrpefS2), addS2 = addizS2.totale;
@@ -1920,7 +1933,11 @@ function renderAll() {
   const clsSaldo = (v) => v < 0 ? 'font-semibold text-emerald-700' : 'font-semibold text-slate-900';
   // acconto IRPEF o IRAP: fino a 257,52 € tutto a novembre, oltre metà e metà
   const divisoAcconto = (x) => x <= 0 ? [0, 0] : x <= 257.52 ? [0, cent(x)] : [cent(x * 0.5), cent(x - cent(x * 0.5))];
-  const righeVersamenti = (k, irpef, inpsEcc, add, rit = 0) => {
+  /* gli acconti INPS dell'anno dopo: sul reddito di quest'anno, ma con
+     minimale e fascia dell'anno dopo (come li calcola l'INPS) */
+  const inpsAccS1 = calcolaInpsCommercianti(q1, true, appState.inpsAnte96.s1, appState.anno + 1).eccedenza;
+  const inpsAccS2 = calcolaInpsCommercianti(q2, appState.socio2Inps, appState.inpsAnte96.s2, appState.anno + 1).eccedenza;
+  const righeVersamenti = (k, irpef, inpsEcc, add, rit = 0, inpsAcc = inpsEcc) => {
     // le ritenute subite riducono l'IRPEF da versare, e quindi anche gli acconti
     irpef = irpef - rit;
     /* Acconti dell'anno: quelli inseriti; se mancano, quelli dovuti in base
@@ -1936,13 +1953,13 @@ function renderAll() {
     const baseAcc = Math.max(0, irpef) > 51.65 ? Math.max(0, irpef) : 0;
     const [accIrpef1, accIrpef2] = divisoAcconto(baseAcc);
     const meta = (x) => cent(x * 0.5);
-    const acc1 = cent(accIrpef1 + meta(inpsEcc) + cent(add.comunale * 0.3));
-    const acc2 = cent(accIrpef2 + inpsEcc - meta(inpsEcc));
+    const acc1 = cent(accIrpef1 + meta(inpsAcc) + cent(add.comunale * 0.3));
+    const acc2 = cent(accIrpef2 + inpsAcc - meta(inpsAcc));
     const giugno = cent(Math.max(0, sIrpef) + Math.max(0, sInps) + add.regionale + Math.max(0, sCom) + acc1);
     const riporto = prec ? prec.resto : 0;               // credito avanzato dall'anno prima
     const crediti = cent(Math.max(0, -sIrpef) + Math.max(0, -sInps) + Math.max(0, -sCom) + riporto);
     versamenti[k] = { saldo: cent(giugno - acc1), acc1, acc2, riporto, stimati: !!stimati, rit, accVersati: cent(accIrpef + accInps + accCom),
-      dett: { irpef: baseAcc, inps: inpsEcc, com: cent(add.comunale * 0.3) }, ...compensa(giugno, acc2, crediti) };
+      dett: { irpef: baseAcc, inps: inpsAcc, com: cent(add.comunale * 0.3) }, ...compensa(giugno, acc2, crediti) };
     return `<div class="mt-2 pt-3 border-t-2 border-dashed border-slate-200 space-y-2.5">` +
       titoloInps(`Versamenti F24 per il ${appState.anno}`) +
       (rit > 0 ? riga('Ritenute d\'acconto attribuite:', '- ' + fmtEuro(rit), 'text-emerald-700') : '') +
@@ -1985,8 +2002,8 @@ function renderAll() {
   const righeInps = (x, nome) => !x.totale ? riga(`INPS di ${esc(nome)}:`, 'non dovuto', 'text-slate-500') :
     titoloInps(`INPS di ${nome}`) +
     riga('INPS contributo fisso (minimale):', '- ' + fmtEuro(x.fisso), 'font-semibold text-rose-600') +
-    (x.fascia1 > 0 ? riga(`INPS ${fmtPct(s.inpsAliq)} da ${fmtEuro(inpsAnno().min)} a ${fmtEuro(s.inpsFascia)}:`, '- ' + fmtEuro(x.fascia1), 'font-semibold text-rose-600') : '') +
-    (x.fascia2 > 0 ? riga(`INPS ${fmtPct(s.inpsAliq2)} oltre ${fmtEuro(s.inpsFascia)}:`, '- ' + fmtEuro(x.fascia2), 'font-semibold text-rose-600') : '') +
+    (x.fascia1 > 0 ? riga(`INPS ${fmtPct(s.inpsAliq)} da ${fmtEuro(inpsAnno().min)} a ${fmtEuro(inpsAnno().fascia)}:`, '- ' + fmtEuro(x.fascia1), 'font-semibold text-rose-600') : '') +
+    (x.fascia2 > 0 ? riga(`INPS ${fmtPct(s.inpsAliq2)} oltre ${fmtEuro(inpsAnno().fascia)}:`, '- ' + fmtEuro(x.fascia2), 'font-semibold text-rose-600') : '') +
     (x.oltreMassimale ? riga(`Oltre il massimale (${fmtEuro(x.massimale)}):`, 'niente INPS', 'font-semibold text-emerald-700') : '') +
     riga(`Totale INPS di ${esc(nome)}:`, '- ' + fmtEuro(x.totale), 'font-bold text-rose-700', 'pt-1 border-t border-slate-100');
   // l'INPS del collaboratore familiare lo paga il titolare, ma resta una posizione a parte
@@ -2024,7 +2041,7 @@ function renderAll() {
     righeAddiz(addizS1) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS${inpsCollab ? ' (con il collaboratore)' : ''}:</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totS1)}</span></div>` +
     righeNetto(quotaS1(), q1, irapS1, dedS1, l1, totS1, nettoS1, inailS1, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso di ${esc(s.s2Nome)} pagato da te:`, '- ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-rose-600') : '') +
-    righeVersamenti('s1', irpefS1, inpsS1.eccedenza, addizS1, ritS1);
+    righeVersamenti('s1', irpefS1, inpsS1.eccedenza, addizS1, ritS1, inpsAccS1);
 
   $('dettaglio-socio2').innerHTML =
     riga(`Quota del reddito fiscale SNC (${fmtPct(quotaS2())}):`, fmtEuro(q2), 'font-bold text-slate-900') +
@@ -2039,7 +2056,7 @@ function renderAll() {
     righeAddiz(addizS2) +
     `<div class="flex justify-between gap-3 pt-3 border-t border-slate-200 text-sm"><span class="font-bold text-slate-900">Totale imposte + INPS:</span><span class="font-extrabold text-rose-600 whitespace-nowrap">${fmtEuro(totS2)}</span></div>` +
     righeNetto(quotaS2(), q2, irapS2, dedS2, l2, totS2, nettoS2, inailS2, inpsS2PagatoDaS1 > 0 ? riga(`INPS fisso pagato da ${esc(s.s1Nome)}:`, '+ ' + fmtEuro(inpsS2PagatoDaS1), 'font-semibold text-emerald-700') : '') +
-    righeVersamenti('s2', irpefS2, inpsS2.eccedenza, addizS2, ritS2);
+    righeVersamenti('s2', irpefS2, inpsS2.eccedenza, addizS2, ritS2, inpsAccS2);
 
   $('dettaglio-societa').innerHTML =
     riga(risultato < 0 ? 'Perdita fiscale SNC (reddito fiscale):' : 'Reddito fiscale SNC (base di IRPEF e INPS dei soci):', fmtEuro(risultato), risultato < 0 ? 'font-bold text-rose-600' : 'font-bold text-slate-900') +
